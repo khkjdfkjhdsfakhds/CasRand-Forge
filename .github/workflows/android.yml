@@ -47,6 +47,13 @@ jobs:
       - name: Prepare artifact
         run: cp build/app/outputs/flutter-apk/app-release.apk "$ASSET_NAME"
 
+      - name: Validate Android package
+        run: |
+          unzip -t "$ASSET_NAME" >/dev/null
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
+          test -n "$APKSIGNER"
+          "$APKSIGNER" verify --verbose --print-certs "$ASSET_NAME"
+
       - name: Upload Android artifact
         uses: actions/upload-artifact@v4
         with:
