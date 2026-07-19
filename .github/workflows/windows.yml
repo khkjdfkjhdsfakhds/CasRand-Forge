@@ -1,23 +1,24 @@
-name: Build Windows Beta
+name: Build Windows Stable
 
 on:
   workflow_dispatch:
   push:
     tags:
-      - "v*-beta.*"
+      - "v0.9.1-forge.*"
 
 permissions:
   contents: read
 
 jobs:
   build-windows:
-    runs-on: windows-latest
+    # super_native_extensions 0.8.x still uses the VS 2022 coroutine headers.
+    runs-on: windows-2022
     env:
-      ASSET_NAME: CasRand-Forge-v0.9.2-beta.1-Windows-x64.zip
+      ASSET_NAME: CasRand-Forge-${{ github.ref_name }}-Windows-x64.zip
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -43,12 +44,24 @@ jobs:
 
       - name: Package Windows release
         shell: powershell
-        run: Compress-Archive -Path "build\windows\x64\runner\Release\*" -DestinationPath "$env:ASSET_NAME" -CompressionLevel Optimal
+        run: |
+          $archivePath = Join-Path $PWD $env:ASSET_NAME
+          tar.exe -a -c -f $archivePath -C "build\windows\x64\runner\Release" .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Validate Windows package
+        shell: powershell
+        run: |
+          if (-not (Test-Path "build\windows\x64\runner\Release\CasRandForge.exe")) {
+            throw "CasRandForge.exe is missing from the release directory"
+          }
+          tar.exe -t -f "$env:ASSET_NAME" | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: windows-beta
+          name: windows-stable
           path: ${{ env.ASSET_NAME }}
           if-no-files-found: error
           retention-days: 14

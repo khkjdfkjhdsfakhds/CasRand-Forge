@@ -13,6 +13,26 @@ subprojects {
     project.evaluationDependsOn(':app')
 }
 
+// Several legacy native plugins pin API 31 even though their current AndroidX
+// dependencies require API 34 or newer. This only changes library compile
+// SDKs; the app's minSdk and targetSdk remain unchanged.
+subprojects { subproject ->
+    def alignCompileSdk = {
+        if (subproject.plugins.hasPlugin('com.android.library')) {
+            subproject.android {
+                compileSdkVersion 36
+            }
+        }
+    }
+    if (subproject.state.executed) {
+        alignCompileSdk()
+    } else {
+        subproject.afterEvaluate {
+            alignCompileSdk()
+        }
+    }
+}
+
 tasks.register("clean", Delete) {
     delete rootProject.buildDir
 }
