@@ -1,11 +1,11 @@
 {
-    "name": "NAI Cascaded Random Generator",
-    "short_name": "NAI CasRand",
+    "name": "CasRand Forge",
+    "short_name": "CasRand Forge",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A flutter application for generating images from random prompts of specified patterns.",
+    "description": "A cross-platform community fork for generating images from random prompts.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

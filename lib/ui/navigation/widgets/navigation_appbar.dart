@@ -118,7 +118,7 @@ class NavigationAppBarState extends State<NavigationAppBar>
 
   void _showAppInfoDialog(BuildContext context) {
     final packageInfo = GetIt.instance<ConfigService>().packageInfo;
-    const appName = 'NAI CasRand';
+    const appName = 'CasRand Forge';
     final appVersion = packageInfo.version;
     final iconImage = Image.asset(
       'assets/appicon.png',
