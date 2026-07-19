@@ -26,17 +26,23 @@ class FileService {
         ..setAttribute("download", fileName)
         ..click();
       html.Url.revokeObjectUrl(url);
-    } else if (Platform.isWindows) {
-      // Windows: create save path and write file
+    } else if (Platform.isWindows || Platform.isMacOS) {
+      // Desktop: create save path and write file
       final Directory targetDir;
       if (saveDir.isEmpty) {
         targetDir = Directory(
-            '${(await getApplicationDocumentsDirectory()).path}\\nai-generated');
+          '${(await getApplicationDocumentsDirectory()).path}'
+          '${Platform.pathSeparator}nai-generated',
+        );
       } else {
         targetDir = Directory(saveDir);
       }
-      if (!await targetDir.exists()) targetDir.create();
-      final file = File('${targetDir.path}\\$fileName');
+      if (!await targetDir.exists()) {
+        await targetDir.create(recursive: true);
+      }
+      final file = File(
+        '${targetDir.path}${Platform.pathSeparator}$fileName',
+      );
       await file.writeAsBytes(bytes);
     } else if (Platform.isAndroid) {
       // Android: save as photo in Pictures/
@@ -62,7 +68,7 @@ class FileService {
         ..setAttribute("download", fileName)
         ..click();
       html.Url.revokeObjectUrl(url);
-    } else if (Platform.isWindows) {
+    } else if (Platform.isWindows || Platform.isMacOS) {
       final path = await FilePicker.platform.saveFile(fileName: fileName);
       if (path == null) return;
       final file = File(path);
@@ -98,10 +104,11 @@ class FileService {
   Future<Uint8List?> decryptAsset(String assetPath) async {
     const keyBase64 = String.fromEnvironment("ASSET_KEY_BASE64");
     const ivBase64 = String.fromEnvironment("ASSET_IV_BASE64");
-    final key = encrypt.Key.fromBase64(keyBase64);
-    final iv = encrypt.IV.fromBase64(ivBase64);
-    final encrypter = encrypt.Encrypter(encrypt.AES(key));
+    if (keyBase64.isEmpty || ivBase64.isEmpty) return null;
     try {
+      final key = encrypt.Key.fromBase64(keyBase64);
+      final iv = encrypt.IV.fromBase64(ivBase64);
+      final encrypter = encrypt.Encrypter(encrypt.AES(key));
       final assetByteData = await rootBundle.load(assetPath);
       final encryptedBase64 = assetByteData.buffer.asUint8List();
       final decryptedBase64 =

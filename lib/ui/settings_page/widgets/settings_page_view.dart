@@ -26,7 +26,8 @@ class SettingsPageView extends StatelessWidget {
             _buildApiKeyTile(),
             _buildBatchTile(),
             _buildEraseMetadataTile(context),
-            if (!kIsWeb && Platform.isWindows) _buildOutputSelectionTile(),
+            if (!kIsWeb && (Platform.isWindows || Platform.isMacOS))
+              _buildOutputSelectionTile(),
             _buildPrefixKeyTile(),
             if (!kIsWeb) _buildProxyTile(),
             const Divider(),
@@ -167,7 +168,8 @@ class SettingsPageView extends StatelessWidget {
   Widget _buildOutputSelectionTile() {
     if (kIsWeb || Platform.isAndroid) return const SizedBox.shrink();
     final outputDirPath = viewmodel.settings.outputFolderPath == ''
-        ? '<${tr('system_document_folder')}>\\nai_generated'
+        ? '<${tr('system_document_folder')}>${Platform.pathSeparator}'
+            'nai-generated'
         : viewmodel.settings.outputFolderPath;
     return ListTile(
       leading: const Icon(Icons.folder_outlined),

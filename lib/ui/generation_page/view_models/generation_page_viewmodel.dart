@@ -151,7 +151,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
           filePrefix,
           '${FileService().generateRandomString()}.png',
         ].join('-');
-        FileService().savePictureToFile(
+        await FileService().savePictureToFile(
           imageBytes,
           fileName,
           payloadConfig.settings.outputFolderPath,

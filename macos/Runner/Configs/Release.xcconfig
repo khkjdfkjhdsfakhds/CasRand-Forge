@@ -1,2 +1,5 @@
 #include "../../Flutter/Flutter-Release.xcconfig"
 #include "Warnings.xcconfig"
+
+// Keep local Release builds free of debugger-only entitlements.
+CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO

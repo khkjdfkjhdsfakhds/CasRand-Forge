@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -52,7 +53,12 @@ class ConfigService {
 
   Future<Map<String, dynamic>> loadSavedConfig() async {
     if (!kIsWeb) {
-      final dir = await getApplicationDocumentsDirectory();
+      final dir = Platform.isMacOS
+          ? await getApplicationSupportDirectory()
+          : await getApplicationDocumentsDirectory();
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
       Hive.init(dir.path);
     }
     saveBox = await Hive.openBox('savedBox');
