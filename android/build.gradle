@@ -13,6 +13,17 @@ subprojects {
     project.evaluationDependsOn(':app')
 }
 
+// super_native_extensions 0.8.x pins API 31 even though its current
+// AndroidX dependencies require API 34 or newer. This only changes the
+// library's compile SDK; the app's minSdk and targetSdk remain unchanged.
+project(':super_native_extensions') {
+    afterEvaluate {
+        android {
+            compileSdkVersion 36
+        }
+    }
+}
+
 tasks.register("clean", Delete) {
     delete rootProject.buildDir
 }
