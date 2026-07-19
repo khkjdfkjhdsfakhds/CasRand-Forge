@@ -42,6 +42,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
     }
     // Push command into list and run command
     commandList.add(command);
+    notifyListeners();
     command();
   }
 
@@ -151,7 +152,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
           filePrefix,
           '${FileService().generateRandomString()}.png',
         ].join('-');
-        await FileService().savePictureToFile(
+        final imageFilePath = await FileService().savePictureToFile(
           imageBytes,
           fileName,
           payloadConfig.settings.outputFolderPath,
@@ -165,6 +166,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
           info: payloadResult.comment,
           additionalInfo: digestPayloadResult(payloadResult),
           imageBytes: imageBytes,
+          imageFilePath: imageFilePath,
         );
       } catch (e) {
         return InfoCardContent(
@@ -206,6 +208,11 @@ class GenerationPageViewmodel extends ChangeNotifier {
   }
 
   void startBatch() {
+    if (!payloadConfig.settings.rememberSequentialProgress) {
+      payloadConfig.resetSequentialState();
+      _cachedPayloadResult = null;
+      _cacheRetriesCount = 0;
+    }
     commandStatus.currentBatchCount = 0;
     commandStatus.currentTotalCount = 0;
     commandStatus.isBatchActive.value = true;

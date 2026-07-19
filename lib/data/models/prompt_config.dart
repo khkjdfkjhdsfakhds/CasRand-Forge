@@ -166,7 +166,7 @@ class PromptConfig {
       shuffled: json['shuffled'],
       prob:
           json['prob'] is int ? (json['prob'] as int).toDouble() : json['prob'],
-      num: json['num'],
+      num: max(1, json['num'] ?? 1),
       randomBracketsUpper: upper.toInt(),
       randomBracketsLower: lower.toInt(),
       type: json['type'],
@@ -246,9 +246,14 @@ class PromptConfig {
         chosenPrompts = chosenPrompts.take(num).toList();
         break;
       case 'single_sequential':
+        if (promptsToChoose.isEmpty) break;
+        if (_sequentialIdx >= promptsToChoose.length) {
+          _sequentialIdx = 0;
+          _sequentialRepeatIdx = 0;
+        }
         chosenPrompts = [promptsToChoose[_sequentialIdx]];
         _sequentialRepeatIdx++;
-        if (_sequentialRepeatIdx >= num) {
+        if (_sequentialRepeatIdx >= max(1, num)) {
           _sequentialIdx = (_sequentialIdx + 1) % promptsToChoose.length;
           _sequentialRepeatIdx = 0;
         }
@@ -274,6 +279,14 @@ class PromptConfig {
               .toList());
     } else {
       throw UnimplementedError();
+    }
+  }
+
+  void resetSequentialState() {
+    _sequentialIdx = 0;
+    _sequentialRepeatIdx = 0;
+    for (final prompt in prompts) {
+      prompt.resetSequentialState();
     }
   }
 }

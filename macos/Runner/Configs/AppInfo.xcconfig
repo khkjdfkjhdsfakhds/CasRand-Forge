@@ -5,10 +5,10 @@
 // 'flutter create' template.
 
 // The application's name. By default this is also the title of the Flutter window.
-PRODUCT_NAME = CasRand Forge
+PRODUCT_NAME = CasRand Forge Beta
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = io.github.khkjdfkjhdsfakhds.casrandforge
+PRODUCT_BUNDLE_IDENTIFIER = io.github.khkjdfkjhdsfakhds.casrandforge.beta
 
 // The copyright displayed in application information
 PRODUCT_COPYRIGHT = Copyright © 2024 Exception0x0194; © 2026 CasRand Forge contributors. GPL-3.0 licensed.

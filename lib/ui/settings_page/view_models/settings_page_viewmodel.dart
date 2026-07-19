@@ -48,6 +48,12 @@ class SettingsPageViewmodel extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setRememberSequentialProgress(bool? value) {
+    if (value == null) return;
+    payloadConfig.settings.rememberSequentialProgress = value;
+    notifyListeners();
+  }
+
   void setEraseMetadataEnabled(bool? value) {
     if (value == null) return;
     payloadConfig.settings.metadataEraseEnabled = value;

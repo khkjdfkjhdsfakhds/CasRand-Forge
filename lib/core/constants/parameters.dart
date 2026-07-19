@@ -52,6 +52,8 @@ const List<String> commentKeys = [
   'uncond_scale',
   'cfg_rescale',
   'noise_schedule',
+  'deliberate_euler_ancestral_bug',
+  'prefer_brownian',
   'negative_prompt',
   'seed',
   'use_coords',
@@ -62,5 +64,9 @@ const Map<String, String> sourceToModel = {
   'Stable Diffusion XL 7BCCAA2C': 'nai-diffusion-3',
   'Stable Diffusion XL 9CC2F394': 'nai-diffusion-furry-3',
   'NovelAI Diffusion V4 F6E18726': 'nai-diffusion-4-curated-preview',
-  'NovelAI Diffusion V4 79F47848': 'nai-diffusion-4-full'
+  'NovelAI Diffusion V4 79F47848': 'nai-diffusion-4-full',
+  'NovelAI Diffusion V4.5 4BDE2A90': 'nai-diffusion-4-5-full',
+  'NovelAI Diffusion V4.5 B9F340FD': 'nai-diffusion-4-5-full',
+  'NovelAI Diffusion V4.5 B5A2A797': 'nai-diffusion-4-5-full',
+  'NovelAI Diffusion V4.5 C02D4F98': 'nai-diffusion-4-5-curated',
 };

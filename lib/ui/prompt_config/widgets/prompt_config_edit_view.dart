@@ -141,11 +141,14 @@ class PromptConfigEditView extends StatelessWidget {
   }
 
   Widget _buildNumTile(PromptConfigViewModel viewModel, BuildContext context) {
-    if (viewModel.config.selectionMethod != 'multiple_num') {
+    if (viewModel.config.selectionMethod != 'multiple_num' &&
+        viewModel.config.selectionMethod != 'single_sequential') {
       return const SizedBox.shrink();
     }
     return EditableListTile(
-        title: tr('selection_num'),
+        title: viewModel.config.selectionMethod == 'single_sequential'
+            ? tr('single_sequential_repeats_num')
+            : tr('selection_num'),
         leading: const Icon(Icons.question_mark),
         confirmOnSubmit: true,
         keyboardType: TextInputType.number,

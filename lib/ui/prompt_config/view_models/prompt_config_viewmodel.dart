@@ -30,7 +30,7 @@ class PromptConfigViewModel extends ChangeNotifier {
   }
 
   void setNum(int value) {
-    config.num = value;
+    config.num = value < 1 ? 1 : value;
     notifyListeners();
   }
 

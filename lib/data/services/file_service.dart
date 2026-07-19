@@ -13,7 +13,7 @@ import 'package:encrypt/encrypt.dart' as encrypt;
 import 'package:saver_gallery/saver_gallery.dart';
 
 class FileService {
-  Future<void> savePictureToFile(
+  Future<String?> savePictureToFile(
     Uint8List bytes,
     String fileName,
     String saveDir,
@@ -26,6 +26,7 @@ class FileService {
         ..setAttribute("download", fileName)
         ..click();
       html.Url.revokeObjectUrl(url);
+      return null;
     } else if (Platform.isWindows || Platform.isMacOS) {
       // Desktop: create save path and write file
       final Directory targetDir;
@@ -44,6 +45,7 @@ class FileService {
         '${targetDir.path}${Platform.pathSeparator}$fileName',
       );
       await file.writeAsBytes(bytes);
+      return file.absolute.path;
     } else if (Platform.isAndroid) {
       // Android: save as photo in Pictures/
       await _requestAlbumPermission();
@@ -53,7 +55,9 @@ class FileService {
         androidRelativePath: "Pictures/nai-generated",
         androidExistNotSave: false,
       );
+      return null;
     }
+    return null;
   }
 
   Future<void> saveStringToFile(

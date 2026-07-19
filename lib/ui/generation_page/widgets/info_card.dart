@@ -7,6 +7,7 @@ import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
+import 'package:nai_casrand/ui/generation_page/widgets/generated_image_view.dart';
 import 'package:flutter_command/flutter_command.dart';
 
 class InfoCard extends StatelessWidget {
@@ -113,10 +114,13 @@ class InfoCard extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              Image.memory(
-                fit: BoxFit.contain,
-                content.imageBytes!,
-                filterQuality: FilterQuality.medium,
+              GeneratedImageView(
+                content: content,
+                child: Image.memory(
+                  fit: BoxFit.contain,
+                  content.imageBytes!,
+                  filterQuality: FilterQuality.medium,
+                ),
               ),
             ],
           );
@@ -144,7 +148,10 @@ class InfoDetailPage extends StatelessWidget {
         child: Column(
           children: [
             if (content.imageBytes != null)
-              Image.memory(content.imageBytes!, fit: BoxFit.contain),
+              GeneratedImageView(
+                content: content,
+                child: Image.memory(content.imageBytes!, fit: BoxFit.contain),
+              ),
             ...contents,
           ],
         ),

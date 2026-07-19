@@ -16,6 +16,9 @@ class ParamConfig {
   bool smDyn;
   bool varietyPlus;
 
+  bool? deliberateEulerAncestralBug;
+  bool? preferBrownian;
+
   bool randomSeed;
   int seed;
 
@@ -56,6 +59,8 @@ class ParamConfig {
     this.cfgRescale = 0.1,
     this.noiseSchedule = 'native',
     this.varietyPlus = false,
+    this.deliberateEulerAncestralBug,
+    this.preferBrownian,
     this.negativePrompt = defaultUC,
     this.autoPosition = false,
     this.legacyUc = false,
@@ -86,6 +91,8 @@ class ParamConfig {
       'reference_information_extracted_multiple': [],
       'reference_strength_multiple': [],
       'variety_plus': varietyPlus,
+      'deliberate_euler_ancestral_bug': deliberateEulerAncestralBug,
+      'prefer_brownian': preferBrownian,
       'auto_position': autoPosition,
       'legacy_uc': legacyUc,
     };
@@ -93,11 +100,15 @@ class ParamConfig {
 
   /// Different from toJson(), some fields in payload need to be calculated from other params.
   Map<String, dynamic> getPayload() {
-    bool? preferBrownian;
-    bool? deliberateEulerAncestralBug;
-    if (sampler == 'k_euler_ancestral' && noiseSchedule != 'native') {
-      preferBrownian = true;
-      deliberateEulerAncestralBug = false;
+    bool? effectiveDeliberateEulerAncestralBug = deliberateEulerAncestralBug;
+    bool? effectivePreferBrownian = preferBrownian;
+    final hasImportedSamplerOverrides =
+        deliberateEulerAncestralBug != null || preferBrownian != null;
+    if (!hasImportedSamplerOverrides &&
+        sampler == 'k_euler_ancestral' &&
+        noiseSchedule != 'native') {
+      effectiveDeliberateEulerAncestralBug = false;
+      effectivePreferBrownian = true;
     }
     double? skipCfgAboveSigma;
     final selectedSize = sizes[Random().nextInt(sizes.length)];
@@ -137,8 +148,8 @@ class ParamConfig {
       "reference_image_multiple": [],
       "reference_information_extracted_multiple": [],
       "reference_strength_multiple": [],
-      "deliberate_euler_ancestral_bug": deliberateEulerAncestralBug,
-      "prefer_brownian": preferBrownian,
+      "deliberate_euler_ancestral_bug": effectiveDeliberateEulerAncestralBug,
+      "prefer_brownian": effectivePreferBrownian,
       "legacy_uc": legacyUc,
     };
     payload['legacy_v3_extend'] = false;
@@ -185,11 +196,17 @@ class ParamConfig {
       negativePrompt: json['negative_prompt'],
       autoPosition: json['auto_position'] ?? false,
       legacyUc: json['legacy_uc'] ?? false,
+      deliberateEulerAncestralBug:
+          json['deliberate_euler_ancestral_bug'] as bool?,
+      preferBrownian: json['prefer_brownian'] as bool?,
     );
   }
 
   int loadJson(Map<String, dynamic> json) {
     int loadCount = 0;
+    if (json.containsKey('sampler') || json.containsKey('noise_schedule')) {
+      clearImportedSamplerOverrides();
+    }
     if (json.containsKey('width') && json.containsKey('height')) {
       final width = json['width'];
       final height = json['height'];
@@ -262,6 +279,15 @@ class ParamConfig {
       noiseSchedule = json['noise_schedule'];
       loadCount++;
     }
+    if (json.containsKey('deliberate_euler_ancestral_bug')) {
+      deliberateEulerAncestralBug =
+          json['deliberate_euler_ancestral_bug'] as bool?;
+      loadCount++;
+    }
+    if (json.containsKey('prefer_brownian')) {
+      preferBrownian = json['prefer_brownian'] as bool?;
+      loadCount++;
+    }
     if (json.containsKey('negative_prompt')) {
       negativePrompt = json['negative_prompt'];
       loadCount++;
@@ -280,5 +306,10 @@ class ParamConfig {
       loadCount++;
     }
     return loadCount;
+  }
+
+  void clearImportedSamplerOverrides() {
+    deliberateEulerAncestralBug = null;
+    preferBrownian = null;
   }
 }

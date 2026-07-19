@@ -29,11 +29,13 @@ class ParametersConfigViewmodel extends ChangeNotifier {
 
   setSampler(String value) {
     config.sampler = value;
+    config.clearImportedSamplerOverrides();
     notifyListeners();
   }
 
   setNoiseScheduler(String value) {
     config.noiseSchedule = value;
+    config.clearImportedSamplerOverrides();
     notifyListeners();
   }
 
@@ -101,6 +103,7 @@ class ParametersConfigViewmodel extends ChangeNotifier {
 
   void setModel(String value) {
     config.model = value;
+    config.clearImportedSamplerOverrides();
     notifyListeners();
   }
 

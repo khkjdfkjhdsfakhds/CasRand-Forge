@@ -71,6 +71,16 @@ class PayloadConfig {
     };
   }
 
+  void resetSequentialState() {
+    rootPromptConfig.resetSequentialState();
+    for (final config in savedPromptConfigList) {
+      config.resetSequentialState();
+    }
+    for (final characterConfig in characterConfigList) {
+      characterConfig.positivePromptConfig.resetSequentialState();
+    }
+  }
+
   Map<String, dynamic> toJson() {
     return {
       "prompt_config": rootPromptConfig.toJson(),

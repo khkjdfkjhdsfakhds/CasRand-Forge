@@ -25,6 +25,7 @@ class SettingsPageView extends StatelessWidget {
           children: [
             _buildApiKeyTile(),
             _buildBatchTile(),
+            _buildRememberSequentialProgressTile(),
             _buildEraseMetadataTile(context),
             if (!kIsWeb && (Platform.isWindows || Platform.isMacOS))
               _buildOutputSelectionTile(),
@@ -125,6 +126,16 @@ class SettingsPageView extends StatelessWidget {
               confirmOnSubmit: true,
             )),
       ],
+    );
+  }
+
+  Widget _buildRememberSequentialProgressTile() {
+    return CheckboxListTile(
+      secondary: const Icon(Icons.history),
+      title: Text(tr('remember_sequential_progress')),
+      subtitle: Text(tr('remember_sequential_progress_hint')),
+      value: viewmodel.settings.rememberSequentialProgress,
+      onChanged: viewmodel.setRememberSequentialProgress,
     );
   }
 

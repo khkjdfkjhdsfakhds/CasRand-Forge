@@ -19,7 +19,7 @@ void main() {
       );
 
       final imageBytes = Uint8List.fromList([1, 2, 3, 4]);
-      await FileService().savePictureToFile(
+      final savedPath = await FileService().savePictureToFile(
         imageBytes,
         'generated.png',
         nestedOutputDirectory.path,
@@ -28,6 +28,7 @@ void main() {
       final outputFile = File(
         '${nestedOutputDirectory.path}${Platform.pathSeparator}generated.png',
       );
+      expect(savedPath, outputFile.absolute.path);
       expect(await outputFile.readAsBytes(), imageBytes);
     },
     skip: !Platform.isMacOS,

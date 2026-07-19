@@ -35,6 +35,8 @@ class Settings {
   // Number of requests
   int numberOfRequests;
 
+  bool rememberSequentialProgress;
+
   // File name prefix key
   String fileNamePrefixKey;
 
@@ -51,6 +53,7 @@ class Settings {
     required this.batchCount,
     required this.batchIntervalSec,
     required this.numberOfRequests,
+    required this.rememberSequentialProgress,
     required this.fileNamePrefixKey,
     required this.generationPageColumnCount,
     required this.themeMode,
@@ -71,6 +74,7 @@ class Settings {
       batchCount: json['batch_count'] ?? 10,
       batchIntervalSec: json['batch_interval'] ?? 10,
       numberOfRequests: json['number_of_requests'] ?? 0,
+      rememberSequentialProgress: json['remember_sequential_progress'] ?? true,
       fileNamePrefixKey: json['file_name_prefix_key'] ?? '',
       generationPageColumnCount: json['generation_page_column_count'] ?? 2,
       themeMode: json['theme_mode'] ?? 'system',
@@ -90,6 +94,7 @@ class Settings {
       'batch_interval': batchIntervalSec,
       'file_name_prefix_key': fileNamePrefixKey,
       'number_of_requests': numberOfRequests,
+      'remember_sequential_progress': rememberSequentialProgress,
       'generation_page_column_count': generationPageColumnCount,
       'theme_mode': themeMode,
     };
