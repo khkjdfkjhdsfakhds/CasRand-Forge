@@ -1,40 +1,54 @@
-name: Build Windows Release
+name: Build Windows Beta
 
 on:
+  workflow_dispatch:
   push:
-    branches: [ "main" ] # 当 main 分支有 push 时触发
-  workflow_dispatch: # 允许手动触发 workflow
+    tags:
+      - "v*-beta.*"
+
+permissions:
+  contents: read
 
 jobs:
   build-windows:
     runs-on: windows-latest
+    env:
+      ASSET_NAME: CasRand-Forge-v0.9.2-beta.1-Windows-x64.zip
 
     steps:
-      - name: 检出代码
+      - name: Check out source
         uses: actions/checkout@v4
-      - name: 设置 Flutter 环境
+
+      - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: 3.24.3
-      - name: 创建 secrets.json 文件
-        shell: powershell 
-        run: |
-          # 从 Base64 解码 GitHub Secret 的内容
-          $decodedJsonBytes = [System.Convert]::FromBase64String("${{ secrets.SECRETS_JSON_CONTENT }}")
-          # 将解码后的字节数组转换为 UTF-8 字符串
-          $decodedJsonString = [System.Text.Encoding]::UTF8.GetString($decodedJsonBytes)
-          # 将解码后的 JSON 字符串写入 secrets.json 文件
-          $decodedJsonString | Out-File -FilePath "secrets.json" -Encoding UTF8
-      - name: 构建 Windows
-        run: flutter build windows --dart-define-from-file=secrets.json
-      - name: 打包为 ZIP 文件
-        shell: powershell  # 指定使用 PowerShell 运行
-        run: |
-          # 使用 Compress-Archive 命令打包文件夹
-          Compress-Archive -Path "build/windows/x64/runner/Release" -DestinationPath "windows-x64-release.zip"
-      - name: 上传 Windows ZIP Artifact
+          flutter-version: 3.44.6
+          cache: true
+
+      - name: Resolve locked dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos
+
+      - name: Test
+        run: flutter test
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Build Windows release
+        run: flutter build windows --release
+
+      - name: Package Windows release
+        shell: powershell
+        run: Compress-Archive -Path "build\windows\x64\runner\Release\*" -DestinationPath "$env:ASSET_NAME" -CompressionLevel Optimal
+
+      - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: windows-release-zip  # 修改 artifact 的名称，更清晰地表示是 zip 文件
-          path: windows-x64-release.zip # 修改上传的路径为 zip 文件
+          name: windows-beta
+          path: ${{ env.ASSET_NAME }}
+          if-no-files-found: error
+          retention-days: 14

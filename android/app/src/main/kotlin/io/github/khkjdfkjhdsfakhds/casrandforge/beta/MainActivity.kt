@@ -1,4 +1,4 @@
-package com.example.nai3_autodraw
+package io.github.khkjdfkjhdsfakhds.casrandforge.beta
 
 import io.flutter.embedding.android.FlutterActivity
 
