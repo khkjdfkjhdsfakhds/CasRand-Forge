@@ -17,11 +17,18 @@ subprojects {
 // dependencies require API 34 or newer. This only changes library compile
 // SDKs; the app's minSdk and targetSdk remain unchanged.
 subprojects { subproject ->
-    afterEvaluate {
+    def alignCompileSdk = {
         if (subproject.plugins.hasPlugin('com.android.library')) {
             subproject.android {
                 compileSdkVersion 36
             }
+        }
+    }
+    if (subproject.state.executed) {
+        alignCompileSdk()
+    } else {
+        subproject.afterEvaluate {
+            alignCompileSdk()
         }
     }
 }
