@@ -44,7 +44,19 @@ jobs:
 
       - name: Package Windows release
         shell: powershell
-        run: Compress-Archive -Path "build\windows\x64\runner\Release\*" -DestinationPath "$env:ASSET_NAME" -CompressionLevel Optimal
+        run: |
+          $archivePath = Join-Path $PWD $env:ASSET_NAME
+          tar.exe -a -c -f $archivePath -C "build\windows\x64\runner\Release" .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Validate Windows package
+        shell: powershell
+        run: |
+          if (-not (Test-Path "build\windows\x64\runner\Release\CasRandForgeBeta.exe")) {
+            throw "CasRandForgeBeta.exe is missing from the release directory"
+          }
+          tar.exe -t -f "$env:ASSET_NAME" | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
