@@ -1,9 +1,10 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:nai_casrand/core/constants/feature_flags.dart';
 import 'package:nai_casrand/ui/core/widgets/editable_list_tile.dart';
+import 'package:nai_casrand/ui/generation_page/widgets/generation_settings_view.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/info_card.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
-import 'package:nai_casrand/ui/core/widgets/slider_list_tile.dart';
 import 'package:waterfall_flow/waterfall_flow.dart';
 
 class GenerationPageView extends StatelessWidget {
@@ -31,7 +32,8 @@ class GenerationPageView extends StatelessWidget {
                   ),
                 ),
               ),
-              if (viewmodel.payloadConfig.useOverridePrompt)
+              if (FeatureFlags.overridePrompt &&
+                  viewmodel.payloadConfig.useOverridePrompt)
                 EditableListTile(
                   title: tr('override_prompt'),
                   leading: const Icon(Icons.edit_note),
@@ -41,7 +43,8 @@ class GenerationPageView extends StatelessWidget {
                   onEditComplete: (value) => viewmodel.setOverridePrompt(value),
                   confirmOnSubmit: true,
                 ),
-              if (viewmodel.payloadConfig.useOverridePrompt)
+              if (FeatureFlags.overridePrompt &&
+                  viewmodel.payloadConfig.useOverridePrompt)
                 EditableListTile(
                   title: tr('uc'),
                   leading: const Icon(Icons.do_not_disturb),
@@ -74,12 +77,12 @@ class GenerationPageView extends StatelessWidget {
         const SizedBox(height: 20.0),
         FloatingActionButton(
           heroTag: 'gpfab3',
-          onPressed: () => viewmodel.toggleBatch(),
+          onPressed: () => viewmodel.toggleGeneration(),
           tooltip: tr('toggle_generation'),
           child: ListenableBuilder(
-            listenable: viewmodel.commandStatus.isBatchActive,
+            listenable: viewmodel.commandStatus.isGenerationActive,
             builder: (context, child) => Icon(
-                viewmodel.commandStatus.isBatchActive.value
+                viewmodel.commandStatus.isGenerationActive.value
                     ? Icons.stop
                     : Icons.play_arrow),
           ),
@@ -93,56 +96,22 @@ class GenerationPageView extends StatelessWidget {
   }
 
   void _showDisplaySettingsDialog(BuildContext context) {
-    showDialog(
+    showDialog<void>(
         context: context,
-        builder: (context) => AlertDialog(
-              title: Text(tr('generation_settings')),
-              content: DisplaySettingsView(viewmodel: viewmodel),
+        builder: (dialogContext) => AlertDialog(
+              title: Text(dialogContext.tr('generation_settings')),
+              content: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: 560,
+                  maxHeight: MediaQuery.sizeOf(dialogContext).height * 0.72,
+                ),
+                child: GenerationSettingsView(viewmodel: viewmodel),
+              ),
               actions: [
                 TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: Text(tr('confirm')))
+                    onPressed: () => Navigator.of(dialogContext).pop(),
+                    child: Text(dialogContext.tr('confirm')))
               ],
             ));
-  }
-}
-
-class DisplaySettingsView extends StatelessWidget {
-  final GenerationPageViewmodel viewmodel;
-
-  const DisplaySettingsView({super.key, required this.viewmodel});
-
-  @override
-  Widget build(BuildContext context) {
-    return ListenableBuilder(
-        listenable: viewmodel,
-        builder: (context, _) {
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SliderListTile(
-                title: '${tr('column_number')}: ${viewmodel.colNum.toString()}',
-                sliderValue: viewmodel.colNum.toDouble(),
-                min: 1.0,
-                max: 5.0,
-                divisions: 4,
-                onChanged: (value) => viewmodel.setCardsPerCol(value.toInt()),
-              ),
-              CheckboxListTile(
-                title: Text(tr('override_random_prompts')),
-                secondary: const Icon(Icons.edit),
-                value: viewmodel.payloadConfig.useOverridePrompt,
-                onChanged: (value) => viewmodel.setOverride(value),
-              ),
-              if (viewmodel.payloadConfig.useOverridePrompt)
-                CheckboxListTile(
-                  title: Text(tr('use_character_prompt')),
-                  secondary: const Icon(Icons.edit),
-                  value: viewmodel.payloadConfig.useCharacterPromptWithOverride,
-                  onChanged: (value) => viewmodel.setCharacterOverride(value),
-                ),
-            ],
-          );
-        });
   }
 }

@@ -8,6 +8,7 @@ import 'package:flutter_command/flutter_command.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/data/models/api_request.dart';
 import 'package:nai_casrand/data/models/command_status.dart';
+import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:lorem_ipsum/lorem_ipsum.dart';
@@ -29,9 +30,60 @@ class GenerationPageViewmodel extends ChangeNotifier {
 
   PayloadGenerationResult? _cachedPayloadResult;
   int _cacheRetriesCount = 0;
+  Timer? _generationIntervalTimer;
 
   void setCardsPerCol(int value) {
     payloadConfig.settings.generationPageColumnCount = value;
+    notifyListeners();
+  }
+
+  void setRandomSeedEnabled(bool? value) {
+    if (value == null) return;
+    payloadConfig.paramConfig.randomSeed = value;
+    notifyListeners();
+  }
+
+  void setSeed(String value) {
+    final parseResult = int.tryParse(value);
+    if (parseResult == null) return;
+    payloadConfig.paramConfig.seed = parseResult;
+    notifyListeners();
+  }
+
+  void removeSize(GenerationSize size) {
+    final sizes = payloadConfig.paramConfig.sizes;
+    if (sizes.length == 1) return;
+    payloadConfig.paramConfig.sizes = List.of(sizes)..remove(size);
+    notifyListeners();
+  }
+
+  void addSize(GenerationSize size) {
+    final sizes = payloadConfig.paramConfig.sizes;
+    if (sizes.contains(size)) return;
+    payloadConfig.paramConfig.sizes = List.of(sizes)..add(size);
+    notifyListeners();
+  }
+
+  void addManualSize(String width, String height) {
+    var parsedWidth = int.tryParse(width);
+    var parsedHeight = int.tryParse(height);
+    if (parsedWidth == null || parsedHeight == null) return;
+    parsedWidth = (parsedWidth / 64).ceil() * 64;
+    parsedHeight = (parsedHeight / 64).ceil() * 64;
+    addSize(GenerationSize(width: parsedWidth, height: parsedHeight));
+  }
+
+  void setGenerationInterval(String value) {
+    final parseResult = int.tryParse(value);
+    if (parseResult == null || parseResult < 0) return;
+    payloadConfig.settings.generationIntervalSec = parseResult;
+    notifyListeners();
+  }
+
+  void setGenerationCount(String value) {
+    final parseResult = int.tryParse(value);
+    if (parseResult == null || parseResult < 0) return;
+    payloadConfig.settings.generationCount = parseResult;
     notifyListeners();
   }
 
@@ -98,9 +150,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
   }
 
   void nextCommand() {
-    // Stop if batch is inactive or cooling down
-    if (!commandStatus.isBatchActive.value) return;
-    if (commandStatus.isCoolingDown.value) return;
+    if (!commandStatus.isGenerationActive.value) return;
+    if (commandStatus.isWaitingForNextGeneration.value) return;
 
     // Skip if active command exists
     if (currentCommand != null && currentCommand!.isExecuting.value) return;
@@ -147,8 +198,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
             ? _getSafeFileName(payloadResult.suggestedFileName)
             : '';
         final fileName = [
-          FileService().generateTimestampString(commandStatus.batchTimestamp),
-          commandStatus.currentTotalCount.toString().padLeft(6, '0'),
+          FileService()
+              .generateTimestampString(commandStatus.generationTimestamp),
+          commandStatus.currentGenerationCount.toString().padLeft(6, '0'),
           filePrefix,
           '${FileService().generateRandomString()}.png',
         ].join('-');
@@ -160,7 +212,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
         // Reset cache after successful generation
         _cachedPayloadResult = null;
         // Only increment total count after successful generation
-        commandStatus.currentTotalCount++;
+        commandStatus.currentGenerationCount++;
         return InfoCardContent(
           title: fileName,
           info: payloadResult.comment,
@@ -187,19 +239,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
       // Only update after execution
       if (command.isExecuting.value) return;
 
-      commandStatus.currentBatchCount++;
-      if (commandStatus.currentTotalCount >=
-              payloadConfig.settings.numberOfRequests &&
-          payloadConfig.settings.numberOfRequests != 0) {
-        stopBatch();
-        return;
-      } else if (commandStatus.currentBatchCount >=
-          payloadConfig.settings.batchCount) {
-        setCooldown();
-        return;
-      } else {
-        nextCommand();
-      }
+      continueAfterGenerationAttempt();
     });
 
     // Execute command
@@ -207,41 +247,73 @@ class GenerationPageViewmodel extends ChangeNotifier {
     addAndRunCommand(command);
   }
 
-  void startBatch() {
+  void startGeneration() {
+    _generationIntervalTimer?.cancel();
+    commandStatus.isWaitingForNextGeneration.value = false;
     if (!payloadConfig.settings.rememberSequentialProgress) {
       payloadConfig.resetSequentialState();
       _cachedPayloadResult = null;
       _cacheRetriesCount = 0;
     }
-    commandStatus.currentBatchCount = 0;
-    commandStatus.currentTotalCount = 0;
-    commandStatus.isBatchActive.value = true;
-    commandStatus.batchTimestamp = DateTime.now();
+    commandStatus.currentGenerationCount = 0;
+    commandStatus.isGenerationActive.value = true;
+    commandStatus.generationTimestamp = DateTime.now();
     nextCommand();
   }
 
-  void stopBatch() {
-    commandStatus.isBatchActive.value = false;
+  void stopGeneration() {
+    _generationIntervalTimer?.cancel();
+    _generationIntervalTimer = null;
+    commandStatus.isWaitingForNextGeneration.value = false;
+    commandStatus.isGenerationActive.value = false;
   }
 
-  void setCooldown() {
-    commandStatus.isCoolingDown.value = true;
-    Timer(
-      Duration(seconds: payloadConfig.settings.batchIntervalSec),
+  void scheduleNextGeneration() {
+    if (!commandStatus.isGenerationActive.value) return;
+
+    _generationIntervalTimer?.cancel();
+    final interval = payloadConfig.settings.generationIntervalSec;
+    if (interval == 0) {
+      nextCommand();
+      return;
+    }
+
+    commandStatus.isWaitingForNextGeneration.value = true;
+    _generationIntervalTimer = Timer(
+      Duration(seconds: interval),
       () {
-        commandStatus.isCoolingDown.value = false;
-        commandStatus.currentBatchCount = 0;
+        _generationIntervalTimer = null;
+        commandStatus.isWaitingForNextGeneration.value = false;
         nextCommand();
       },
     );
   }
 
-  void toggleBatch() {
-    if (commandStatus.isBatchActive.value) {
-      stopBatch();
-    } else {
-      startBatch();
+  @visibleForTesting
+  void continueAfterGenerationAttempt() {
+    if (!commandStatus.isGenerationActive.value) return;
+
+    final generationCount = payloadConfig.settings.generationCount;
+    if (generationCount != 0 &&
+        commandStatus.currentGenerationCount >= generationCount) {
+      stopGeneration();
+      return;
     }
+    scheduleNextGeneration();
+  }
+
+  void toggleGeneration() {
+    if (commandStatus.isGenerationActive.value) {
+      stopGeneration();
+    } else {
+      startGeneration();
+    }
+  }
+
+  @override
+  void dispose() {
+    _generationIntervalTimer?.cancel();
+    super.dispose();
   }
 
   /// Make PayloadResult into readable Map<String, dynamic> for better visualization

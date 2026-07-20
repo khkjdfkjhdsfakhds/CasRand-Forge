@@ -10,7 +10,7 @@ import 'package:nai_casrand/data/services/file_service.dart';
 import 'package:nai_casrand/ui/navigation/widgets/debug_settings_view.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-enum AppState { idle, generating, coolingDown }
+enum AppState { idle, generating, waitingForNextGeneration }
 
 class NavigationAppBar extends StatefulWidget implements PreferredSizeWidget {
   final CommandStatus commandStatus = GetIt.instance();
@@ -42,16 +42,16 @@ class NavigationAppBarState extends State<NavigationAppBar>
     super.initState();
 
     // 在生成状态变化时改变样式
-    widget.commandStatus.isBatchActive.addListener(refreshDisplay);
-    widget.commandStatus.isCoolingDown.addListener(refreshDisplay);
+    widget.commandStatus.isGenerationActive.addListener(refreshDisplay);
+    widget.commandStatus.isWaitingForNextGeneration.addListener(refreshDisplay);
     refreshDisplay(); // 初始化状态
   }
 
   void refreshDisplay() {
     AppState newState;
-    if (widget.commandStatus.isCoolingDown.value) {
-      newState = AppState.coolingDown;
-    } else if (widget.commandStatus.isBatchActive.value) {
+    if (widget.commandStatus.isWaitingForNextGeneration.value) {
+      newState = AppState.waitingForNextGeneration;
+    } else if (widget.commandStatus.isGenerationActive.value) {
       newState = AppState.generating;
     } else {
       newState = AppState.idle;
@@ -76,9 +76,9 @@ class NavigationAppBarState extends State<NavigationAppBar>
         );
         _iconAnimationController.repeat();
         break;
-      case AppState.coolingDown:
+      case AppState.waitingForNextGeneration:
         title = BlinkText(
-          context.tr('appbar_cooldown'),
+          context.tr('appbar_generation_interval'),
           beginColor: Theme.of(context).textTheme.titleMedium?.color,
         );
         _iconAnimationController.stop();
@@ -114,6 +114,15 @@ class NavigationAppBarState extends State<NavigationAppBar>
     return AppBar(
       title: titleBar,
     );
+  }
+
+  @override
+  void dispose() {
+    widget.commandStatus.isGenerationActive.removeListener(refreshDisplay);
+    widget.commandStatus.isWaitingForNextGeneration
+        .removeListener(refreshDisplay);
+    _iconAnimationController.dispose();
+    super.dispose();
   }
 
   void _showAppInfoDialog(BuildContext context) {

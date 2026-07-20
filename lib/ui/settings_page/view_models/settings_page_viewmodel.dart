@@ -27,27 +27,6 @@ class SettingsPageViewmodel extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setBatchCount(String value) {
-    final parseResult = int.tryParse(value);
-    if (parseResult == null) return;
-    payloadConfig.settings.batchCount = parseResult;
-    notifyListeners();
-  }
-
-  void setBatchIntervalSet(String value) {
-    final parseResult = int.tryParse(value);
-    if (parseResult == null) return;
-    payloadConfig.settings.batchIntervalSec = parseResult;
-    notifyListeners();
-  }
-
-  void setNumberOfRequests(String value) {
-    final parseResult = int.tryParse(value);
-    if (parseResult == null) return;
-    payloadConfig.settings.numberOfRequests = parseResult;
-    notifyListeners();
-  }
-
   void setRememberSequentialProgress(bool? value) {
     if (value == null) return;
     payloadConfig.settings.rememberSequentialProgress = value;

@@ -29,11 +29,9 @@ class Settings {
   bool customMetadataEnabled;
   String customMetadataContent;
 
-  // Batch settings
-  int batchCount;
-  int batchIntervalSec;
-  // Number of requests
-  int numberOfRequests;
+  // Generation scheduling
+  int generationCount;
+  int generationIntervalSec;
 
   bool rememberSequentialProgress;
 
@@ -50,9 +48,8 @@ class Settings {
     required this.metadataEraseEnabled,
     required this.customMetadataEnabled,
     required this.customMetadataContent,
-    required this.batchCount,
-    required this.batchIntervalSec,
-    required this.numberOfRequests,
+    required this.generationCount,
+    required this.generationIntervalSec,
     required this.rememberSequentialProgress,
     required this.fileNamePrefixKey,
     required this.generationPageColumnCount,
@@ -71,9 +68,10 @@ class Settings {
       customMetadataEnabled: json['custom_metadata_enabled'] ?? false,
       customMetadataContent:
           json['custom_metadata_content'] ?? defaultWatermarkContent,
-      batchCount: json['batch_count'] ?? 10,
-      batchIntervalSec: json['batch_interval'] ?? 10,
-      numberOfRequests: json['number_of_requests'] ?? 0,
+      generationCount:
+          json['generation_count'] ?? json['number_of_requests'] ?? 0,
+      generationIntervalSec:
+          json['generation_interval'] ?? json['batch_interval'] ?? 10,
       rememberSequentialProgress: json['remember_sequential_progress'] ?? true,
       fileNamePrefixKey: json['file_name_prefix_key'] ?? '',
       generationPageColumnCount: json['generation_page_column_count'] ?? 2,
@@ -90,10 +88,9 @@ class Settings {
       'metadata_erase_enabled': metadataEraseEnabled,
       'custom_metadata_enabled': customMetadataEnabled,
       'custom_metadata_content': customMetadataContent,
-      'batch_count': batchCount,
-      'batch_interval': batchIntervalSec,
       'file_name_prefix_key': fileNamePrefixKey,
-      'number_of_requests': numberOfRequests,
+      'generation_count': generationCount,
+      'generation_interval': generationIntervalSec,
       'remember_sequential_progress': rememberSequentialProgress,
       'generation_page_column_count': generationPageColumnCount,
       'theme_mode': themeMode,

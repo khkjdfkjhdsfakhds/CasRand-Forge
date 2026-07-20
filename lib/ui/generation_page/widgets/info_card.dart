@@ -24,9 +24,9 @@ class InfoCard extends StatelessWidget {
       listenable: command.isExecuting,
       builder: (context, child) {
         if (command.isExecuting.value) {
-          final current = commandStatus.currentTotalCount.toString();
-          final total = settings.numberOfRequests != 0
-              ? settings.numberOfRequests.toString()
+          final current = commandStatus.currentGenerationCount.toString();
+          final total = settings.generationCount != 0
+              ? settings.generationCount.toString()
               : '∞';
           // Loading
           return ListTile(

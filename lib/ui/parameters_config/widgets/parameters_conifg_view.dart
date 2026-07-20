@@ -3,14 +3,12 @@ import 'dart:convert';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:nai_casrand/core/constants/defaults.dart';
 import 'package:nai_casrand/core/constants/parameters.dart';
 import 'package:nai_casrand/data/services/image_service.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
 import 'package:nai_casrand/ui/parameters_config/view_models/parameters_config_viewmodel.dart';
 import 'package:nai_casrand/ui/core/widgets/editable_list_tile.dart';
 import 'package:nai_casrand/ui/core/widgets/slider_list_tile.dart';
-import 'package:provider/provider.dart';
 import 'package:image/image.dart' as img;
 
 class ParametersConfigView extends StatelessWidget {
@@ -27,7 +25,6 @@ class ParametersConfigView extends StatelessWidget {
           _buildModelSelector(context),
           if (viewmodel.isV4) _buildAutoPositionTile(context),
           if (viewmodel.isV4) _buildLegacyUcTile(context),
-          _buildSizeSelector(context),
           // Steps
           SliderListTile(
               title: context.tr('sampling_steps') +
@@ -97,8 +94,6 @@ class ParametersConfigView extends StatelessWidget {
             (newValue) => viewmodel.setVarietyPlus(newValue),
             const Icon(Icons.add),
           ),
-          // Seed
-          _buildRandomSeedTile(context),
           // UC
           EditableListTile(
             leading: const Icon(Icons.do_not_disturb),
@@ -125,38 +120,6 @@ class ParametersConfigView extends StatelessWidget {
     );
   }
 
-  Widget _buildSizeSelector(BuildContext context) {
-    return ListTile(
-      title: Text(context.tr('image_size')),
-      subtitle: Text(viewmodel.config.sizes
-          .map((elem) => '${elem.width} x ${elem.height}')
-          .join(' || ')),
-      leading: const Icon(Icons.photo_size_select_large),
-      onTap: () => _showSizeSelectionDialog(context),
-    );
-  }
-
-  Widget _buildRandomSeedTile(BuildContext context) {
-    return Column(
-      children: [
-        _buildSwitchTile(
-          context.tr('use_random_seed'),
-          viewmodel.config.randomSeed,
-          (newValue) => viewmodel.setRandomSeedEnabled(newValue),
-          const Icon(Icons.shuffle),
-        ),
-        if (!viewmodel.config.randomSeed)
-          Padding(
-              padding: const EdgeInsets.only(left: 20),
-              child: (EditableListTile(
-                  title: context.tr('random_seed'),
-                  currentValue: viewmodel.config.seed.toString(),
-                  confirmOnSubmit: true,
-                  onEditComplete: (value) => viewmodel.setSeed(value))))
-      ],
-    );
-  }
-
   Widget _buildSwitchTile(String title, bool currentValue,
       ValueChanged<bool> onChanged, Icon? icon) {
     return CheckboxListTile(
@@ -165,20 +128,6 @@ class ParametersConfigView extends StatelessWidget {
       value: currentValue,
       onChanged: (value) => onChanged(value!),
     );
-  }
-
-  void _showSizeSelectionDialog(BuildContext context) {
-    showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-              title: Text(tr('edit') + tr('colon') + tr('image_size')),
-              content: SizeSelectionView(viewmodel: viewmodel),
-              actions: [
-                TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: Text(tr('confirm')))
-              ],
-            ));
   }
 
   Widget _buildModelSelector(BuildContext context) {
@@ -314,84 +263,5 @@ class ParametersConfigView extends StatelessWidget {
       showErrorBar(
           context, '${tr('import_metadata_from_image')}${tr('failed')}');
     }
-  }
-}
-
-class SizeSelectionView extends StatelessWidget {
-  final ParametersConfigViewmodel viewmodel;
-
-  const SizeSelectionView({super.key, required this.viewmodel});
-
-  @override
-  Widget build(BuildContext context) {
-    final widthController = TextEditingController();
-    final heightController = TextEditingController();
-    return ChangeNotifierProvider.value(
-      value: viewmodel,
-      child: Consumer<ParametersConfigViewmodel>(
-          builder: (context, viewmodel, child) => Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 8),
-                    child: Text('Selected:'),
-                  ),
-                  Wrap(
-                    spacing: 4,
-                    runSpacing: 4,
-                    children: viewmodel.config.sizes
-                        .map((elem) => Chip(
-                              label: Text('${elem.width} x ${elem.height}'),
-                              onDeleted: () => viewmodel.removeSize(elem),
-                            ))
-                        .toList(),
-                  ),
-                  const Divider(),
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 8),
-                    child: Text('Defaults:'),
-                  ),
-                  Wrap(
-                    spacing: 4,
-                    runSpacing: 4,
-                    children: defaultSizes
-                        .map((elem) => OutlinedButton(
-                              onPressed: () => viewmodel.addSize(elem),
-                              child: Text('${elem.width} x ${elem.height}'),
-                            ))
-                        .toList(),
-                  ),
-                  const Divider(),
-                  const Text('Manual:'),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: widthController,
-                          keyboardType: const TextInputType.numberWithOptions(),
-                        ),
-                      ),
-                      const Padding(
-                        padding: EdgeInsets.only(left: 16, right: 16),
-                        child: Text('×'),
-                      ),
-                      Expanded(
-                          child: TextField(
-                        controller: heightController,
-                        keyboardType: const TextInputType.numberWithOptions(),
-                      )),
-                      const SizedBox(width: 16),
-                      IconButton(
-                          onPressed: () => viewmodel.addManualSize(
-                                widthController.text,
-                                heightController.text,
-                              ),
-                          icon: const Icon(Icons.add))
-                    ],
-                  )
-                ],
-              )),
-    );
   }
 }

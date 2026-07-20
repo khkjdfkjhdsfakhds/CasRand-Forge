@@ -24,7 +24,6 @@ class SettingsPageView extends StatelessWidget {
         builder: (context, viewmodel, child) => Column(
           children: [
             _buildApiKeyTile(),
-            _buildBatchTile(),
             _buildRememberSequentialProgressTile(),
             _buildEraseMetadataTile(context),
             if (!kIsWeb && (Platform.isWindows || Platform.isMacOS))
@@ -75,58 +74,6 @@ class SettingsPageView extends StatelessWidget {
         currentValue: viewmodel.settings.apiKey,
         confirmOnSubmit: true,
         onEditComplete: (value) => viewmodel.setApiKey(value));
-  }
-
-  Widget _buildBatchTile() {
-    final displayedNumberOfRequests = viewmodel.settings.numberOfRequests == 0
-        ? '∞'
-        : viewmodel.settings.numberOfRequests.toString();
-    return ExpansionTile(
-      leading: const Icon(Icons.schedule),
-      title: Text(tr('batch_settings')),
-      subtitle: Text(tr('batch_settings_info', namedArgs: {
-        'batch_count': viewmodel.settings.batchCount.toString(),
-        'interval': viewmodel.settings.batchIntervalSec.toString(),
-        'number_of_requests': displayedNumberOfRequests,
-      })),
-      children: [
-        // Batch count
-        Padding(
-          padding: const EdgeInsets.only(left: 20),
-          child: EditableListTile(
-              leading: const Icon(Icons.checklist),
-              title: tr('batch_count'),
-              currentValue: viewmodel.settings.batchCount.toString(),
-              keyboardType: TextInputType.number,
-              confirmOnSubmit: true,
-              onEditComplete: (value) => viewmodel.setBatchCount(value)),
-        ),
-        // Batch interval
-        Padding(
-            padding: const EdgeInsets.only(left: 20),
-            child: EditableListTile(
-                leading: const Icon(Icons.hourglass_empty),
-                title: tr('batch_interval'),
-                currentValue: viewmodel.settings.batchIntervalSec.toString(),
-                keyboardType: TextInputType.number,
-                confirmOnSubmit: true,
-                onEditComplete: (value) =>
-                    viewmodel.setBatchIntervalSet(value))),
-        // Number of requests
-        Padding(
-            padding: const EdgeInsets.only(left: 20),
-            child: EditableListTile(
-              leading: const Icon(Icons.alarm),
-              title: tr('image_number_to_generate'),
-              currentValue: displayedNumberOfRequests,
-              editValue: viewmodel.settings.numberOfRequests.toString(),
-              notice: '0 → ∞',
-              onEditComplete: (value) => viewmodel.setNumberOfRequests(value),
-              keyboardType: TextInputType.number,
-              confirmOnSubmit: true,
-            )),
-      ],
-    );
   }
 
   Widget _buildRememberSequentialProgressTile() {

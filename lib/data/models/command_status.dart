@@ -4,11 +4,10 @@ import 'package:nai_casrand/data/models/info_card_content.dart';
 
 class CommandStatus {
   List<Command<void, InfoCardContent>> commandList = [];
-  DateTime batchTimestamp = DateTime.now();
+  DateTime generationTimestamp = DateTime.now();
 
-  int currentBatchCount = 0;
-  int currentTotalCount = 0;
+  int currentGenerationCount = 0;
 
-  ValueNotifier<bool> isBatchActive = ValueNotifier(false);
-  ValueNotifier<bool> isCoolingDown = ValueNotifier(false);
+  ValueNotifier<bool> isGenerationActive = ValueNotifier(false);
+  ValueNotifier<bool> isWaitingForNextGeneration = ValueNotifier(false);
 }
