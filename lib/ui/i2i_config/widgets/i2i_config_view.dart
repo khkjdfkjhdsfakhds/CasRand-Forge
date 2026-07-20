@@ -4,6 +4,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:nai_casrand/ui/i2i_config/view_models/i2i_config_viewmodel.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
+import 'package:nai_casrand/ui/core/utils/platform_support.dart';
 import 'package:nai_casrand/ui/core/widgets/editable_list_tile.dart';
 import 'package:nai_casrand/ui/core/widgets/slider_list_tile.dart';
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
@@ -100,19 +101,23 @@ class I2iConfigView extends StatelessWidget {
       _showImportMetadataDialog(context, parameters);
     }
 
+    final imageInput = supportsSuperNativeExtensions
+        ? DropRegion(
+            formats: Formats.standardFormats,
+            onDropOver: (_) => DropOperation.copy,
+            onPerformDrop: (event) => viewmodel.handleDragEvent(
+              event,
+              readSuccessEvent,
+              readFailureEvent,
+            ),
+            child: dropArea,
+          )
+        : dropArea;
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        DropRegion(
-          formats: Formats.standardFormats,
-          onDropOver: (_) => DropOperation.copy,
-          onPerformDrop: (event) => viewmodel.handleDragEvent(
-            event,
-            readSuccessEvent,
-            readFailureEvent,
-          ),
-          child: dropArea,
-        ),
+        imageInput,
         buttons,
       ],
     );

@@ -1,5 +1,6 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:nai_casrand/ui/core/utils/platform_support.dart';
 import 'package:nai_casrand/ui/vibe_config/view_models/vibe_config_list_viewmodel.dart';
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 
@@ -52,6 +53,7 @@ class VibeConfigListView extends StatelessWidget {
                 onDelete: () => viewmodel.removeConfigAtIndex(index),
               );
             } else {
+              if (!supportsSuperNativeExtensions) return addVibeDropArea;
               return DropRegion(
                 formats: Formats.standardFormats,
                 onDropOver: (_) => DropOperation.copy,

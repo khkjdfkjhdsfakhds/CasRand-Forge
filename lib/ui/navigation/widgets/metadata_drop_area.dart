@@ -6,6 +6,7 @@ import 'package:nai_casrand/core/constants/image_formats.dart';
 import 'package:nai_casrand/core/constants/parameters.dart';
 import 'package:nai_casrand/data/services/image_service.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
+import 'package:nai_casrand/ui/core/utils/platform_support.dart';
 import 'package:nai_casrand/ui/navigation/view_models/metadata_drop_area_viewmodel.dart';
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 import 'package:image/image.dart' as img;
@@ -26,6 +27,10 @@ class _MetadataDropAreaState extends State<MetadataDropArea> {
 
   @override
   Widget build(BuildContext context) {
+    if (!supportsSuperNativeExtensions) {
+      return widget.childBuilder(context);
+    }
+
     return ListenableBuilder(
       listenable: widget.viewmodel,
       builder: (context, _) => DropRegion(

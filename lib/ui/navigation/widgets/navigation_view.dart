@@ -141,7 +141,7 @@ class NavigationViewState extends State<NavigationView> {
     final dontShowAgainVersion =
         GetIt.I<PayloadConfig>().settings.welcomeMessageVersion;
     final packageInfo = GetIt.instance<ConfigService>().packageInfo;
-    const appName = 'Nai CasRand';
+    const appName = 'CasRand Forge';
     final appVersion = packageInfo.version;
     if (appVersion == dontShowAgainVersion) return;
     showDialog(

@@ -5,6 +5,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
+import 'package:nai_casrand/ui/core/utils/platform_support.dart';
 import 'package:super_clipboard/super_clipboard.dart';
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 
@@ -94,7 +95,9 @@ class GeneratedImageView extends StatelessWidget {
       ),
       child: child,
     );
-    if (!nativeDragEnabled) return contextMenuRegion;
+    if (!nativeDragEnabled || !supportsSuperNativeExtensions) {
+      return contextMenuRegion;
+    }
 
     return DragItemWidget(
       allowedOperations: () => [DropOperation.copy],
