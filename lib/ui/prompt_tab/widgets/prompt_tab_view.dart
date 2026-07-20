@@ -25,14 +25,11 @@ class PromptTabView extends StatelessWidget {
             ListTile(
                 title: Text(context.tr('prompt_compact_view_hint')),
                 dense: true),
-            const Row(children: [
-              Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 8),
-                  child: Text('Base Prompts')),
-              Expanded(child: Divider())
-            ]),
-            Padding(
-              padding: const EdgeInsets.only(left: 8.0),
+            _PromptSectionCard(
+              key: const Key('base-prompt-section'),
+              title: context.tr('base_prompts'),
+              icon: Icons.edit_note,
+              accentColor: Theme.of(context).colorScheme.primary,
               child: PromptConfigView(
                 viewModel: PromptConfigViewModel(
                   config: viewmodel.promptConfig,
@@ -41,25 +38,34 @@ class PromptTabView extends StatelessWidget {
             ),
             for (final (index, characterConfig)
                 in viewmodel.characterConfigList.indexed)
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(children: [
-                    Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        child: Text('Character #$index')),
-                    const Expanded(child: Divider())
-                  ]),
-                  Padding(
-                    padding: const EdgeInsets.only(left: 8.0),
-                    child: CharacterConfigView(
-                      viewmodel: CharacterConfigViewmodel(
-                        config: characterConfig,
-                      ),
-                    ),
-                  )
-                ],
-              )
+              _PromptSectionCard(
+                key: Key('character-prompt-section-$index'),
+                title: 'Character ${index + 1}',
+                icon: Icons.person_outline,
+                accentColor: Theme.of(context).colorScheme.secondary,
+                child: CharacterConfigView(
+                  viewmodel: CharacterConfigViewmodel(
+                    config: characterConfig,
+                    paramConfig: viewmodel.paramConfig,
+                    onAutoPositionChanged: viewmodel.setAutoPosition,
+                  ),
+                ),
+              ),
+            _PromptSectionCard(
+              key: const Key('negative-prompt-section'),
+              title: context.tr('negative_prompts'),
+              icon: Icons.block,
+              accentColor: Theme.of(context).colorScheme.tertiary,
+              child: Padding(
+                key: const Key('negative-prompt-config'),
+                padding: const EdgeInsets.only(left: 4),
+                child: PromptConfigView(
+                  viewModel: PromptConfigViewModel(
+                    config: viewmodel.negativePromptConfig,
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
       ),
@@ -101,13 +107,13 @@ class PromptTabView extends StatelessWidget {
                 title: Text(tr('add_character')),
                 leading: const Icon(Icons.person_add),
                 onTap: () => viewmodel.addCharacter(),
-                enabled: viewmodel.characterConfigList.length < 5,
+                enabled: viewmodel.characterConfigList.length < 6,
               )),
     );
     showDialog(
         context: context,
         builder: (context) => AlertDialog(
-              title: Text('${tr('edit')}${tr('colon')}${tr('characters')}'),
+              title: Text(tr('rearrange_characters')),
               content: SizedBox(
                   width: 400.0,
                   height: 600.0,
@@ -128,6 +134,71 @@ class PromptTabView extends StatelessWidget {
   }
 }
 
+class _PromptSectionCard extends StatelessWidget {
+  const _PromptSectionCard({
+    super.key,
+    required this.title,
+    required this.icon,
+    required this.accentColor,
+    required this.child,
+  });
+
+  final String title;
+  final IconData icon;
+  final Color accentColor;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 6),
+      child: Material(
+        color: Color.alphaBlend(
+          accentColor.withAlpha(14),
+          colorScheme.surface,
+        ),
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: accentColor.withAlpha(90)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              decoration: BoxDecoration(
+                color: accentColor.withAlpha(28),
+                border: Border(
+                  bottom: BorderSide(color: accentColor.withAlpha(70)),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(icon, color: accentColor, size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          color: accentColor,
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 2, 4, 8),
+              child: child,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class CharacterRearrangeView extends StatelessWidget {
   final PromptTabViewmodel viewmodel;
 
@@ -140,9 +211,8 @@ class CharacterRearrangeView extends StatelessWidget {
         child: Consumer<PromptTabViewmodel>(
           builder: (context, viewmodel, child) => ReorderableListView.builder(
             itemBuilder: (context, index) => ListTile(
-              key: ValueKey(index),
-              title: Text(
-                  '#$index ${viewmodel.characterConfigList[index].positivePromptConfig.comment}'),
+              key: Key('character-manager-row-$index'),
+              title: Text('Character ${index + 1}'),
               leading: const Icon(Icons.person),
               trailing: Padding(
                   padding: const EdgeInsets.only(right: 16.0),

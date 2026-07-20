@@ -54,7 +54,7 @@ class ParametersConfigViewmodel extends ChangeNotifier {
   }
 
   setNegativePrompt(String value) {
-    config.negativePrompt = value;
+    payloadConfig.setNegativePromptFromString(value);
     notifyListeners();
   }
 
@@ -65,12 +65,6 @@ class ParametersConfigViewmodel extends ChangeNotifier {
   }
 
   bool get isV4 => config.model.contains('-4-');
-
-  void setAutoPosition(bool? value) {
-    if (value == null) return;
-    config.autoPosition = value;
-    notifyListeners();
-  }
 
   void setLegacyUc(bool? value) {
     if (value == null) return;
@@ -84,7 +78,7 @@ class ParametersConfigViewmodel extends ChangeNotifier {
     String? prompt,
     String? model,
   ) {
-    int loadedCount = config.loadJson(commentData);
+    int loadedCount = payloadConfig.loadParamJson(commentData);
     if (prompt != null) {
       payloadConfig.overridePrompt = prompt;
       payloadConfig.useOverridePrompt = true;
@@ -105,7 +99,7 @@ class ParametersConfigViewmodel extends ChangeNotifier {
 
   void loadSingleImageMetadata(
       BuildContext context, Map<String, dynamic> commentData, String key) {
-    final loadedCount = config.loadJson(commentData);
+    final loadedCount = payloadConfig.loadParamJson(commentData);
     if (loadedCount == 0) return;
     notifyListeners();
     showInfoBar(

@@ -26,6 +26,11 @@ void main() {
     GetIt.instance.registerSingleton(
       PayloadConfig(
         rootPromptConfig: PromptConfig(strs: [], prompts: []),
+        negativePromptConfig: PromptConfig(
+          shuffled: false,
+          strs: ['test negative prompt'],
+          prompts: [],
+        ),
         characterConfigList: [],
         savedPromptConfigList: [],
         paramConfig: ParamConfig(

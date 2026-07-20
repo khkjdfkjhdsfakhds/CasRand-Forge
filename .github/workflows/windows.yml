@@ -1,10 +1,7 @@
-name: Build Windows Beta
+name: Build Windows (Manual Only)
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "v*-beta.*"
 
 permissions:
   contents: read
@@ -14,7 +11,7 @@ jobs:
     # super_native_extensions 0.8.x still uses the VS 2022 coroutine headers.
     runs-on: windows-2022
     env:
-      ASSET_NAME: CasRand-Forge-v0.9.2-beta.2-Windows-x64.zip
+      ASSET_NAME: CasRand-Forge-v0.9.2-beta.3-Windows-x64.zip
 
     steps:
       - name: Check out source

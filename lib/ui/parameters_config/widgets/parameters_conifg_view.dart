@@ -23,7 +23,6 @@ class ParametersConfigView extends StatelessWidget {
       builder: (context, _) => Column(
         children: [
           _buildModelSelector(context),
-          if (viewmodel.isV4) _buildAutoPositionTile(context),
           if (viewmodel.isV4) _buildLegacyUcTile(context),
           // Steps
           SliderListTile(
@@ -94,15 +93,6 @@ class ParametersConfigView extends StatelessWidget {
             (newValue) => viewmodel.setVarietyPlus(newValue),
             const Icon(Icons.add),
           ),
-          // UC
-          EditableListTile(
-            leading: const Icon(Icons.do_not_disturb),
-            title: context.tr('uc'),
-            currentValue: viewmodel.config.negativePrompt,
-            confirmOnSubmit: true,
-            onEditComplete: (value) => viewmodel.setNegativePrompt(value),
-            keyboardType: TextInputType.text,
-          ),
         ],
       ),
     );
@@ -137,15 +127,6 @@ class ParametersConfigView extends StatelessWidget {
       currentValue: viewmodel.config.model,
       options: models,
       onSelectComplete: (value) => viewmodel.setModel(value),
-    );
-  }
-
-  Widget _buildAutoPositionTile(BuildContext context) {
-    return CheckboxListTile(
-      title: Text(tr('auto_position')),
-      secondary: const Icon(Icons.not_listed_location_outlined),
-      value: viewmodel.config.autoPosition,
-      onChanged: (value) => viewmodel.setAutoPosition(value),
     );
   }
 

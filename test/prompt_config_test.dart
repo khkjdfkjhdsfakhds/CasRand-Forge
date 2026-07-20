@@ -64,15 +64,20 @@ void main() {
         );
 
     final root = sequential('root-1', 'root-2');
+    final negative = sequential('negative-1', 'negative-2');
     final saved = sequential('saved-1', 'saved-2');
     final character = sequential('character-1', 'character-2');
+    final characterNegative =
+        sequential('character-negative-1', 'character-negative-2');
     final payloadConfig = PayloadConfig(
       rootPromptConfig: root,
+      negativePromptConfig: negative,
       characterConfigList: [
         CharacterConfig(
           positions: [],
           positivePromptConfig: character,
-          negativePrompt: '',
+          negativePromptConfig: characterNegative,
+          gender: CharacterConfig.genderOther,
           enabled: true,
         ),
       ],
@@ -85,16 +90,28 @@ void main() {
     );
 
     root.getPrmpts();
+    negative.getPrmpts();
     saved.getPrmpts();
     character.getPrmpts();
+    characterNegative.getPrmpts();
     expect(root.getPrmpts().toPrompt(), 'root-2');
+    expect(negative.getPrmpts().toPrompt(), 'negative-2');
     expect(saved.getPrmpts().toPrompt(), 'saved-2');
     expect(character.getPrmpts().toPrompt(), 'character-2');
+    expect(
+      characterNegative.getPrmpts().toPrompt(),
+      'character-negative-2',
+    );
 
     payloadConfig.resetSequentialState();
 
     expect(root.getPrmpts().toPrompt(), 'root-1');
+    expect(negative.getPrmpts().toPrompt(), 'negative-1');
     expect(saved.getPrmpts().toPrompt(), 'saved-1');
     expect(character.getPrmpts().toPrompt(), 'character-1');
+    expect(
+      characterNegative.getPrmpts().toPrompt(),
+      'character-negative-1',
+    );
   });
 }

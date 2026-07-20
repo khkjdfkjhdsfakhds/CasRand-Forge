@@ -2,11 +2,20 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:nai_casrand/data/models/character_config.dart';
+import 'package:nai_casrand/data/models/param_config.dart';
 
 class CharacterConfigViewmodel extends ChangeNotifier {
   CharacterConfig config;
+  ParamConfig paramConfig;
+  ValueChanged<bool>? onAutoPositionChanged;
 
-  CharacterConfigViewmodel({required this.config});
+  CharacterConfigViewmodel({
+    required this.config,
+    required this.paramConfig,
+    this.onAutoPositionChanged,
+  });
+
+  bool get autoPosition => paramConfig.autoPosition;
 
   String getPositionsTexts() {
     const Map<int, String> xMapping = {
@@ -27,16 +36,26 @@ class CharacterConfigViewmodel extends ChangeNotifier {
     return ret.join(', ');
   }
 
-  void setNegativePrompt(String value) {
-    config.negativePrompt = value;
+  void setGender(String value) {
+    config.setGender(value);
     notifyListeners();
   }
 
   void switchPosition(Point<int> pt) {
-    if (config.positions.contains(pt)) {
-      config.positions.remove(pt);
+    if (autoPosition || config.positions.contains(pt)) return;
+    config.positions = [pt];
+    notifyListeners();
+  }
+
+  void setAutoPosition(bool? value) {
+    if (value == null) return;
+    if (onAutoPositionChanged != null) {
+      onAutoPositionChanged!(value);
     } else {
-      config.positions.add(pt);
+      paramConfig.autoPosition = value;
+      if (!value && config.positions.isEmpty) {
+        config.positions = [CharacterConfig.defaultPosition];
+      }
     }
     notifyListeners();
   }

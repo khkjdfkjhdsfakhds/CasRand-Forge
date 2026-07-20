@@ -3,6 +3,45 @@ import 'package:nai_casrand/core/constants/parameters.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 
 void main() {
+  test('generation defaults use NAI 4.5 Full guidance 5 and rescale 0', () {
+    final defaults = ParamConfig();
+    final missingDefaults = defaults.toJson()
+      ..remove('model')
+      ..remove('scale')
+      ..remove('cfg_rescale');
+    final explicitLegacyValues = defaults.toJson()
+      ..['model'] = 'nai-diffusion-4-curated-preview'
+      ..['scale'] = 6.5
+      ..['cfg_rescale'] = 0.1;
+
+    expect(defaults.model, 'nai-diffusion-4-5-full');
+    expect(defaults.scale, 5.0);
+    expect(defaults.cfgRescale, 0.0);
+
+    final migratedDefaults = ParamConfig.fromJson(missingDefaults);
+    expect(migratedDefaults.model, 'nai-diffusion-4-5-full');
+    expect(migratedDefaults.scale, 5.0);
+    expect(migratedDefaults.cfgRescale, 0.0);
+
+    final preservedValues = ParamConfig.fromJson(explicitLegacyValues);
+    expect(preservedValues.model, 'nai-diffusion-4-curated-preview');
+    expect(preservedValues.scale, 6.5);
+    expect(preservedValues.cfgRescale, 0.1);
+  });
+
+  test('AI character position choice defaults on and preserves saved choices',
+      () {
+    final missingChoice = ParamConfig().toJson()..remove('auto_position');
+    final savedManualChoice = ParamConfig().toJson()..['auto_position'] = false;
+
+    expect(ParamConfig().autoPosition, isTrue);
+    expect(ParamConfig.fromJson(missingChoice).autoPosition, isTrue);
+    expect(
+      ParamConfig.fromJson(savedManualChoice).autoPosition,
+      isFalse,
+    );
+  });
+
   test('V4 native schedule uses server defaults after mapping to karras', () {
     final config = ParamConfig(
       model: 'nai-diffusion-4-5-full',

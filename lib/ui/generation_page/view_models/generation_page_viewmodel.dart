@@ -368,7 +368,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
   }
 
   void setUC(String value) {
-    payloadConfig.paramConfig.negativePrompt = value;
+    payloadConfig.setNegativePromptFromString(value);
     notifyListeners();
   }
 }

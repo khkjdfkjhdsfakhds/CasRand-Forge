@@ -1,10 +1,7 @@
-name: Build Android Beta
+name: Build Android (Manual Only)
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "v*-beta.*"
 
 permissions:
   contents: read
@@ -13,7 +10,7 @@ jobs:
   build-android:
     runs-on: ubuntu-latest
     env:
-      ASSET_NAME: CasRand-Forge-v0.9.2-beta.2-Android.apk
+      ASSET_NAME: CasRand-Forge-v0.9.2-beta.3-Android.apk
 
     steps:
       - name: Check out source

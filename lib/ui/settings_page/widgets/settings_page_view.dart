@@ -11,6 +11,11 @@ import 'package:provider/provider.dart';
 
 import '../../../core/constants/defaults.dart';
 
+enum _RestoreInitialSettingsAction {
+  backupAndRestore,
+  restoreDirectly,
+}
+
 class SettingsPageView extends StatelessWidget {
   final SettingsPageViewmodel viewmodel = SettingsPageViewmodel();
 
@@ -32,6 +37,7 @@ class SettingsPageView extends StatelessWidget {
             if (!kIsWeb) _buildProxyTile(),
             const Divider(),
             _buildSavedConfigTile(context),
+            _buildRestoreInitialSettingsTile(context),
             _buildThemeModeTile(context),
             _buildLanguageTile(context),
           ],
@@ -40,6 +46,7 @@ class SettingsPageView extends StatelessWidget {
     );
 
     final buttons = Column(
+      mainAxisSize: MainAxisSize.min,
       mainAxisAlignment: MainAxisAlignment.end,
       children: [
         FloatingActionButton(
@@ -281,6 +288,55 @@ class SettingsPageView extends StatelessWidget {
                       notificationCallback: () => viewmodel.notify(),
                     )));
       },
+    );
+  }
+
+  Widget _buildRestoreInitialSettingsTile(BuildContext context) {
+    return ListTile(
+      key: const Key('restore-initial-settings-tile'),
+      title: Text(tr('restore_initial_settings')),
+      subtitle: Text(tr('restore_initial_settings_hint')),
+      leading: const Icon(Icons.restart_alt),
+      onTap: () => _showRestoreInitialSettingsDialog(context),
+    );
+  }
+
+  Future<void> _showRestoreInitialSettingsDialog(BuildContext context) async {
+    final action = await showDialog<_RestoreInitialSettingsAction>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(tr('restore_initial_settings')),
+        content: Text(tr('restore_initial_settings_warning')),
+        actions: [
+          TextButton(
+            key: const Key('restore-initial-settings-cancel'),
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text(tr('cancel')),
+          ),
+          TextButton(
+            key: const Key('restore-initial-settings-backup'),
+            onPressed: () => Navigator.of(dialogContext).pop(
+              _RestoreInitialSettingsAction.backupAndRestore,
+            ),
+            child: Text(tr('backup_and_restore')),
+          ),
+          TextButton(
+            key: const Key('restore-initial-settings-direct'),
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(context).colorScheme.error,
+            ),
+            onPressed: () => Navigator.of(dialogContext).pop(
+              _RestoreInitialSettingsAction.restoreDirectly,
+            ),
+            child: Text(tr('restore_directly')),
+          ),
+        ],
+      ),
+    );
+    if (action == null || !context.mounted) return;
+    await viewmodel.restoreInitialSettings(
+      context,
+      backupCurrent: action == _RestoreInitialSettingsAction.backupAndRestore,
     );
   }
 }

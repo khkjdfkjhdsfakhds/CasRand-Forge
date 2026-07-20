@@ -4,6 +4,10 @@ import '../../core/constants/defaults.dart';
 import 'generation_size.dart';
 
 class ParamConfig {
+  static const String defaultModel = 'nai-diffusion-4-5-full';
+  static const double defaultScale = 5.0;
+  static const double defaultCfgRescale = 0.0;
+
   List<GenerationSize> sizes;
   int nSamples;
 
@@ -33,15 +37,15 @@ class ParamConfig {
   bool legacy;
   bool addOriginalImage;
 
-  String model = 'nai-diffusion-4-curated-preview';
+  String model = defaultModel;
 
   bool autoPosition;
   bool legacyUc;
 
   ParamConfig({
-    this.model = 'nai-diffusion-4-curated-preview',
+    this.model = defaultModel,
     this.sizes = const [GenerationSize(height: 1216, width: 832)],
-    this.scale = 6.5,
+    this.scale = defaultScale,
     this.sampler = 'k_euler_ancestral',
     this.steps = 28,
     this.randomSeed = true,
@@ -56,13 +60,13 @@ class ParamConfig {
     this.legacy = false,
     this.addOriginalImage = false,
     this.uncondScale = 1.0,
-    this.cfgRescale = 0.1,
+    this.cfgRescale = defaultCfgRescale,
     this.noiseSchedule = 'native',
     this.varietyPlus = false,
     this.deliberateEulerAncestralBug,
     this.preferBrownian,
     this.negativePrompt = defaultUC,
-    this.autoPosition = false,
+    this.autoPosition = true,
     this.legacyUc = false,
   });
 
@@ -166,12 +170,12 @@ class ParamConfig {
 
   factory ParamConfig.fromJson(Map<String, dynamic> json) {
     return ParamConfig(
-      model: json['model'] ?? 'nai-diffusion-4-curated-preview',
+      model: json['model'] ?? defaultModel,
       sizes: (json['sizes'] as List<dynamic>?)
               ?.map((elem) => GenerationSize.fromJson(elem))
               .toList() ??
           const [GenerationSize(height: 1216, width: 832)],
-      scale: json['scale'],
+      scale: (json['scale'] as num?)?.toDouble() ?? defaultScale,
       sampler: json['sampler'],
       steps: json['steps'],
       nSamples: json['n_samples'],
@@ -189,12 +193,11 @@ class ParamConfig {
       uncondScale: json['uncond_scale'] is int
           ? (json['uncond_scale'] as int).toDouble()
           : json['uncond_scale'],
-      cfgRescale: json['cfg_rescale'] is int
-          ? (json['cfg_rescale'] as int).toDouble()
-          : json['cfg_rescale'],
+      cfgRescale:
+          (json['cfg_rescale'] as num?)?.toDouble() ?? defaultCfgRescale,
       noiseSchedule: json['noise_schedule'],
-      negativePrompt: json['negative_prompt'],
-      autoPosition: json['auto_position'] ?? false,
+      negativePrompt: json['negative_prompt'] ?? defaultUC,
+      autoPosition: json['auto_position'] ?? true,
       legacyUc: json['legacy_uc'] ?? false,
       deliberateEulerAncestralBug:
           json['deliberate_euler_ancestral_bug'] as bool?,
@@ -298,7 +301,7 @@ class ParamConfig {
       loadCount++;
     }
     if (json.containsKey('use_coords')) {
-      autoPosition = json['use_coords'];
+      autoPosition = !(json['use_coords'] as bool);
       loadCount++;
     }
     if (json.containsKey('uc')) {

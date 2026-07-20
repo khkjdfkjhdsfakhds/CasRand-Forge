@@ -158,6 +158,31 @@ class ConfigService {
     saveConfigIndex();
   }
 
+  Future<String> saveNewConfig(
+    Map<String, dynamic> jsonData, {
+    required String title,
+    bool makeCurrent = false,
+  }) async {
+    final uuid = const Uuid().v4();
+    await saveBox.put('savedConfig-$uuid', json.encode(jsonData));
+    configIndex[uuid] = SavedConfigInfo(
+      title: title,
+      lastModified: DateTime.now(),
+    );
+    final encodedIndex = configIndex.map(
+      (configUuid, savedConfigInfo) => MapEntry(
+        configUuid,
+        savedConfigInfo.toJson(),
+      ),
+    );
+    await saveBox.put('configIndex', json.encode(encodedIndex));
+    if (makeCurrent) {
+      currentUuid = uuid;
+      await saveBox.put('savedUuid', uuid);
+    }
+    return uuid;
+  }
+
   void deleteConfigByUuid(String uuid) {
     if (uuid == currentUuid) return;
     saveBox.delete('savedConfig-$uuid');

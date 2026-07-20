@@ -113,4 +113,46 @@ class SettingsPageViewmodel extends ChangeNotifier {
   void saveCurrentConfig() {
     configService.saveConfig(payloadConfig.toJson());
   }
+
+  Future<bool> restoreInitialSettings(
+    BuildContext context, {
+    required bool backupCurrent,
+  }) async {
+    try {
+      if (backupCurrent) {
+        await configService.saveNewConfig(
+          payloadConfig.toJson(),
+          title: tr('pre_restore_backup'),
+        );
+      }
+
+      final defaultJson = json.decode(await configService.loadDefaultConfig())
+          as Map<String, dynamic>;
+      final initialConfig = PayloadConfig.fromJson(defaultJson);
+      await configService.saveNewConfig(
+        initialConfig.toJson(),
+        title: tr('initial_settings_config_name'),
+        makeCurrent: true,
+      );
+
+      payloadConfig.loadJson(initialConfig.toJson());
+      payloadConfig.resetTransientConfigs();
+      if (!context.mounted) return true;
+      AdaptiveTheme.maybeOf(context)?.setThemeMode(settings.theme);
+      await context.deleteSaveLocale();
+      if (!context.mounted) return true;
+      await context.resetLocale();
+      if (!context.mounted) return true;
+      notifyListeners();
+      showInfoBar(context, tr('restore_initial_settings_success'));
+      return true;
+    } catch (error) {
+      if (!context.mounted) return false;
+      showErrorBar(
+        context,
+        '${tr('restore_initial_settings_failed')}: ${error.toString()}',
+      );
+      return false;
+    }
+  }
 }

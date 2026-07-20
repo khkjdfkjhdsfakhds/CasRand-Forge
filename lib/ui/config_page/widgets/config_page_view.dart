@@ -32,9 +32,12 @@ class ConfigPageView extends StatelessWidget {
               PromptTabView(
                   viewmodel: PromptTabViewmodel(
                 promptConfig: viewmodel.payloadConfig.rootPromptConfig,
+                negativePromptConfig:
+                    viewmodel.payloadConfig.negativePromptConfig,
                 characterConfigList:
                     viewmodel.payloadConfig.characterConfigList,
                 savedConfigList: viewmodel.payloadConfig.savedPromptConfigList,
+                paramConfig: viewmodel.payloadConfig.paramConfig,
               )),
               I2iTabView(
                 viewmodel: I2iTabViewmodel(),

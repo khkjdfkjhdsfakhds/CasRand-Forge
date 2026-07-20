@@ -36,6 +36,7 @@ const Map<int, double> doubleMapping = {
 
 class PayloadConfig {
   PromptConfig rootPromptConfig;
+  PromptConfig negativePromptConfig;
   List<CharacterConfig> characterConfigList;
   List<PromptConfig> savedPromptConfigList;
 
@@ -53,6 +54,7 @@ class PayloadConfig {
 
   PayloadConfig({
     required this.rootPromptConfig,
+    required this.negativePromptConfig,
     required this.characterConfigList,
     required this.savedPromptConfigList,
     required this.paramConfig,
@@ -73,17 +75,26 @@ class PayloadConfig {
 
   void resetSequentialState() {
     rootPromptConfig.resetSequentialState();
+    negativePromptConfig.resetSequentialState();
     for (final config in savedPromptConfigList) {
       config.resetSequentialState();
     }
     for (final characterConfig in characterConfigList) {
       characterConfig.positivePromptConfig.resetSequentialState();
+      characterConfig.negativePromptConfig.resetSequentialState();
     }
+  }
+
+  void resetTransientConfigs() {
+    i2iConfig = I2IConfig();
+    vibeConfigList.clear();
+    vibeConfigListV4.clear();
   }
 
   Map<String, dynamic> toJson() {
     return {
       "prompt_config": rootPromptConfig.toJson(),
+      "negative_prompt_config": negativePromptConfig.toJson(),
       "character_config":
           characterConfigList.map((elem) => elem.toJson()).toList(),
       "saved_config":
@@ -109,11 +120,16 @@ class PayloadConfig {
     final savedList = jsonSavedPromptList
         .map((configJson) => PromptConfig.fromJson(configJson))
         .toList();
+    final paramConfig = ParamConfig.fromJson(jsonData['param_config'] ?? {});
+    final negativePromptConfigJson = jsonData['negative_prompt_config'];
     return PayloadConfig(
       rootPromptConfig: PromptConfig.fromJson(jsonData['prompt_config']),
+      negativePromptConfig: negativePromptConfigJson is Map<String, dynamic>
+          ? _negativePromptConfigFromJson(negativePromptConfigJson)
+          : _negativePromptConfigFromLegacy(paramConfig.negativePrompt),
       characterConfigList: characterList,
       savedPromptConfigList: savedList,
-      paramConfig: ParamConfig.fromJson(jsonData['param_config'] ?? {}),
+      paramConfig: paramConfig,
       settings: Settings.fromJson(jsonData['settings'] ?? {}),
       overridePrompt: jsonData['override_prompt'] ?? '',
       useOverridePrompt: jsonData['use_override_prompt'] ?? false,
@@ -139,10 +155,61 @@ class PayloadConfig {
     characterConfigList = characterList;
     savedPromptConfigList = savedList;
     paramConfig = ParamConfig.fromJson(jsonData['param_config'] ?? {});
+    final negativePromptConfigJson = jsonData['negative_prompt_config'];
+    negativePromptConfig = negativePromptConfigJson is Map<String, dynamic>
+        ? _negativePromptConfigFromJson(negativePromptConfigJson)
+        : _negativePromptConfigFromLegacy(paramConfig.negativePrompt);
     settings = Settings.fromJson(jsonData['settings'] ?? {});
     overridePrompt = jsonData['override_prompt'] ?? '';
     useOverridePrompt = jsonData['use_override_prompt'] ?? false;
     useCharacterPromptWithOverride =
         jsonData['use_character_prompt_with_override'] ?? false;
+  }
+
+  int loadParamJson(Map<String, dynamic> json) {
+    final loadedCount = paramConfig.loadJson(json);
+    if (json.containsKey('negative_prompt') || json.containsKey('uc')) {
+      setNegativePromptFromString(paramConfig.negativePrompt);
+    }
+    return loadedCount;
+  }
+
+  void setNegativePromptFromString(String value) {
+    final migrated = _negativePromptConfigFromLegacy(value);
+    negativePromptConfig
+      ..selectionMethod = migrated.selectionMethod
+      ..shuffled = migrated.shuffled
+      ..prob = migrated.prob
+      ..num = migrated.num
+      ..randomBracketsUpper = migrated.randomBracketsUpper
+      ..randomBracketsLower = migrated.randomBracketsLower
+      ..type = migrated.type
+      ..comment = migrated.comment
+      ..filter = migrated.filter
+      ..strs = migrated.strs
+      ..prompts = migrated.prompts
+      ..enabled = migrated.enabled;
+    negativePromptConfig.resetSequentialState();
+    paramConfig.negativePrompt = value;
+  }
+
+  static PromptConfig _negativePromptConfigFromLegacy(String value) {
+    return PromptConfig(
+      selectionMethod: 'all',
+      shuffled: false,
+      comment: '负面内容',
+      strs: value.isEmpty ? [] : [value],
+      prompts: [],
+    );
+  }
+
+  static PromptConfig _negativePromptConfigFromJson(
+    Map<String, dynamic> json,
+  ) {
+    final config = PromptConfig.fromJson(json);
+    if (config.comment == '反向提示词') {
+      config.comment = '负面内容';
+    }
+    return config;
   }
 }

@@ -56,6 +56,7 @@ class GeneratePayloadUseCase {
 
   ParamConfig get paramConfig => payloadConfig.paramConfig;
   PromptConfig get rootPromptConfig => payloadConfig.rootPromptConfig;
+  PromptConfig get negativePromptConfig => payloadConfig.negativePromptConfig;
   List<CharacterConfig> get characterConfigList =>
       payloadConfig.characterConfigList;
   List<PromptConfig> get savedConfigList => payloadConfig.savedPromptConfigList;
@@ -110,16 +111,21 @@ class GeneratePayloadUseCase {
         'y': doubleMapping[result.center.y]!,
       };
       result.prompt = result.prompt.replaceVariables(pattern, savedConfigList);
+      result.uc = result.uc.replaceVariables(pattern, savedConfigList);
       final characterPair = PromptCommentPair(
         prompt: result.prompt.toPrompt(),
         comment: result.prompt.toComment(),
       );
-      // characterPair.processPair(savedConfigList);
-      payloadComment +=
-          '\n\nCharacter#$index at $posAsString:\n${characterPair.comment}';
+      final characterNegativePair = PromptCommentPair(
+        prompt: result.uc.toPrompt(),
+        comment: result.uc.toComment(),
+      );
+      payloadComment += '\n\nCharacter ${index + 1} at $posAsString:\n'
+          '${characterPair.comment}\n'
+          '${tr('uc')}:\n${characterNegativePair.comment}';
       characterPrompts.add({
         'prompt': characterPair.prompt,
-        'uc': result.uc,
+        'uc': characterNegativePair.prompt,
         'center': posAsDouble,
       });
       v4CharPosCaptions.add({
@@ -127,10 +133,19 @@ class GeneratePayloadUseCase {
         'centers': [posAsDouble],
       });
       v4CharNegCaptions.add({
-        'char_caption': result.uc,
+        'char_caption': characterNegativePair.prompt,
         'centers': [posAsDouble],
       });
     }
+    final negativePromptResult = negativePromptConfig
+        .getPrmpts()
+        .replaceVariables(pattern, savedConfigList);
+    final negativePair = PromptCommentPair(
+      prompt: negativePromptResult.toPrompt(),
+      comment: negativePromptResult.toComment(),
+    );
+    payloadComment += '\n\n${tr('uc')}:\n${negativePair.comment}';
+    paramPayload['negative_prompt'] = negativePair.prompt;
     final v4Prompt = {
       'caption': {
         'base_caption': basePair.prompt,
@@ -141,7 +156,7 @@ class GeneratePayloadUseCase {
     };
     final v4NegPrompt = {
       'caption': {
-        'base_caption': paramConfig.negativePrompt,
+        'base_caption': negativePair.prompt,
         'char_captions': v4CharNegCaptions,
       },
       'legacy_uc': paramConfig.legacyUc,

@@ -72,7 +72,7 @@ class Settings {
           json['generation_count'] ?? json['number_of_requests'] ?? 0,
       generationIntervalSec:
           json['generation_interval'] ?? json['batch_interval'] ?? 10,
-      rememberSequentialProgress: json['remember_sequential_progress'] ?? true,
+      rememberSequentialProgress: json['remember_sequential_progress'] ?? false,
       fileNamePrefixKey: json['file_name_prefix_key'] ?? '',
       generationPageColumnCount: json['generation_page_column_count'] ?? 2,
       themeMode: json['theme_mode'] ?? 'system',
