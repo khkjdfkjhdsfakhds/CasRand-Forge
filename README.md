@@ -1,6 +1,6 @@
 # CasRand Forge
 
-CasRand Forge 是 [NAI CasRand](https://github.com/Exception0x0194/NAI-Generator-Flutter) 的社区跨平台 Fork。项目保留原有的级联随机 Prompt 与 NovelAI 图像生成能力，并持续完善 macOS、Windows 和 Android 支持。
+CasRand Forge 是 [NAI CasRand](https://github.com/Exception0x0194/NAI-Generator-Flutter) 的非官方 Fork。项目保留原有的级联随机 Prompt 与 NovelAI 图像生成能力，并持续完善 macOS、Windows 和 Android 支持。
 
 ## 下载与平台状态
 
