@@ -119,8 +119,8 @@ void main() {
     expect(find.text('Generation count'), findsOneWidget);
     expect(find.text('Generation interval (seconds)'), findsOneWidget);
     expect(find.text('Batch settings'), findsNothing);
-    expect(find.text('Random Seed'), findsNothing);
-    expect(find.text('Override random prompts'), findsNothing);
+    expect(find.text('Fixed Seed'), findsNothing);
+    expect(find.text('Override random prompts'), findsOneWidget);
     expect(find.text('Use generated character prompts'), findsNothing);
 
     final orderedSettings = [
@@ -129,10 +129,15 @@ void main() {
       find.text('Image Size (W × H)'),
       find.text('Use Random Seed'),
       find.text('Number of columns: 2'),
+      find.text('Override random prompts'),
     ];
     final verticalOffsets =
         orderedSettings.map((finder) => tester.getTopLeft(finder).dy).toList();
     expect(verticalOffsets, orderedEquals(List.of(verticalOffsets)..sort()));
+    expect(
+      tester.getTopLeft(find.text('Override random prompts')).dy,
+      tester.getTopLeft(orderedSettings.last).dy,
+    );
 
     await tester.tap(
       find.byKey(const Key('generation-settings-random-seed')),
@@ -140,9 +145,9 @@ void main() {
     await tester.pump();
 
     expect(GetIt.I<PayloadConfig>().paramConfig.randomSeed, isFalse);
-    expect(find.text('Random Seed'), findsOneWidget);
+    expect(find.text('Fixed Seed'), findsOneWidget);
     expect(
-      tester.getTopLeft(find.text('Random Seed')).dy,
+      tester.getTopLeft(find.text('Fixed Seed')).dy,
       lessThan(tester.getTopLeft(find.text('Number of columns: 2')).dy),
     );
 
@@ -150,7 +155,7 @@ void main() {
     expect(find.text('Interval between batches (seconds)'), findsNothing);
   });
 
-  testWidgets('override prompt settings stay hidden without clearing data', (
+  testWidgets('override prompt settings show without clearing data', (
     tester,
   ) async {
     final config = GetIt.I<PayloadConfig>();
@@ -167,14 +172,14 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Override random prompts'), findsNothing);
-    expect(find.text('Use generated character prompts'), findsNothing);
+    expect(find.text('Override random prompts'), findsOneWidget);
+    expect(find.text('Use generated character prompts'), findsOneWidget);
     expect(config.useOverridePrompt, isTrue);
     expect(config.useCharacterPromptWithOverride, isTrue);
     expect(config.overridePrompt, 'preserved prompt');
   });
 
-  testWidgets('previously enabled override prompt fields stay hidden', (
+  testWidgets('previously enabled override prompt fields are editable', (
     tester,
   ) async {
     final config = GetIt.I<PayloadConfig>();
@@ -188,8 +193,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Override prompts'), findsNothing);
-    expect(find.text('Unwanted content'), findsNothing);
+    expect(find.text('Override prompts'), findsOneWidget);
+    expect(find.text('Unwanted content'), findsOneWidget);
     expect(config.useOverridePrompt, isTrue);
     expect(config.overridePrompt, 'preserved prompt');
   });
@@ -245,6 +250,20 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Batch settings'), findsNothing);
+  });
+
+  testWidgets('sampling steps slider supports up to 50 steps', (tester) async {
+    await tester.pumpWidget(
+      localizedApp(
+        ParametersConfigView(viewmodel: ParametersConfigViewmodel()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final slider = tester.widget<Slider>(find.byType(Slider).first);
+
+    expect(slider.max, 50);
+    expect(slider.divisions, 50);
   });
 
   testWidgets('negative prompt stays below the dynamic character area', (
@@ -587,7 +606,7 @@ void main() {
     );
   });
 
-  testWidgets('Vibe Transfer and Generation Parameters keep their order', (
+  testWidgets('Vibe Transfer / Precise Reference and parameters keep order', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -603,7 +622,11 @@ void main() {
         .toList();
     expect(
       labels,
-      ['Prompt Config', 'Vibe Transfer', 'Generation Parameters'],
+      [
+        'Prompt Config',
+        'Vibe Transfer / Precise Reference',
+        'Generation Parameters',
+      ],
     );
   });
 }

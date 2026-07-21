@@ -1,6 +1,8 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:nai_casrand/ui/precise_reference/view_models/precise_reference_list_viewmodel.dart';
+import 'package:nai_casrand/ui/precise_reference/widgets/precise_reference_list_view.dart';
 import 'package:nai_casrand/ui/core/utils/platform_support.dart';
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -39,6 +41,15 @@ class VibeConfigV4ListView extends StatelessWidget {
       ),
     );
 
+    final vibeHeaderCard = Card(
+      margin: const EdgeInsets.fromLTRB(4.0, 4.0, 4.0, 8.0),
+      child: ListTile(
+        leading: const Icon(Icons.auto_awesome_motion_outlined),
+        title: Text(context.tr('vibe_transfer')),
+        subtitle: Text(context.tr('vibe_transfer_section_tip')),
+      ),
+    );
+
     final pageTipCard = ListTile(
       leading: const Icon(Icons.info_outline),
       title: MarkdownBody(
@@ -53,21 +64,20 @@ class VibeConfigV4ListView extends StatelessWidget {
     return ListenableBuilder(
       listenable: viewmodel,
       builder: (context, child) {
-        return ListView.builder(
-          itemCount: viewmodel.vibeList.length + 2,
-          itemBuilder: (context, index) {
-            if (index < viewmodel.vibeList.length) {
-              final config = viewmodel.vibeList[index];
-              // Each item needs its own ViewModel instance
-              final itemViewModel = VibeConfigV4Viewmodel(config: config);
-              return VibeConfigV4View(
+        return ListView(
+          padding: const EdgeInsets.only(bottom: 24.0),
+          children: [
+            vibeHeaderCard,
+            for (final (index, config) in viewmodel.vibeList.indexed)
+              VibeConfigV4View(
                 key: ValueKey(config.vibeB64),
-                viewmodel: itemViewModel,
+                viewmodel: VibeConfigV4Viewmodel(config: config),
                 onDelete: () => viewmodel.removeConfigAtIndex(index),
-              );
-            } else if (index == viewmodel.vibeList.length) {
-              if (!supportsSuperNativeExtensions) return addVibeDropArea;
-              return DropRegion(
+              ),
+            if (!supportsSuperNativeExtensions)
+              addVibeDropArea
+            else
+              DropRegion(
                 formats: Formats.standardFormats,
                 onDropOver: (_) => DropOperation.copy,
                 onPerformDrop: (event) => viewmodel.handleVibeDropEvent(
@@ -75,11 +85,13 @@ class VibeConfigV4ListView extends StatelessWidget {
                   event,
                 ),
                 child: addVibeDropArea,
-              );
-            } else {
-              return pageTipCard;
-            }
-          },
+              ),
+            pageTipCard,
+            const Divider(height: 32.0),
+            PreciseReferenceListView(
+              viewmodel: PreciseReferenceListViewmodel(),
+            ),
+          ],
         );
       },
     );

@@ -32,8 +32,8 @@ class ParametersConfigView extends StatelessWidget {
               sliderValue: viewmodel.config.steps.toDouble(),
               leading: const Icon(Icons.repeat),
               min: 0,
-              max: 28,
-              divisions: 28,
+              max: 50,
+              divisions: 50,
               onChanged: (value) => viewmodel.setSteps(value)),
           // CFG
           SliderListTile(

@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
+import 'package:nai_casrand/data/models/precise_reference_config.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
 import 'package:nai_casrand/data/models/vibe_config.dart';
@@ -243,6 +244,10 @@ void main() {
       vibeB64: 'vibe-v4',
       referenceStrength: 0.2,
     ));
+    payloadConfig.preciseReferenceConfigList.add(PreciseReferenceConfig(
+      imageB64: 'precise-reference',
+      fileName: 'precise.png',
+    ));
 
     await tester.pumpWidget(localizedSettingsPage());
     await tester.pumpAndSettle();
@@ -275,6 +280,7 @@ void main() {
     expect(payloadConfig.i2iConfig.imageB64, isNull);
     expect(payloadConfig.vibeConfigList, isEmpty);
     expect(payloadConfig.vibeConfigListV4, isEmpty);
+    expect(payloadConfig.preciseReferenceConfigList, isEmpty);
 
     final backupUuid = configService.configIndex.entries
         .singleWhere((entry) => entry.value.title == 'Backup before restore')

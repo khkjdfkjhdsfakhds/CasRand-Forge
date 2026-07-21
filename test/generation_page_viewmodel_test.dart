@@ -8,6 +8,7 @@ import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
+import 'package:nai_casrand/data/use_cases/generate_payload_use_case.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
 
 class _SchedulingViewmodel extends GenerationPageViewmodel {
@@ -102,6 +103,43 @@ void main() {
     expect(payloadConfig.paramConfig.seed, 42);
     expect(payloadConfig.settings.generationIntervalSec, 10);
     expect(payloadConfig.settings.generationCount, 0);
+  });
+
+  test('digest hides reference image payload fields', () {
+    final viewmodel = GenerationPageViewmodel();
+
+    final digest = viewmodel.digestPayloadResult(PayloadGenerationResult(
+      comment: '',
+      suggestedFileName: '',
+      payload: {
+        'input': 'prompt',
+        'model': 'nai-diffusion-4-5-full',
+        'action': 'generate',
+        'parameters': {
+          'width': 832,
+          'reference_image_multiple': ['vibe-image'],
+          'director_reference_images': ['precise-image'],
+          'director_reference_descriptions': ['precise-description'],
+          'director_reference_information_extracted': [1.0],
+          'director_reference_strength_values': [1.0],
+          'director_reference_secondary_strength_values': [0.0],
+        },
+      },
+    ));
+
+    expect(digest['width'], 832);
+    expect(digest.containsKey('reference_image_multiple'), isFalse);
+    expect(digest.containsKey('director_reference_images'), isFalse);
+    expect(digest.containsKey('director_reference_descriptions'), isFalse);
+    expect(
+      digest.containsKey('director_reference_information_extracted'),
+      isFalse,
+    );
+    expect(digest.containsKey('director_reference_strength_values'), isFalse);
+    expect(
+      digest.containsKey('director_reference_secondary_strength_values'),
+      isFalse,
+    );
   });
 
   test('size selection stays non-empty and rounds manual sizes to 64', () {

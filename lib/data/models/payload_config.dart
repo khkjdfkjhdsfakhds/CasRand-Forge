@@ -1,6 +1,7 @@
 import 'package:nai_casrand/data/models/character_config.dart';
 import 'package:nai_casrand/data/models/i2i_config.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
+import 'package:nai_casrand/data/models/precise_reference_config.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
 import 'package:nai_casrand/data/models/vibe_config.dart';
@@ -47,6 +48,7 @@ class PayloadConfig {
   I2IConfig i2iConfig = I2IConfig();
   List<VibeConfig> vibeConfigList = [];
   List<VibeConfigV4> vibeConfigListV4 = [];
+  List<PreciseReferenceConfig> preciseReferenceConfigList = [];
 
   String overridePrompt;
   bool useOverridePrompt;
@@ -89,6 +91,7 @@ class PayloadConfig {
     i2iConfig = I2IConfig();
     vibeConfigList.clear();
     vibeConfigListV4.clear();
+    preciseReferenceConfigList.clear();
   }
 
   Map<String, dynamic> toJson() {
@@ -167,8 +170,16 @@ class PayloadConfig {
   }
 
   int loadParamJson(Map<String, dynamic> json) {
-    final loadedCount = paramConfig.loadJson(json);
-    if (json.containsKey('negative_prompt') || json.containsKey('uc')) {
+    final paramJson = Map<String, dynamic>.from(json);
+    final v4Prompt = json['v4_prompt'];
+    if (!paramJson.containsKey('use_coords') &&
+        v4Prompt is Map &&
+        v4Prompt['use_coords'] is bool) {
+      paramJson['use_coords'] = v4Prompt['use_coords'];
+    }
+    final loadedCount = paramConfig.loadJson(paramJson);
+    if (paramJson.containsKey('negative_prompt') ||
+        paramJson.containsKey('uc')) {
       setNegativePromptFromString(paramConfig.negativePrompt);
     }
     return loadedCount;

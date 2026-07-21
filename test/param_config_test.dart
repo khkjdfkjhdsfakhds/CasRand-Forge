@@ -42,6 +42,16 @@ void main() {
     );
   });
 
+  test('fixed seed value is preserved in saved configs', () {
+    final restored = ParamConfig.fromJson(
+      ParamConfig(randomSeed: false, seed: 45744032).toJson(),
+    );
+
+    expect(restored.randomSeed, isFalse);
+    expect(restored.seed, 45744032);
+    expect(restored.getPayload()['seed'], 45744032);
+  });
+
   test('V4 native schedule uses server defaults after mapping to karras', () {
     final config = ParamConfig(
       model: 'nai-diffusion-4-5-full',

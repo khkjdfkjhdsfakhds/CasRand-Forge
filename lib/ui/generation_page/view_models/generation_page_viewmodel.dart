@@ -331,7 +331,12 @@ class GenerationPageViewmodel extends ChangeNotifier {
     for (final key in [
       'reference_image_multiple',
       'reference_information_extracted_multiple',
-      'reference_strength_multiple'
+      'reference_strength_multiple',
+      'director_reference_images',
+      'director_reference_descriptions',
+      'director_reference_information_extracted',
+      'director_reference_strength_values',
+      'director_reference_secondary_strength_values',
     ]) {
       additionalInfoParam.remove(key);
     }

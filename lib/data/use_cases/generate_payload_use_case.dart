@@ -3,6 +3,7 @@ import 'package:nai_casrand/core/constants/feature_flags.dart';
 import 'package:nai_casrand/data/models/character_config.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
+import 'package:nai_casrand/data/models/precise_reference_config.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/vibe_config.dart';
 import 'package:nai_casrand/data/models/vibe_config_v4.dart';
@@ -62,6 +63,8 @@ class GeneratePayloadUseCase {
   List<PromptConfig> get savedConfigList => payloadConfig.savedPromptConfigList;
   List<VibeConfig> get vibeConfigList => payloadConfig.vibeConfigList;
   List<VibeConfigV4> get vibeConfigV4List => payloadConfig.vibeConfigListV4;
+  List<PreciseReferenceConfig> get preciseReferenceConfigList =>
+      payloadConfig.preciseReferenceConfigList;
   String get fileNameKey => payloadConfig.settings.fileNamePrefixKey;
 
   PayloadGenerationResult call() {
@@ -165,6 +168,9 @@ class GeneratePayloadUseCase {
     paramPayload['v4_negative_prompt'] = v4NegPrompt;
     paramPayload['characterPrompts'] = characterPrompts;
 
+    final activePreciseReferenceList = preciseReferenceConfigList
+        .where((config) => config.enabled)
+        .toList(growable: false);
     if (paramConfig.model.contains('-3')) {
       // Vibe config for NAI3 models
       final imageB64List = [];
@@ -179,6 +185,31 @@ class GeneratePayloadUseCase {
       paramPayload['reference_strength_multiple'] = referenceStrengthList;
       paramPayload['reference_information_extracted_multiple'] =
           imformationExtractedList;
+    } else if (paramConfig.model.contains('-4-5-') &&
+        activePreciseReferenceList.isNotEmpty) {
+      paramPayload['director_reference_images'] = activePreciseReferenceList
+          .map((config) => config.imageB64)
+          .toList(growable: false);
+      paramPayload['director_reference_descriptions'] =
+          activePreciseReferenceList.map((config) {
+        return {
+          'caption': {
+            'base_caption': config.type.payloadCaption,
+            'char_captions': [],
+          },
+          'legacy_uc': false,
+        };
+      }).toList(growable: false);
+      paramPayload['director_reference_information_extracted'] =
+          activePreciseReferenceList.map((_) => 1.0).toList(growable: false);
+      paramPayload['director_reference_strength_values'] =
+          activePreciseReferenceList
+              .map((config) => config.strength)
+              .toList(growable: false);
+      paramPayload['director_reference_secondary_strength_values'] =
+          activePreciseReferenceList
+              .map((config) => 1.0 - config.fidelity)
+              .toList(growable: false);
     } else if (paramConfig.model.contains('-4-')) {
       // Vibe config for NAI4 models
       final imageB64List = [];

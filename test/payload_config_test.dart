@@ -161,6 +161,26 @@ void main() {
     expect(config.paramConfig.autoPosition, isFalse);
   });
 
+  test('V4 metadata use_coords is inverted into AI choice state', () {
+    final config = PayloadConfig.fromJson(legacyConfigJson('legacy'));
+
+    expect(
+      config.loadParamJson({
+        'v4_prompt': {'use_coords': false},
+      }),
+      1,
+    );
+    expect(config.paramConfig.autoPosition, isTrue);
+
+    expect(
+      config.loadParamJson({
+        'v4_prompt': {'use_coords': true},
+      }),
+      1,
+    );
+    expect(config.paramConfig.autoPosition, isFalse);
+  });
+
   test(
       'built-in defaults use NAI 4.5 Full parameters, a fixed negative prompt, and no characters',
       () async {

@@ -15,7 +15,7 @@ class MetadataDropAreaViewmodel extends ChangeNotifier {
     String? prompt,
     String? model,
   ) {
-    int loadedCount = config.loadJson(commentData);
+    int loadedCount = payloadConfig.loadParamJson(commentData);
     if (prompt != null) {
       payloadConfig.overridePrompt = prompt;
       payloadConfig.useOverridePrompt = true;
@@ -36,7 +36,7 @@ class MetadataDropAreaViewmodel extends ChangeNotifier {
 
   void loadSingleImageMetadata(
       BuildContext context, Map<String, dynamic> commentData, String key) {
-    final loadedCount = config.loadJson(commentData);
+    final loadedCount = payloadConfig.loadParamJson(commentData);
     if (loadedCount == 0) return;
     notifyListeners();
     showInfoBar(

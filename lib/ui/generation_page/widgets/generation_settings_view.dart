@@ -71,7 +71,7 @@ class GenerationSettingsView extends StatelessWidget {
                   child: EditableListTile(
                     key: const Key('generation-settings-fixed-seed'),
                     leading: const Icon(Icons.numbers),
-                    title: context.tr('random_seed'),
+                    title: context.tr('fixed_seed'),
                     currentValue: paramConfig.seed.toString(),
                     keyboardType: TextInputType.number,
                     confirmOnSubmit: true,

@@ -10,7 +10,7 @@ jobs:
   build-android:
     runs-on: ubuntu-latest
     env:
-      ASSET_NAME: CasRand-Forge-v0.9.2-beta.3-Android.apk
+      ASSET_NAME: CasRand-Forge-v0.9.3-beta.1-Android.apk
 
     steps:
       - name: Check out source
@@ -53,7 +53,7 @@ jobs:
           AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)"
           test -n "$AAPT"
           BADGING="$("$AAPT" dump badging "$ASSET_NAME")"
-          grep -Fq "package: name='io.github.khkjdfkjhdsfakhds.casrandforge.beta' versionCode='3' versionName='0.9.2'" <<<"$BADGING"
+          grep -Fq "package: name='io.github.khkjdfkjhdsfakhds.casrandforge.beta' versionCode='6' versionName='0.9.3'" <<<"$BADGING"
           grep -Fq "application-label:'CasRand Forge Beta'" <<<"$BADGING"
 
       - name: Upload Android artifact
