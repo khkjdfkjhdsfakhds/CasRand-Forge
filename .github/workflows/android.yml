@@ -10,7 +10,7 @@ jobs:
   build-android:
     runs-on: ubuntu-latest
     env:
-      ASSET_NAME: CasRand-Forge-v0.9.3-beta.1-Android.apk
+      ASSET_NAME: CasRand-Forge-v0.9.3-Android.apk
 
     steps:
       - name: Check out source
