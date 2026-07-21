@@ -7,8 +7,8 @@ CasRand Forge 是 [NAI CasRand](https://github.com/Exception0x0194/NAI-Generator
 | 平台 | 状态 | 获取方式 |
 | --- | --- | --- |
 | macOS | 0.9.1 稳定版与 0.9.3 Beta，支持 Apple Silicon 与 Intel | 从 [GitHub Releases](https://github.com/khkjdfkjhdsfakhds/CasRand-Forge/releases) 下载 DMG |
-| Windows | 0.9.3 Beta | 从 0.9.3 Beta Pre-release 下载 Windows ZIP |
-| Android | 0.9.3 Beta | 从 0.9.3 Beta Pre-release 下载 APK |
+| Windows | 0.9.2 Beta | 从 0.9.2 Beta Pre-release 下载 Windows ZIP |
+| Android | 0.9.2 Beta | 从 0.9.2 Beta Pre-release 下载 APK |
 
 macOS 用户推荐下载 DMG，将 App 拖入“应用程序”。本项目的公开 macOS 构建使用临时签名且尚未经过 Apple 公证；首次打开时若 macOS 提示无法验证开发者，请在 Finder 中右键应用并选择“打开”。Windows 用户解压完整 ZIP 后运行 `CasRandForgeBeta.exe`。Android Beta 使用测试签名，后续若签名变化，可能需要先卸载旧 Beta 再安装新版。
 
