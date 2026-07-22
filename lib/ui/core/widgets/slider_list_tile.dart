@@ -8,6 +8,8 @@ class SliderListTile extends StatelessWidget {
   final int divisions;
   final Function(double) onChanged;
   final Widget? leading;
+  final Widget? trailing;
+  final VoidCallback? onTitleTap;
 
   const SliderListTile({
     super.key,
@@ -18,6 +20,8 @@ class SliderListTile extends StatelessWidget {
     required this.divisions,
     required this.onChanged,
     this.leading,
+    this.trailing,
+    this.onTitleTap,
   });
 
   @override
@@ -28,6 +32,8 @@ class SliderListTile extends StatelessWidget {
         ListTile(
           title: Text(title),
           leading: leading,
+          trailing: trailing,
+          onTap: onTitleTap,
         ),
         Padding(
           padding: const EdgeInsets.only(bottom: 10),

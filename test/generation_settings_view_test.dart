@@ -35,6 +35,11 @@ class _TestAssetLoader extends AssetLoader {
   }
 }
 
+class _NoNetworkGenerationPageViewmodel extends GenerationPageViewmodel {
+  @override
+  void nextCommand() {}
+}
+
 late Map<String, dynamic> testTranslations;
 
 void main() {
@@ -106,7 +111,7 @@ void main() {
   testWidgets('moved settings appear together on the generation page', (
     tester,
   ) async {
-    final viewmodel = GenerationPageViewmodel();
+    final viewmodel = _NoNetworkGenerationPageViewmodel();
     await tester.pumpWidget(
       localizedApp(
         Scaffold(body: GenerationSettingsView(viewmodel: viewmodel)),
@@ -150,6 +155,29 @@ void main() {
       tester.getTopLeft(find.text('Fixed Seed')).dy,
       lessThan(tester.getTopLeft(find.text('Number of columns: 2')).dy),
     );
+
+    await tester.tap(
+      find.byKey(const Key('generation-settings-fixed-seed')),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '');
+    await tester.tap(find.text('Confirm'));
+    await tester.pumpAndSettle();
+
+    expect(GetIt.I<PayloadConfig>().paramConfig.seed, isNull);
+
+    viewmodel.startGeneration();
+    await tester.pump();
+
+    expect(GetIt.I<PayloadConfig>().paramConfig.seed, 0);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('generation-settings-fixed-seed')),
+        matching: find.text('0'),
+      ),
+      findsOneWidget,
+    );
+    viewmodel.stopGeneration();
 
     expect(find.text('Request per batch'), findsNothing);
     expect(find.text('Interval between batches (seconds)'), findsNothing);
@@ -218,6 +246,39 @@ void main() {
     expect(find.text('Selected sizes'), findsOneWidget);
     expect(find.text('Preset sizes'), findsOneWidget);
     expect(find.text('Enter a custom size'), findsOneWidget);
+    final expectedPresetOrder = [
+      '832 × 1216',
+      '1216 × 832',
+      '1024 × 1024',
+      '1024 × 1536',
+      '1536 × 1024',
+      '1472 × 1472',
+      '768 × 1344',
+      '1344 × 768',
+    ];
+    for (final preset in expectedPresetOrder) {
+      expect(find.widgetWithText(OutlinedButton, preset), findsOneWidget);
+    }
+    expect(
+      tester
+          .widgetList<Text>(
+            find.descendant(
+              of: find.byType(OutlinedButton),
+              matching: find.byType(Text),
+            ),
+          )
+          .map((text) => text.data)
+          .toList(),
+      expectedPresetOrder,
+    );
+    expect(
+      find.widgetWithText(OutlinedButton, '704 × 1472'),
+      findsNothing,
+    );
+    expect(
+      find.widgetWithText(OutlinedButton, '1472 × 704'),
+      findsNothing,
+    );
 
     await tester.enterText(
       find.byKey(const Key('manual-size-width')),
@@ -264,6 +325,20 @@ void main() {
 
     expect(slider.max, 50);
     expect(slider.divisions, 50);
+
+    await tester.tap(find.text('Sample Steps: 28'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('sampling-steps-input')), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const Key('sampling-steps-input')),
+      '37',
+    );
+    await tester.tap(find.text('Confirm'));
+    await tester.pumpAndSettle();
+
+    expect(GetIt.I<PayloadConfig>().paramConfig.steps, 37);
+    expect(find.text('Sample Steps: 37'), findsOneWidget);
   });
 
   testWidgets('negative prompt stays below the dynamic character area', (

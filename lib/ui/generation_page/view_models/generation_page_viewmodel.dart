@@ -44,7 +44,13 @@ class GenerationPageViewmodel extends ChangeNotifier {
   }
 
   void setSeed(String value) {
-    final parseResult = int.tryParse(value);
+    final normalizedValue = value.trim();
+    if (normalizedValue.isEmpty) {
+      payloadConfig.paramConfig.seed = null;
+      notifyListeners();
+      return;
+    }
+    final parseResult = int.tryParse(normalizedValue);
     if (parseResult == null) return;
     payloadConfig.paramConfig.seed = parseResult;
     notifyListeners();
@@ -248,6 +254,11 @@ class GenerationPageViewmodel extends ChangeNotifier {
   }
 
   void startGeneration() {
+    final paramConfig = payloadConfig.paramConfig;
+    if (!paramConfig.randomSeed && paramConfig.seed == null) {
+      paramConfig.seed = 0;
+      notifyListeners();
+    }
     _generationIntervalTimer?.cancel();
     commandStatus.isWaitingForNextGeneration.value = false;
     if (!payloadConfig.settings.rememberSequentialProgress) {

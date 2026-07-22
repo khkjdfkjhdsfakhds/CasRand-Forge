@@ -105,6 +105,22 @@ void main() {
     expect(payloadConfig.settings.generationCount, 0);
   });
 
+  test('empty fixed seed becomes zero when generation starts', () {
+    final viewmodel = _SchedulingViewmodel();
+    final payloadConfig = GetIt.I<PayloadConfig>();
+
+    viewmodel.setRandomSeedEnabled(false);
+    viewmodel.setSeed('');
+
+    expect(payloadConfig.paramConfig.seed, isNull);
+
+    viewmodel.startGeneration();
+
+    expect(payloadConfig.paramConfig.seed, 0);
+    expect(viewmodel.nextCommandCalls, 1);
+    viewmodel.stopGeneration();
+  });
+
   test('digest hides reference image payload fields', () {
     final viewmodel = GenerationPageViewmodel();
 

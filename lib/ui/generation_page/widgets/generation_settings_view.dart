@@ -72,7 +72,7 @@ class GenerationSettingsView extends StatelessWidget {
                     key: const Key('generation-settings-fixed-seed'),
                     leading: const Icon(Icons.numbers),
                     title: context.tr('fixed_seed'),
-                    currentValue: paramConfig.seed.toString(),
+                    currentValue: paramConfig.seed?.toString() ?? '',
                     keyboardType: TextInputType.number,
                     confirmOnSubmit: true,
                     onEditComplete: viewmodel.setSeed,

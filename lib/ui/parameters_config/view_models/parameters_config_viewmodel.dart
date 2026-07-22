@@ -16,6 +16,13 @@ class ParametersConfigViewmodel extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setStepsFromText(String value) {
+    final parsedValue = int.tryParse(value);
+    if (parsedValue == null || parsedValue < 0 || parsedValue > 50) return;
+    config.steps = parsedValue;
+    notifyListeners();
+  }
+
   setScale(double value) {
     config.scale = value;
     notifyListeners();

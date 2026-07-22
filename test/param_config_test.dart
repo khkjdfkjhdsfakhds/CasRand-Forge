@@ -52,6 +52,12 @@ void main() {
     expect(restored.getPayload()['seed'], 45744032);
   });
 
+  test('empty fixed seed has a safe zero payload fallback', () {
+    final config = ParamConfig(randomSeed: false, seed: null);
+
+    expect(config.getPayload()['seed'], 0);
+  });
+
   test('V4 native schedule uses server defaults after mapping to karras', () {
     final config = ParamConfig(
       model: 'nai-diffusion-4-5-full',

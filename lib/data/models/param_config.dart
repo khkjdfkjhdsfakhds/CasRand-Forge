@@ -24,7 +24,7 @@ class ParamConfig {
   bool? preferBrownian;
 
   bool randomSeed;
-  int seed;
+  int? seed;
 
   bool dynamicThresholding;
   double controlNetStrength;
@@ -145,7 +145,7 @@ class ParamConfig {
       "noise_schedule": noiseSchedule,
       "skip_cfg_above_sigma": skipCfgAboveSigma,
       "use_coords": true,
-      "seed": randomSeed ? Random().nextInt(1 << 32 - 1) : seed,
+      "seed": randomSeed ? Random().nextInt(1 << 32 - 1) : seed ?? 0,
       "characterPrompts": [],
       "v4_prompt": {},
       "v4_negative_prompt": {},

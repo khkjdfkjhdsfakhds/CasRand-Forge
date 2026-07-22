@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:nai_casrand/core/constants/parameters.dart';
 import 'package:nai_casrand/data/services/image_service.dart';
@@ -26,14 +27,17 @@ class ParametersConfigView extends StatelessWidget {
           if (viewmodel.isV4) _buildLegacyUcTile(context),
           // Steps
           SliderListTile(
+              key: const Key('sampling-steps-control'),
               title: context.tr('sampling_steps') +
                   context.tr('colon') +
                   viewmodel.config.steps.toString(),
               sliderValue: viewmodel.config.steps.toDouble(),
               leading: const Icon(Icons.repeat),
+              trailing: const Icon(Icons.edit_outlined),
               min: 0,
               max: 50,
               divisions: 50,
+              onTitleTap: () => _showStepsInputDialog(context),
               onChanged: (value) => viewmodel.setSteps(value)),
           // CFG
           SliderListTile(
@@ -117,6 +121,16 @@ class ParametersConfigView extends StatelessWidget {
       title: Text(title),
       value: currentValue,
       onChanged: (value) => onChanged(value!),
+    );
+  }
+
+  Future<void> _showStepsInputDialog(BuildContext context) async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => _SamplingStepsInputDialog(
+        initialValue: viewmodel.config.steps,
+        onSubmit: viewmodel.setStepsFromText,
+      ),
     );
   }
 
@@ -244,5 +258,74 @@ class ParametersConfigView extends StatelessWidget {
       showErrorBar(
           context, '${tr('import_metadata_from_image')}${tr('failed')}');
     }
+  }
+}
+
+class _SamplingStepsInputDialog extends StatefulWidget {
+  final int initialValue;
+  final ValueChanged<String> onSubmit;
+
+  const _SamplingStepsInputDialog({
+    required this.initialValue,
+    required this.onSubmit,
+  });
+
+  @override
+  State<_SamplingStepsInputDialog> createState() =>
+      _SamplingStepsInputDialogState();
+}
+
+class _SamplingStepsInputDialogState extends State<_SamplingStepsInputDialog> {
+  late final TextEditingController controller;
+
+  @override
+  void initState() {
+    super.initState();
+    controller = TextEditingController(text: widget.initialValue.toString());
+    controller.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: controller.text.length,
+    );
+  }
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  void submit() {
+    widget.onSubmit(controller.text);
+    Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(
+        '${context.tr('edit')}${context.tr('colon')}'
+        '${context.tr('sampling_steps')}',
+      ),
+      content: TextField(
+        key: const Key('sampling-steps-input'),
+        controller: controller,
+        autofocus: true,
+        keyboardType: TextInputType.number,
+        textInputAction: TextInputAction.done,
+        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+        decoration: const InputDecoration(helperText: '0–50'),
+        onSubmitted: (_) => submit(),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(context.tr('cancel')),
+        ),
+        TextButton(
+          onPressed: submit,
+          child: Text(context.tr('confirm')),
+        ),
+      ],
+    );
   }
 }
