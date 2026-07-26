@@ -49,9 +49,11 @@ void expectValidPlan(
   expect(plan.outer.y, greaterThanOrEqualTo(0));
   expect(plan.outer.right, lessThanOrEqualTo(imageWidth));
   expect(plan.outer.bottom, lessThanOrEqualTo(imageHeight));
-  // Context margin is on the 8-px grid within the official range.
+  // Context margin is on the 8-px grid and never exceeds the official max.
+  // It can be 0 when the region touches an image edge, or when a split tile
+  // is large enough that a margin no longer fits the budget.
   expect(plan.contextPx % latentGrid, 0);
-  expect(plan.contextPx, inInclusiveRange(minContextPx, maxContextPx));
+  expect(plan.contextPx, inInclusiveRange(0, maxContextPx));
 }
 
 void main() {
@@ -228,14 +230,16 @@ void main() {
   });
 
   test('a wider budget admits a frame the normal cap refuses', () {
+    // 1500x1500 exceeds the normal cap even without a context margin, but
+    // fits the wallpaper tier.
     final cells = gridWithMaskRect(
-      imageWidth: 2000,
+      imageWidth: 3000,
       imageHeight: 3000,
-      maskRect: const Rectangle(400, 600, 1000, 1000),
+      maskRect: const Rectangle(400, 600, 1500, 1500),
     );
     expect(
       planFocusInpaint(
-        imageWidth: 2000,
+        imageWidth: 3000,
         imageHeight: 3000,
         cells: cells,
         maxArea: areaCapNormal,
@@ -243,13 +247,32 @@ void main() {
       isNull,
     );
     final plan = planFocusInpaint(
-      imageWidth: 2000,
+      imageWidth: 3000,
       imageHeight: 3000,
       cells: cells,
       maxArea: areaCapWallpaper,
     )!;
     expectValidPlan(plan,
-        imageWidth: 2000, imageHeight: 3000, cap: areaCapWallpaper);
+        imageWidth: 3000, imageHeight: 3000, cap: areaCapWallpaper);
+  });
+
+  test('a region without room for a margin still gets a frame', () {
+    // The mask nearly fills the budget, so no context margin fits; focus
+    // inpainting should still plan a frame rather than give up.
+    final cells = gridWithMaskRect(
+      imageWidth: 3000,
+      imageHeight: 3000,
+      maskRect: const Rectangle(500, 500, 1010, 1010),
+    );
+    final plan = planFocusInpaint(
+      imageWidth: 3000,
+      imageHeight: 3000,
+      cells: cells,
+      maxArea: areaCapNormal,
+    )!;
+    expectValidPlan(plan,
+        imageWidth: 3000, imageHeight: 3000, cap: areaCapNormal);
+    expect(plan.outer.contains(maskBBoxFromCells(cells, 3000, 3000)!), isTrue);
   });
 
   test('elongated mask picks a matching frame aspect', () {
@@ -325,6 +348,203 @@ void main() {
       ),
       isNull,
     );
+  });
+
+  group('split planning', () {
+    test('a small mask stays a single tile', () {
+      final cells = gridWithMaskRect(
+        imageWidth: 1600,
+        imageHeight: 2400,
+        maskRect: const Rectangle(700, 1100, 120, 160),
+      );
+      final batch = planFocusInpaintBatch(
+        imageWidth: 1600,
+        imageHeight: 2400,
+        cells: cells,
+        maxArea: areaCapNormal,
+      )!;
+      expect(batch.tileCount, 1);
+      expect(batch.isSplit, isFalse);
+      expect(batch.splitMode, FocusSplitMode.none);
+      expect(batch.serial, isTrue);
+    });
+
+    test('a mask filling its frame is halved along the long axis', () {
+      // The mask nearly fills the largest frame, so each half gets its own
+      // frame and a better effective resolution.
+      final cells = gridWithMaskRect(
+        imageWidth: 3000,
+        imageHeight: 3000,
+        maskRect: const Rectangle(900, 900, 1000, 1000),
+      );
+      final single = planFocusForRegion(
+        imageWidth: 3000,
+        imageHeight: 3000,
+        region: maskBBoxFromCells(cells, 3000, 3000)!,
+        maxArea: areaCapNormal,
+      )!;
+      expect(
+        maskedCellRatio(cells, single.outer, 3000, 3000),
+        greaterThan(longAxisSplitThreshold),
+      );
+
+      final batch = planFocusInpaintBatch(
+        imageWidth: 3000,
+        imageHeight: 3000,
+        cells: cells,
+        maxArea: areaCapNormal,
+      )!;
+      expect(batch.splitMode, FocusSplitMode.longAxis);
+      expect(batch.tileCount, 2);
+      // The halves get distinct frames, and overlapping frames run serially.
+      expect(batch.tiles[0].outer, isNot(batch.tiles[1].outer));
+      expect(batch.serial, isTrue);
+      for (final tile in batch.tiles) {
+        expectValidPlan(tile,
+            imageWidth: 3000, imageHeight: 3000, cap: areaCapNormal);
+      }
+    });
+
+    test('a whole-image-sized mask needs no split', () {
+      // On a 1024x1024 source the frame is the image itself, so halving it
+      // would gain nothing and both halves collapse back to one frame.
+      final cells = gridWithMaskRect(
+        imageWidth: 1024,
+        imageHeight: 1024,
+        maskRect: const Rectangle(20, 20, 984, 984),
+      );
+      final batch = planFocusInpaintBatch(
+        imageWidth: 1024,
+        imageHeight: 1024,
+        cells: cells,
+        maxArea: areaCapNormal,
+      )!;
+      expect(batch.tileCount, 1);
+      expect(batch.splitMode, FocusSplitMode.none);
+      expect(batch.tiles.single.coversWholeImage(1024, 1024), isTrue);
+    });
+
+    test('a mask too large for one frame becomes a grid', () {
+      final cells = gridWithMaskRect(
+        imageWidth: 3000,
+        imageHeight: 3000,
+        maskRect: const Rectangle(100, 100, 2800, 2800),
+      );
+      final batch = planFocusInpaintBatch(
+        imageWidth: 3000,
+        imageHeight: 3000,
+        cells: cells,
+        maxArea: areaCapNormal,
+      )!;
+      expect(batch.splitMode, FocusSplitMode.grid);
+      expect(batch.tileCount, greaterThan(1));
+      for (final tile in batch.tiles) {
+        expectValidPlan(tile,
+            imageWidth: 3000, imageHeight: 3000, cap: areaCapNormal);
+      }
+      // Every tile frame must be distinct.
+      final keys = batch.tiles
+          .map((t) => '${t.outer.x},${t.outer.y},${t.outer.w},${t.outer.h}')
+          .toSet();
+      expect(keys.length, batch.tileCount);
+    });
+
+    test('grid tiles together cover the whole mask bounding box', () {
+      const imageW = 3000;
+      const imageH = 3000;
+      final cells = gridWithMaskRect(
+        imageWidth: imageW,
+        imageHeight: imageH,
+        maskRect: const Rectangle(100, 100, 2800, 2800),
+      );
+      final bbox = maskBBoxFromCells(cells, imageW, imageH)!;
+      final batch = planFocusInpaintBatch(
+        imageWidth: imageW,
+        imageHeight: imageH,
+        cells: cells,
+        maxArea: areaCapNormal,
+      )!;
+      // Sample the bbox; every point must fall inside at least one frame.
+      for (var y = bbox.y; y < bbox.bottom; y += 97) {
+        for (var x = bbox.x; x < bbox.right; x += 97) {
+          final covered = batch.tiles.any((tile) =>
+              x >= tile.outer.x &&
+              x < tile.outer.right &&
+              y >= tile.outer.y &&
+              y < tile.outer.bottom);
+          expect(covered, isTrue, reason: 'point ($x, $y) is not covered');
+        }
+      }
+    });
+
+    test('long-axis split halves the region', () {
+      const rect = CropRect(x: 100, y: 200, w: 400, h: 100);
+      final halves = splitAlongLongAxis(rect);
+      expect(halves.length, 2);
+      // Split along the wider axis, boundaries on the latent grid.
+      expect(halves[0].y, rect.y);
+      expect(halves[0].h, rect.h);
+      expect(halves[0].x, rect.x);
+      expect(halves[1].right, rect.right);
+      expect(halves[0].right, halves[1].x);
+      expect(halves[0].right % latentGrid, 0);
+
+      const tall = CropRect(x: 0, y: 0, w: 100, h: 400);
+      final tallHalves = splitAlongLongAxis(tall);
+      expect(tallHalves.length, 2);
+      expect(tallHalves[0].w, tall.w);
+      expect(tallHalves[0].bottom, tallHalves[1].y);
+    });
+
+    test('tiny regions are not split', () {
+      expect(splitAlongLongAxis(const CropRect(x: 0, y: 0, w: 8, h: 8)).length,
+          1);
+    });
+
+    test('grid split tiles the region without gaps or overlaps', () {
+      const rect = CropRect(x: 0, y: 0, w: 2000, h: 1000);
+      final tiles = splitIntoGrid(rect, 700, 700);
+      expect(tiles.length, 3 * 2);
+      var area = 0;
+      for (final tile in tiles) {
+        area += tile.area;
+        expect(tile.x, greaterThanOrEqualTo(rect.x));
+        expect(tile.right, lessThanOrEqualTo(rect.right));
+      }
+      expect(area, rect.area, reason: 'tiles must exactly cover the region');
+    });
+
+    test('masked cell ratio reflects how full the frame is', () {
+      final cells = gridWithMaskRect(
+        imageWidth: 1024,
+        imageHeight: 1024,
+        maskRect: const Rectangle(0, 0, 512, 1024),
+      );
+      final ratio = maskedCellRatio(
+        cells,
+        const CropRect(x: 0, y: 0, w: 1024, h: 1024),
+        1024,
+        1024,
+      );
+      expect(ratio, closeTo(0.5, 0.02));
+    });
+
+    test('empty mask yields no batch', () {
+      final cells = maskCellGridFromPixels(
+        imageWidth: 100,
+        imageHeight: 100,
+        maskPixelAt: (_, __) => false,
+      );
+      expect(
+        planFocusInpaintBatch(
+          imageWidth: 100,
+          imageHeight: 100,
+          cells: cells,
+          maxArea: areaCapNormal,
+        ),
+        isNull,
+      );
+    });
   });
 
   test('whole-image fallback helpers keep their contract', () {

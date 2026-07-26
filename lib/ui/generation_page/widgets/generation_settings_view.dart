@@ -78,15 +78,6 @@ class GenerationSettingsView extends StatelessWidget {
                     onEditComplete: viewmodel.setSeed,
                   ),
                 ),
-              SliderListTile(
-                leading: const Icon(Icons.grid_view_outlined),
-                title: '${tr('column_number')}: ${viewmodel.colNum}',
-                sliderValue: viewmodel.colNum.toDouble(),
-                min: 1,
-                max: 5,
-                divisions: 4,
-                onChanged: (value) => viewmodel.setCardsPerCol(value.toInt()),
-              ),
               ListTile(
                 key: const Key('generation-settings-display-mode'),
                 leading: const Icon(Icons.view_quilt_outlined),
@@ -115,6 +106,16 @@ class GenerationSettingsView extends StatelessWidget {
                         viewmodel.setResultDisplayMode(selection.first),
                   ),
                 ),
+              ),
+              SliderListTile(
+                key: const Key('generation-settings-column-count'),
+                leading: const Icon(Icons.grid_view_outlined),
+                title: '${tr('result_column_count')}: ${viewmodel.colNum}',
+                sliderValue: viewmodel.colNum.toDouble(),
+                min: 1,
+                max: 5,
+                divisions: 4,
+                onChanged: (value) => viewmodel.setCardsPerCol(value.toInt()),
               ),
               if (FeatureFlags.overridePrompt) ...[
                 CheckboxListTile(

@@ -133,7 +133,10 @@ void main() {
       find.text('Generation interval (seconds)'),
       find.text('Image Size (W × H)'),
       find.text('Use Random Seed'),
-      find.text('Number of columns: 2'),
+      // Display style comes first, and the column count belongs under it
+      // because it now applies to both result layouts.
+      find.text('Result display style'),
+      find.text('Columns per row: 2'),
       find.text('Override random prompts'),
     ];
     final verticalOffsets =
@@ -153,7 +156,7 @@ void main() {
     expect(find.text('Fixed Seed'), findsOneWidget);
     expect(
       tester.getTopLeft(find.text('Fixed Seed')).dy,
-      lessThan(tester.getTopLeft(find.text('Number of columns: 2')).dy),
+      lessThan(tester.getTopLeft(find.text('Columns per row: 2')).dy),
     );
 
     await tester.tap(

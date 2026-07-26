@@ -129,19 +129,92 @@ void main() {
     expect(sent.height, plan.height);
   });
 
-  test('mask beyond the budget falls back to the whole-image path', () async {
+  test('a mask beyond one frame is split into focus tiles', () async {
     final config = I2IConfig()..setImage(solidPng(2000, 3000, 90, 90, 90));
     config.setMask(maskPngWithWhiteRect(2000, 3000, 50, 50, 1900, 2900), []);
-    final plan = await PrepareI2iRequestUseCase(config: config)(
+    final batch = await PrepareI2iRequestUseCase(config: config).planBatch(
       targetWidth: 832,
       targetHeight: 1216,
     );
-    expect(plan!.isInpaint, isTrue);
-    expect(plan.composite, isNull, reason: 'fallback needs no compositing');
-    expect(plan.width % 64, 0);
-    expect(plan.height % 64, 0);
-    expect(plan.width * plan.height, lessThanOrEqualTo(1024 * 1024));
-    expect(plan.summary, contains('whole image'));
+    expect(batch!.isSplit, isTrue);
+    expect(batch.tileCount, greaterThan(1));
+    expect(batch.summary, contains('tiles'));
+    for (final plan in batch.plans) {
+      expect(plan.isInpaint, isTrue);
+      expect(plan.composite, isNotNull);
+      expect(plan.width % 64, 0);
+      expect(plan.height % 64, 0);
+      expect(plan.width * plan.height, lessThanOrEqualTo(1024 * 1024));
+    }
+    // Every tile must target a distinct frame.
+    final frames = batch.plans.map((p) => p.composite!.outer).toSet();
+    expect(frames.length, batch.tileCount);
+  });
+
+  test('a single-tile batch carries one plan', () async {
+    final config = I2IConfig()..setImage(quadrantPng(1600, 2400));
+    config.setMask(maskPngWithWhiteRect(1600, 2400, 700, 1100, 120, 160), []);
+    final batch = await PrepareI2iRequestUseCase(config: config).planBatch(
+      targetWidth: 832,
+      targetHeight: 1216,
+    );
+    expect(batch!.isSplit, isFalse);
+    expect(batch.tileCount, 1);
+    expect(batch.serial, isTrue);
+  });
+
+  test('a plain img2img batch carries one non-inpaint plan', () async {
+    final config = I2IConfig()..setImage(solidPng(500, 300, 200, 30, 30));
+    final batch = await PrepareI2iRequestUseCase(config: config).planBatch(
+      targetWidth: 832,
+      targetHeight: 1216,
+    );
+    expect(batch!.tileCount, 1);
+    expect(batch.plans.single.isInpaint, isFalse);
+    expect(batch.plans.single.composite, isNull);
+  });
+
+  test('split tiles composite onto one accumulating canvas', () async {
+    final config = I2IConfig()..setImage(quadrantPng(2000, 3000));
+    config.setMask(maskPngWithWhiteRect(2000, 3000, 50, 50, 1900, 2900), []);
+    final useCase = PrepareI2iRequestUseCase(config: config);
+    final batch = await useCase.planBatch(
+      targetWidth: 832,
+      targetHeight: 1216,
+    );
+    final canvas = useCase.newCompositeCanvas();
+    expect(canvas.width, 2000);
+    expect(canvas.height, 3000);
+
+    // Paste a distinct colour per tile so every frame is verifiable.
+    for (final (index, plan) in batch!.plans.indexed) {
+      final shade = 20 + index * 10;
+      useCase.pasteTileInto(
+        canvas: canvas,
+        responseBytes: solidPng(plan.width, plan.height, shade, shade, shade),
+        composite: plan.composite!,
+      );
+    }
+    final bytes = await useCase.finishComposite(
+      canvas: canvas,
+      responseBytes: solidPng(64, 64, 0, 0, 0),
+    );
+    final result = img.decodePng(bytes)!;
+    expect(result.width, 2000);
+    expect(result.height, 3000);
+
+    // The union of the frames must have been repainted grey.
+    final original = img.decodePng(quadrantPng(2000, 3000))!;
+    var repainted = 0;
+    for (final plan in batch.plans) {
+      final outer = plan.composite!.outer;
+      final x = outer.x + outer.w ~/ 2;
+      final y = outer.y + outer.h ~/ 2;
+      final after = result.getPixel(x, y);
+      final before = original.getPixel(x, y);
+      if (after.r != before.r || after.g != before.g) repainted++;
+    }
+    expect(repainted, batch.tileCount);
   });
 
   test('autocrop off always uses the whole-image path', () async {

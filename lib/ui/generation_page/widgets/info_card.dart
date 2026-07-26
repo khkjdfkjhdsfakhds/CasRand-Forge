@@ -186,7 +186,11 @@ class InfoDetailPage extends StatelessWidget {
             if (content.imageBytes != null)
               GeneratedImageView(
                 content: content,
-                child: Image.memory(content.imageBytes!, fit: BoxFit.contain),
+                child: GestureDetector(
+                  key: const Key('detail-image-zoom-target'),
+                  onTap: () => _openFullscreenImage(context, content),
+                  child: Image.memory(content.imageBytes!, fit: BoxFit.contain),
+                ),
               ),
             ...contents,
           ],
@@ -194,9 +198,19 @@ class InfoDetailPage extends StatelessWidget {
       ),
     );
 
+    // Tapping outside the image closes the page; the image itself zooms.
     return GestureDetector(
       onTap: () => Navigator.of(context).pop(),
       child: body,
+    );
+  }
+
+  void _openFullscreenImage(BuildContext context, InfoCardContent content) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (context) => FullscreenImageView(content: content),
+      ),
     );
   }
 
@@ -232,6 +246,41 @@ class InfoDetailPage extends StatelessWidget {
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: SelectableText(text),
+      ),
+    );
+  }
+}
+
+/// Fullscreen viewer with pinch/scroll zoom and panning.
+class FullscreenImageView extends StatelessWidget {
+  final InfoCardContent content;
+
+  const FullscreenImageView({super.key, required this.content});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black54,
+        foregroundColor: Colors.white,
+        title: Text(
+          content.title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+      body: Center(
+        child: InteractiveViewer(
+          key: const Key('fullscreen-image-viewer'),
+          minScale: 1.0,
+          maxScale: 8.0,
+          child: Image.memory(
+            content.imageBytes!,
+            fit: BoxFit.contain,
+            filterQuality: FilterQuality.high,
+          ),
+        ),
       ),
     );
   }

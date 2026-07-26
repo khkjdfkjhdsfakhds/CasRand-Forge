@@ -102,4 +102,60 @@ class I2iPageViewmodel extends ChangeNotifier {
         .map((size) => '${size.width} × ${size.height}')
         .join(', ');
   }
+
+  // --- Enhance -------------------------------------------------------------
+
+  /// Magnifications whose 64-aligned target still fits NovelAI's maximum
+  /// request area. The official panel offers 1x and 1.5x only.
+  List<double> get availableEnhanceScales {
+    if (!config.hasImage) return const [];
+    const maxPixels = maxRequestSide * maxRequestSide;
+    return enhanceScaleOptions.where((scale) {
+      final size = enhanceTargetSizeFor(scale);
+      return size.width * size.height <= maxPixels;
+    }).toList(growable: false);
+  }
+
+  /// Target size for a magnification: the scaled side rounded to the nearest
+  /// multiple of 64, with a 64 floor.
+  GenerationSize enhanceTargetSizeFor(double scale) {
+    int snap(int value) => max(64, (value / 64).round() * 64);
+    return GenerationSize(
+      width: snap((scale * config.width).round()),
+      height: snap((scale * config.height).round()),
+    );
+  }
+
+  GenerationSize get enhanceTargetSize =>
+      enhanceTargetSizeFor(config.enhanceScale);
+
+  EnhancePreset get enhancePreset =>
+      enhancePresets[config.enhancePresetIndex.clamp(
+        0,
+        enhancePresets.length - 1,
+      )];
+
+  void setEnhanceScale(double value) {
+    config.setEnhanceScale(value);
+    notifyListeners();
+  }
+
+  void setEnhancePresetIndex(int value) {
+    config.setEnhancePresetIndex(value);
+    notifyListeners();
+  }
+
+  /// Applies the Enhance settings to the generation parameters: the target
+  /// size comes from the magnification, and the strength/noise from the
+  /// preset. Enhance re-renders the whole image, so any mask is dropped.
+  void applyEnhance() {
+    if (!config.hasImage) return;
+    paramConfig.sizes = [enhanceTargetSize];
+    final preset = enhancePreset;
+    config
+      ..removeMask()
+      ..setStrength(preset.strength)
+      ..setNoise(preset.noise);
+    notifyListeners();
+  }
 }

@@ -132,11 +132,13 @@ class ClassicInfoCard extends StatelessWidget {
                 ),
                 const Divider(height: 12),
                 Expanded(
-                  child: Text(
-                    promptText,
-                    softWrap: true,
-                    overflow: TextOverflow.fade,
-                    style: Theme.of(context).textTheme.bodySmall,
+                  child: SingleChildScrollView(
+                    primary: false,
+                    child: Text(
+                      promptText,
+                      softWrap: true,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 4),
@@ -149,10 +151,12 @@ class ClassicInfoCard extends StatelessWidget {
     );
   }
 
+  /// The per-block breakdown ("--角色: ..." / "--内容: ...") rather than the
+  /// flattened prompt, so the card shows what each config block contributed.
   String _promptText(InfoCardContent content) {
+    if (content.info.isNotEmpty) return content.info;
     final input = content.additionalInfo['input'];
-    if (input is String && input.isNotEmpty) return input;
-    return content.info;
+    return input is String ? input : '';
   }
 
   Widget _buildAnlasLine(BuildContext context, InfoCardContent content) {

@@ -62,6 +62,26 @@ class I2iRequestPlan {
   bool get isInpaint => maskB64 != null;
 }
 
+/// One inpainting generation: a single request, or several focus tiles that
+/// are composited onto the same canvas.
+class I2iRequestBatch {
+  final List<I2iRequestPlan> plans;
+
+  /// Tiles must be sent one after another (overlapping frames).
+  final bool serial;
+
+  final String summary;
+
+  const I2iRequestBatch({
+    required this.plans,
+    required this.serial,
+    required this.summary,
+  });
+
+  bool get isSplit => plans.length > 1;
+  int get tileCount => plans.length;
+}
+
 class _PlanCacheEntry {
   final int configId;
   final int revision;
@@ -108,7 +128,30 @@ class PrepareI2iRequestUseCase {
     _decodedMaskRevision = -1;
   }
 
-  /// Builds (or returns a cached) request plan.
+  /// Builds the full request batch for one generation: a single img2img /
+  /// inpaint request, or several focus tiles when the mask needs splitting.
+  Future<I2iRequestBatch?> planBatch({
+    required int targetWidth,
+    required int targetHeight,
+  }) async {
+    if (!config.hasImage) return null;
+    if (!config.hasMask) {
+      final plan = await call(
+        targetWidth: targetWidth,
+        targetHeight: targetHeight,
+      );
+      if (plan == null) return null;
+      return I2iRequestBatch(
+        plans: [plan],
+        serial: true,
+        summary: plan.summary,
+      );
+    }
+    return _buildInpaintBatch(targetWidth, targetHeight);
+  }
+
+  /// Builds (or returns a cached) single request plan. For a split mask this
+  /// returns the first tile only; use [planBatch] for the whole batch.
   ///
   /// [targetWidth] / [targetHeight] is the generation size selected for this
   /// request; plain img2img adapts the image to it, while inpainting derives
@@ -130,7 +173,7 @@ class PrepareI2iRequestUseCase {
     }
 
     final plan = config.hasMask
-        ? _buildInpaintPlan(targetWidth, targetHeight)
+        ? _buildInpaintBatch(targetWidth, targetHeight).plans.first
         : _buildImg2ImgPlan(targetWidth, targetHeight);
     _planCache.add(_PlanCacheEntry(
       configId: configId,
@@ -224,7 +267,64 @@ class PrepareI2iRequestUseCase {
     );
   }
 
-  I2iRequestPlan _buildInpaintPlan(int targetWidth, int targetHeight) {
+  /// Builds one focus tile request from its plan.
+  I2iRequestPlan _buildFocusTile({
+    required img.Image base,
+    required img.Image mask,
+    required FocusInpaintPlan plan,
+    required String label,
+  }) {
+    // Crop the outer frame, magnify it to content size, then center it on
+    // the 64-aligned request canvas.
+    var content = _cropWithPadding(base, plan.outer);
+    if (plan.contentWidth != plan.outer.w ||
+        plan.contentHeight != plan.outer.h) {
+      content = img.copyResize(
+        content,
+        width: plan.contentWidth,
+        height: plan.contentHeight,
+        interpolation: img.Interpolation.cubic,
+      );
+    }
+    final canvas = img.Image(
+      width: plan.requestWidth,
+      height: plan.requestHeight,
+      numChannels: 3,
+    );
+    img.compositeImage(
+      canvas,
+      content,
+      dstX: plan.contentOffsetX,
+      dstY: plan.contentOffsetY,
+    );
+    final maskPng = _renderFocusMask(
+      mask: mask,
+      imageWidth: base.width,
+      imageHeight: base.height,
+      plan: plan,
+    );
+    return I2iRequestPlan(
+      imageB64: base64Encode(img.encodePng(canvas)),
+      maskB64: base64Encode(maskPng),
+      width: plan.requestWidth,
+      height: plan.requestHeight,
+      strength: config.strength,
+      noise: config.noise,
+      addOriginalImage: config.addOriginalImage,
+      composite: AutocropCompositeInfo(
+        outer: plan.outer,
+        contentOffsetX: plan.contentOffsetX,
+        contentOffsetY: plan.contentOffsetY,
+        contentWidth: plan.contentWidth,
+        contentHeight: plan.contentHeight,
+        scale: plan.scale,
+      ),
+      summary: 'inpaint focus$label: ${plan.describe()}, '
+          'strength ${config.strength.toStringAsFixed(2)}',
+    );
+  }
+
+  I2iRequestBatch _buildInpaintBatch(int targetWidth, int targetHeight) {
     final base = _requireBaseImage();
     final mask = _requireMaskImage();
     final cells = maskCellGridFromPixels(
@@ -238,60 +338,34 @@ class PrepareI2iRequestUseCase {
     final cap = areaCapForSize(targetWidth, targetHeight);
 
     if (config.autocropEnabled) {
-      final plan = planFocusInpaint(
+      final batch = planFocusInpaintBatch(
         imageWidth: base.width,
         imageHeight: base.height,
         cells: cells,
         maxArea: cap,
       );
-      if (plan != null) {
-        // Crop the outer frame, magnify it to content size, then center it on
-        // the 64-aligned request canvas.
-        var content = _cropWithPadding(base, plan.outer);
-        if (plan.contentWidth != plan.outer.w ||
-            plan.contentHeight != plan.outer.h) {
-          content = img.copyResize(
-            content,
-            width: plan.contentWidth,
-            height: plan.contentHeight,
-            interpolation: img.Interpolation.cubic,
-          );
+      if (batch != null) {
+        final plans = <I2iRequestPlan>[];
+        for (final (index, tile) in batch.tiles.indexed) {
+          plans.add(_buildFocusTile(
+            base: base,
+            mask: mask,
+            plan: tile,
+            label: batch.isSplit ? ' ${index + 1}/${batch.tileCount}' : '',
+          ));
         }
-        final canvas = img.Image(
-          width: plan.requestWidth,
-          height: plan.requestHeight,
-          numChannels: 3,
-        );
-        img.compositeImage(
-          canvas,
-          content,
-          dstX: plan.contentOffsetX,
-          dstY: plan.contentOffsetY,
-        );
-        final maskPng = _renderFocusMask(
-          mask: mask,
-          imageWidth: base.width,
-          imageHeight: base.height,
-          plan: plan,
-        );
-        return I2iRequestPlan(
-          imageB64: base64Encode(img.encodePng(canvas)),
-          maskB64: base64Encode(maskPng),
-          width: plan.requestWidth,
-          height: plan.requestHeight,
-          strength: config.strength,
-          noise: config.noise,
-          addOriginalImage: config.addOriginalImage,
-          composite: AutocropCompositeInfo(
-            outer: plan.outer,
-            contentOffsetX: plan.contentOffsetX,
-            contentOffsetY: plan.contentOffsetY,
-            contentWidth: plan.contentWidth,
-            contentHeight: plan.contentHeight,
-            scale: plan.scale,
-          ),
-          summary: 'inpaint focus: ${plan.describe()}, '
-              'strength ${config.strength.toStringAsFixed(2)}',
+        final modeText = switch (batch.splitMode) {
+          FocusSplitMode.grid => 'grid split',
+          FocusSplitMode.longAxis => 'long-axis split',
+          FocusSplitMode.none => 'single frame',
+        };
+        return I2iRequestBatch(
+          plans: plans,
+          serial: batch.serial,
+          summary: batch.isSplit
+              ? 'inpaint focus, $modeText into ${batch.tileCount} tiles '
+                  '(${batch.serial ? 'serial' : 'concurrent'})'
+              : plans.first.summary,
         );
       }
       // Mask plus its context margin exceeds the budget: focus inpainting
@@ -319,7 +393,7 @@ class PrepareI2iRequestUseCase {
       requestWidth: requestSize.x,
       requestHeight: requestSize.y,
     );
-    return I2iRequestPlan(
+    final wholePlan = I2iRequestPlan(
       imageB64: base64Encode(img.encodePng(whole)),
       maskB64: base64Encode(maskPng),
       width: requestSize.x,
@@ -331,6 +405,11 @@ class PrepareI2iRequestUseCase {
       summary: 'inpaint whole image ${base.width}x${base.height} -> '
           '${requestSize.x}x${requestSize.y}, '
           'strength ${config.strength.toStringAsFixed(2)}',
+    );
+    return I2iRequestBatch(
+      plans: [wholePlan],
+      serial: true,
+      summary: wholePlan.summary,
     );
   }
 
@@ -406,7 +485,22 @@ class PrepareI2iRequestUseCase {
     required Uint8List responseBytes,
     required AutocropCompositeInfo composite,
   }) async {
-    final base = _requireBaseImage();
+    final canvas = img.Image.from(_requireBaseImage());
+    pasteTileInto(
+      canvas: canvas,
+      responseBytes: responseBytes,
+      composite: composite,
+    );
+    return finishComposite(canvas: canvas, responseBytes: responseBytes);
+  }
+
+  /// Pastes one focus tile's response onto [canvas] in place, so a split mask
+  /// accumulates all of its tiles onto the same image.
+  void pasteTileInto({
+    required img.Image canvas,
+    required Uint8List responseBytes,
+    required AutocropCompositeInfo composite,
+  }) {
     final response = img.decodePng(responseBytes);
     if (response == null) {
       throw Exception('Failed to decode generated tile for compositing.');
@@ -438,18 +532,28 @@ class PrepareI2iRequestUseCase {
       );
     }
 
-    final canvas = img.Image.from(base);
     _pasteIntersection(canvas, content, outer);
+  }
 
+  /// A canvas seeded with the base image, ready for [pasteTileInto].
+  img.Image newCompositeCanvas() => img.Image.from(_requireBaseImage());
+
+  /// Encodes the finished canvas, re-embedding the response's stealth
+  /// metadata so imports keep working.
+  Future<Uint8List> finishComposite({
+    required img.Image canvas,
+    required Uint8List responseBytes,
+  }) async {
     var output = canvas;
     if (output.numChannels != 4) {
       output = output.convert(numChannels: 4);
     }
     var pngBytes = img.encodePng(output);
-
-    // Preserve the server's stealth metadata so imports keep working.
     try {
-      final metadataString = await ImageService().extractMetadata(response);
+      final response = img.decodePng(responseBytes);
+      final metadataString = response == null
+          ? null
+          : await ImageService().extractMetadata(response);
       if (metadataString != null) {
         pngBytes = await ImageService().embedMetadata(pngBytes, metadataString);
       }

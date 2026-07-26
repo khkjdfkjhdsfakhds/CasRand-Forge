@@ -292,6 +292,83 @@ void main() {
     expect(find.byKey(const Key('i2i-use-image-size')), findsNothing);
   });
 
+  testWidgets('enhance section offers magnifications and a preset', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    GetIt.I<PayloadConfig>().i2iConfig.setImage(solidPng(512, 512));
+
+    await tester.pumpWidget(
+      localizedApp(I2iPageView(viewmodel: I2iPageViewmodel())),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Enhance'), findsOneWidget);
+    // The official panel offers 1x and 1.5x only.
+    expect(find.byKey(const Key('enhance-scale-1.0')), findsOneWidget);
+    expect(find.byKey(const Key('enhance-scale-1.5')), findsOneWidget);
+    expect(find.byKey(const Key('enhance-scale-2.0')), findsNothing);
+    expect(find.text('1.5x  768×768'), findsOneWidget);
+    expect(find.byKey(const Key('enhance-preset-slider')), findsOneWidget);
+    expect(find.byKey(const Key('enhance-run')), findsOneWidget);
+    expect(find.textContaining('Enhance once → 768×768'), findsOneWidget);
+  });
+
+  testWidgets('enhance applies the target size, preset and clears the mask', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final payloadConfig = GetIt.I<PayloadConfig>();
+    final config = payloadConfig.i2iConfig;
+    config.setImage(solidPng(512, 512));
+    config.setMask(maskPng(512, 512), const <MaskStroke>[]);
+
+    final viewmodel = I2iPageViewmodel();
+    await tester.pumpWidget(localizedApp(I2iPageView(viewmodel: viewmodel)));
+    await tester.pumpAndSettle();
+
+    // Pick 1.5x and the strongest magnitude, then run.
+    final scaleChip = find.byKey(const Key('enhance-scale-1.5'));
+    await tester.ensureVisible(scaleChip);
+    await tester.tap(scaleChip);
+    await tester.pumpAndSettle();
+    viewmodel.setEnhancePresetIndex(4);
+    await tester.pumpAndSettle();
+
+    final runButton = find.byKey(const Key('enhance-run'));
+    await tester.ensureVisible(runButton);
+    await tester.tap(runButton);
+    await tester.pumpAndSettle();
+
+    // 512 * 1.5 = 768, already a multiple of 64.
+    expect(
+      payloadConfig.paramConfig.sizes,
+      [const GenerationSize(width: 768, height: 768)],
+    );
+    expect(config.strength, 0.7);
+    expect(config.noise, 0.1);
+    expect(config.hasMask, isFalse, reason: 'enhance re-renders the whole image');
+  });
+
+  testWidgets('enhance offers nothing when the image is already at the cap', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    // 1728x1728 is exactly the cap, so 1x is offered but 1.5x is not.
+    GetIt.I<PayloadConfig>().i2iConfig.setImage(solidPng(1728, 1728));
+
+    await tester.pumpWidget(
+      localizedApp(I2iPageView(viewmodel: I2iPageViewmodel())),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('enhance-scale-1.0')), findsOneWidget);
+    expect(find.byKey(const Key('enhance-scale-1.5')), findsNothing);
+  });
+
   testWidgets('display mode switch changes the result card widget', (
     tester,
   ) async {
@@ -354,14 +431,17 @@ void main() {
     );
   });
 
-  testWidgets('classic card shows the prompt and Anlas cost', (tester) async {
+  testWidgets('classic card shows the per-block prompt and Anlas cost', (
+    tester,
+  ) async {
     await tester.binding.setSurfaceSize(const Size(1200, 1000));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final command = Command.createAsyncNoParam(
       () async => InfoCardContent(
         title: 'generated.png',
-        info: 'comment body',
-        additionalInfo: const {'input': 'sunset over the sea'},
+        // The comment carries the per-block breakdown the card must show.
+        info: '示例提示词:\n--角色: 1girl\n--内容: sunset over the sea',
+        additionalInfo: const {'input': '1girl, sunset over the sea'},
         imageBytes: solidPng(64, 64),
         anlasCost: 21,
         anlasRemaining: 4979,
@@ -386,7 +466,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('generated.png'), findsOneWidget);
-    expect(find.text('sunset over the sea'), findsOneWidget);
+    expect(
+      find.text('示例提示词:\n--角色: 1girl\n--内容: sunset over the sea'),
+      findsOneWidget,
+      reason: 'the card shows the per-block breakdown, not the flat prompt',
+    );
     expect(find.text('Spent 21 Anlas · 4979 left'), findsOneWidget);
     expect(find.text('Token B'), findsOneWidget);
   });

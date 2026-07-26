@@ -372,17 +372,67 @@ FocusInpaintPlan? planFocusInpaint({
 }) {
   final bbox = maskBBoxFromCells(cells, imageWidth, imageHeight);
   if (bbox == null) return null;
-  final cap = max(minRequestSide * minRequestSide, maxArea);
-  final context = normalizeContextPx(contextPx);
+  return planFocusForRegion(
+    imageWidth: imageWidth,
+    imageHeight: imageHeight,
+    region: bbox,
+    maxArea: maxArea,
+    contextPx: contextPx,
+  );
+}
 
-  // The smallest acceptable frame: the mask plus its context margin, clipped
-  // to the image and snapped outward to the latent grid.
-  final mustLeft = _floorTo(max(0, bbox.x - context), latentGrid);
-  final mustTop = _floorTo(max(0, bbox.y - context), latentGrid);
-  final mustRight =
-      min(imageWidth, _ceilTo(min(imageWidth, bbox.right + context), latentGrid));
+/// Plans the focus frame for one repaint region (the whole mask, or a single
+/// tile of a split mask).
+FocusInpaintPlan? planFocusForRegion({
+  required int imageWidth,
+  required int imageHeight,
+  required CropRect region,
+  required int maxArea,
+  int contextPx = defaultContextPx,
+}) {
+  final context = normalizeContextPx(contextPx);
+  // Prefer a frame that also holds the context margin; when the region is so
+  // large that the margin no longer fits the budget (a tile of a split mask),
+  // fall back to a frame that only has to hold the region itself — the frame
+  // is still larger than the region, so it carries context anyway.
+  return _planFrameForRegion(
+        imageWidth: imageWidth,
+        imageHeight: imageHeight,
+        region: region,
+        maxArea: maxArea,
+        context: context,
+        requireContext: true,
+      ) ??
+      _planFrameForRegion(
+        imageWidth: imageWidth,
+        imageHeight: imageHeight,
+        region: region,
+        maxArea: maxArea,
+        context: context,
+        requireContext: false,
+      );
+}
+
+FocusInpaintPlan? _planFrameForRegion({
+  required int imageWidth,
+  required int imageHeight,
+  required CropRect region,
+  required int maxArea,
+  required int context,
+  required bool requireContext,
+}) {
+  final bbox = region;
+  final cap = max(minRequestSide * minRequestSide, maxArea);
+  final margin = requireContext ? context : 0;
+
+  // The smallest acceptable frame: the region plus its margin, clipped to the
+  // image and snapped outward to the latent grid.
+  final mustLeft = _floorTo(max(0, bbox.x - margin), latentGrid);
+  final mustTop = _floorTo(max(0, bbox.y - margin), latentGrid);
+  final mustRight = min(
+      imageWidth, _ceilTo(min(imageWidth, bbox.right + margin), latentGrid));
   final mustBottom = min(
-      imageHeight, _ceilTo(min(imageHeight, bbox.bottom + context), latentGrid));
+      imageHeight, _ceilTo(min(imageHeight, bbox.bottom + margin), latentGrid));
   final must = CropRect(
     x: mustLeft,
     y: mustTop,
@@ -444,20 +494,31 @@ FocusInpaintPlan? planFocusInpaint({
   if (geometry == null) return null;
 
   final scale = geometry.scale;
-  final innerLeft = best.x + context;
-  final innerTop = best.y + context;
-  final innerWidth = max(latentGrid, best.w - context * 2);
-  final innerHeight = max(latentGrid, best.h - context * 2);
+  // The effective margin is however much frame surrounds the region, capped
+  // at the requested context and kept on the 8-px grid.
+  final surround = [
+    bbox.x - best.x,
+    bbox.y - best.y,
+    best.right - bbox.right,
+    best.bottom - bbox.bottom,
+  ].reduce(min);
+  final effectiveContext = _clampInt(
+    _floorTo(max(0, surround), latentGrid),
+    0,
+    context,
+  );
+  final innerWidth = max(latentGrid, best.w - effectiveContext * 2);
+  final innerHeight = max(latentGrid, best.h - effectiveContext * 2);
 
   return FocusInpaintPlan(
     outer: best,
     inner: CropRect(
-      x: innerLeft,
-      y: innerTop,
+      x: best.x + effectiveContext,
+      y: best.y + effectiveContext,
       w: innerWidth,
       h: innerHeight,
     ),
-    contextPx: context,
+    contextPx: effectiveContext,
     scale: scale,
     contentWidth: geometry.contentWidth,
     contentHeight: geometry.contentHeight,
@@ -465,6 +526,254 @@ FocusInpaintPlan? planFocusInpaint({
     contentOffsetY: geometry.contentOffsetY,
     requestWidth: geometry.requestWidth,
     requestHeight: geometry.requestHeight,
+  );
+}
+
+/// How a mask was split into focus tiles.
+enum FocusSplitMode {
+  /// One tile covering the whole mask.
+  none,
+
+  /// The mask filled its frame, so it was halved along its long axis.
+  longAxis,
+
+  /// The mask was too large for one frame and was split into a grid.
+  grid,
+}
+
+/// A full inpainting batch: one or more focus tiles that together repaint the
+/// mask, composited onto the same canvas.
+class FocusInpaintBatch {
+  final List<FocusInpaintPlan> tiles;
+  final FocusSplitMode splitMode;
+
+  /// Tiles must run one after another when their frames overlap, because a
+  /// later tile has to see the previous tile's result.
+  final bool serial;
+
+  const FocusInpaintBatch({
+    required this.tiles,
+    required this.splitMode,
+    required this.serial,
+  });
+
+  int get tileCount => tiles.length;
+  bool get isSplit => tiles.length > 1;
+}
+
+/// Snap a split boundary onto the 8-px grid, staying within (lower, upper).
+int _snapBoundary(int value, int lower, int upper) {
+  if (upper < lower) return lower;
+  for (final candidate in [
+    (value / latentGrid).round() * latentGrid,
+    (value ~/ latentGrid) * latentGrid,
+    ((value + latentGrid - 1) ~/ latentGrid) * latentGrid,
+  ]) {
+    if (candidate >= lower && candidate <= upper) return candidate;
+  }
+  return _clampInt(value, lower, upper);
+}
+
+/// Split boundaries for [count] even slices of [start, start + size).
+List<int> _splitBoundaries(int start, int size, int count) {
+  final end = start + size;
+  if (count <= 1 || size <= 1) return [start, end];
+  final result = <int>[start];
+  for (var index = 1; index < count; index++) {
+    final even = start + (size * index) ~/ count;
+    final lower = result.last + 1;
+    final upper = end - (count - index);
+    result.add(_snapBoundary(even, lower, upper));
+  }
+  result.add(end);
+  return result;
+}
+
+/// Halve [rect] along its longer axis.
+List<CropRect> splitAlongLongAxis(CropRect rect) {
+  if (rect.w <= 0 || rect.h <= 0) return [rect];
+  if (rect.w >= rect.h) {
+    if (rect.w < 16) return [rect];
+    final cut = _snapBoundary(rect.x + rect.w ~/ 2, rect.x + 1, rect.right - 1);
+    if (cut <= rect.x || cut >= rect.right) return [rect];
+    return [
+      CropRect(x: rect.x, y: rect.y, w: cut - rect.x, h: rect.h),
+      CropRect(x: cut, y: rect.y, w: rect.right - cut, h: rect.h),
+    ];
+  }
+  if (rect.h < 16) return [rect];
+  final cut = _snapBoundary(rect.y + rect.h ~/ 2, rect.y + 1, rect.bottom - 1);
+  if (cut <= rect.y || cut >= rect.bottom) return [rect];
+  return [
+    CropRect(x: rect.x, y: rect.y, w: rect.w, h: cut - rect.y),
+    CropRect(x: rect.x, y: cut, w: rect.w, h: rect.bottom - cut),
+  ];
+}
+
+/// Split [rect] into a grid of tiles no larger than [tileWidth] x [tileHeight].
+List<CropRect> splitIntoGrid(CropRect rect, int tileWidth, int tileHeight) {
+  final cols = max(1, (rect.w / max(1, tileWidth)).ceil());
+  final rows = max(1, (rect.h / max(1, tileHeight)).ceil());
+  final xs = _splitBoundaries(rect.x, rect.w, cols);
+  final ys = _splitBoundaries(rect.y, rect.h, rows);
+  final result = <CropRect>[];
+  for (var row = 0; row < rows; row++) {
+    final top = ys[row];
+    final bottom = ys[row + 1];
+    for (var col = 0; col < cols; col++) {
+      final left = xs[col];
+      final right = xs[col + 1];
+      if (right > left && bottom > top) {
+        result.add(
+          CropRect(x: left, y: top, w: right - left, h: bottom - top),
+        );
+      }
+    }
+  }
+  return result;
+}
+
+/// Tile size that splits [rect] into the fewest pieces within the area cap,
+/// preferring a tile aspect close to the region's own.
+Point<int> bestTileSizeFor(CropRect rect, int maxArea) {
+  final regionAspect = log(max(1, rect.w) / max(1, rect.h));
+  Point<int>? best;
+  var bestCount = 1 << 30;
+  var bestAspectDiff = double.infinity;
+  for (final size in candidateSizesForArea(maxArea)) {
+    final w = min(size.x, maxRequestSide);
+    final h = min(size.y, maxRequestSide);
+    final count = (rect.w / max(1, w)).ceil() * (rect.h / max(1, h)).ceil();
+    final aspectDiff = (log(w / h) - regionAspect).abs();
+    if (count < bestCount ||
+        (count == bestCount && aspectDiff < bestAspectDiff)) {
+      best = Point(w, h);
+      bestCount = count;
+      bestAspectDiff = aspectDiff;
+    }
+  }
+  return best ?? const Point(1024, 1024);
+}
+
+/// Fraction of the frame's latent cells that the mask covers.
+double maskedCellRatio(
+  MaskCellGrid cells,
+  CropRect frame,
+  int imageWidth,
+  int imageHeight,
+) {
+  final left = max(0, frame.x) ~/ maskCellSize;
+  final top = max(0, frame.y) ~/ maskCellSize;
+  final right = (min(imageWidth, frame.right) / maskCellSize).ceil();
+  final bottom = (min(imageHeight, frame.bottom) / maskCellSize).ceil();
+  if (right <= left || bottom <= top) return 0;
+  var masked = 0;
+  var total = 0;
+  for (var cy = top; cy < bottom; cy++) {
+    for (var cx = left; cx < right; cx++) {
+      total++;
+      if (cells.cellAt(cx, cy)) masked++;
+    }
+  }
+  return total == 0 ? 0 : masked / total;
+}
+
+bool _rectsOverlap(CropRect a, CropRect b) {
+  return a.x < b.right && b.x < a.right && a.y < b.bottom && b.y < a.bottom;
+}
+
+bool _anyFramesOverlap(List<FocusInpaintPlan> tiles) {
+  for (var i = 0; i < tiles.length; i++) {
+    for (var j = i + 1; j < tiles.length; j++) {
+      if (_rectsOverlap(tiles[i].outer, tiles[j].outer)) return true;
+    }
+  }
+  return false;
+}
+
+/// Ratio above which a frame counts as "mostly mask" and gets split so each
+/// half is repainted at a higher effective resolution.
+const double longAxisSplitThreshold = 0.75;
+
+/// Plans the whole inpainting batch, splitting the mask into several focus
+/// tiles when one frame cannot cover it (grid) or would be almost entirely
+/// masked (long axis).
+///
+/// Returns null when the mask is empty or no tile can be planned, in which
+/// case the caller falls back to a whole-image request.
+FocusInpaintBatch? planFocusInpaintBatch({
+  required int imageWidth,
+  required int imageHeight,
+  required MaskCellGrid cells,
+  required int maxArea,
+  int contextPx = defaultContextPx,
+}) {
+  final bbox = maskBBoxFromCells(cells, imageWidth, imageHeight);
+  if (bbox == null) return null;
+  final cap = max(minRequestSide * minRequestSide, maxArea);
+
+  final single = planFocusForRegion(
+    imageWidth: imageWidth,
+    imageHeight: imageHeight,
+    region: bbox,
+    maxArea: cap,
+    contextPx: contextPx,
+  );
+
+  List<CropRect> regions;
+  var splitMode = FocusSplitMode.none;
+  if (single != null) {
+    // One frame covers the mask. Split it only when the frame is almost all
+    // mask, where two halves each get a better effective resolution.
+    final ratio = maskedCellRatio(cells, single.outer, imageWidth, imageHeight);
+    if (ratio > longAxisSplitThreshold) {
+      final halves = splitAlongLongAxis(bbox);
+      if (halves.length > 1) {
+        regions = halves;
+        splitMode = FocusSplitMode.longAxis;
+      } else {
+        regions = [bbox];
+      }
+    } else {
+      regions = [bbox];
+    }
+  } else {
+    // The mask does not fit one frame; tile it.
+    final tileSize = bestTileSizeFor(bbox, cap);
+    regions = splitIntoGrid(bbox, tileSize.x, tileSize.y);
+    splitMode =
+        regions.length > 1 ? FocusSplitMode.grid : FocusSplitMode.none;
+  }
+
+  // Plan each region, dropping duplicate frames so overlapping regions that
+  // resolve to the same frame are only requested once.
+  final tiles = <FocusInpaintPlan>[];
+  final seenFrames = <String>{};
+  for (final region in regions) {
+    final plan = planFocusForRegion(
+      imageWidth: imageWidth,
+      imageHeight: imageHeight,
+      region: region,
+      maxArea: cap,
+      contextPx: contextPx,
+    );
+    if (plan == null) continue;
+    final key = '${plan.outer.x},${plan.outer.y},'
+        '${plan.outer.w},${plan.outer.h}';
+    if (!seenFrames.add(key)) continue;
+    tiles.add(plan);
+  }
+  if (tiles.isEmpty) return null;
+  if (tiles.length == 1) splitMode = FocusSplitMode.none;
+
+  return FocusInpaintBatch(
+    tiles: tiles,
+    splitMode: splitMode,
+    // Overlapping frames must be sequential so each tile sees the previous
+    // result; a long-axis split always produces overlapping frames.
+    serial: tiles.length <= 1 ||
+        splitMode == FocusSplitMode.longAxis ||
+        _anyFramesOverlap(tiles),
   );
 }
 

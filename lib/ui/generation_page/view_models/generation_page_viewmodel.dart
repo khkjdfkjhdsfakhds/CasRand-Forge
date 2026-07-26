@@ -25,7 +25,7 @@ const infoCardContentListLength = 200;
 /// additional workers exist only while multiple API tokens are enabled.
 class _WorkerState {
   PayloadGenerationResult? cachedPayloadResult;
-  I2iRequestPlan? cachedI2iPlan;
+  I2iRequestBatch? cachedI2iBatch;
   int cacheRetriesCount = 0;
   Timer? intervalTimer;
   Command<void, InfoCardContent>? command;
@@ -41,7 +41,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
   Command<void, InfoCardContent>? currentCommand;
 
   PayloadGenerationResult? _cachedPayloadResult;
-  I2iRequestPlan? _cachedI2iPlan;
+  I2iRequestBatch? _cachedI2iBatch;
   int _cacheRetriesCount = 0;
   Timer? _generationIntervalTimer;
 
@@ -187,6 +187,64 @@ class GenerationPageViewmodel extends ChangeNotifier {
     return payloadConfig.settings.apiKey;
   }
 
+  /// Runs a split-mask inpaint: every focus tile is requested and composited
+  /// onto the same canvas. Overlapping tiles run one after another so each
+  /// sees the previous result; non-overlapping grid tiles run concurrently,
+  /// capped like the reference implementation.
+  Future<Uint8List> _runSplitInpaint({
+    required I2iRequestBatch batch,
+    required PayloadGenerationResult basePayloadResult,
+    required Future<Uint8List> Function(Map<String, dynamic>) sendPlan,
+  }) async {
+    const maxTileConcurrency = 4;
+    final useCase = PrepareI2iRequestUseCase(config: payloadConfig.i2iConfig);
+    final canvas = useCase.newCompositeCanvas();
+    Uint8List? lastResponse;
+
+    Map<String, dynamic> payloadFor(I2iRequestPlan plan) {
+      return GeneratePayloadUseCase(
+        payloadConfig: payloadConfig,
+        i2iPlan: plan,
+      )().payload;
+    }
+
+    if (batch.serial) {
+      for (final plan in batch.plans) {
+        // Re-plan against the canvas as it stands so later tiles build on the
+        // already-repainted pixels.
+        final response = await sendPlan(payloadFor(plan));
+        useCase.pasteTileInto(
+          canvas: canvas,
+          responseBytes: response,
+          composite: plan.composite!,
+        );
+        lastResponse = response;
+      }
+    } else {
+      for (var start = 0;
+          start < batch.plans.length;
+          start += maxTileConcurrency) {
+        final slice = batch.plans.skip(start).take(maxTileConcurrency).toList();
+        final responses = await Future.wait(
+          slice.map((plan) => sendPlan(payloadFor(plan))),
+        );
+        for (final (index, response) in responses.indexed) {
+          useCase.pasteTileInto(
+            canvas: canvas,
+            responseBytes: response,
+            composite: slice[index].composite!,
+          );
+          lastResponse = response;
+        }
+      }
+    }
+
+    return useCase.finishComposite(
+      canvas: canvas,
+      responseBytes: lastResponse ?? Uint8List(0),
+    );
+  }
+
   String? _tokenLabelForWorker(int workerIndex) {
     if (_activeTokens.length <= 1) return null;
     if (workerIndex < _activeTokenLabels.length) {
@@ -211,26 +269,27 @@ class GenerationPageViewmodel extends ChangeNotifier {
       PayloadGenerationResult? payloadResult;
       try {
         // Check whether cached payload exists, use cache if exists
-        I2iRequestPlan? i2iPlan;
+        I2iRequestBatch? i2iBatch;
         if (_getCachedPayload(workerIndex) != null &&
             _getCacheRetries(workerIndex) < 3) {
           payloadResult = _getCachedPayload(workerIndex)!;
-          i2iPlan = _getCachedPlan(workerIndex);
+          i2iBatch = _getCachedBatch(workerIndex);
           _setCacheRetries(workerIndex, _getCacheRetries(workerIndex) + 1);
         } else {
           final i2iConfig = payloadConfig.i2iConfig;
           if (i2iConfig.hasImage) {
             final target = payloadConfig.paramConfig.pickSize();
-            i2iPlan = await PrepareI2iRequestUseCase(config: i2iConfig)(
+            i2iBatch = await PrepareI2iRequestUseCase(config: i2iConfig)
+                .planBatch(
               targetWidth: target.width,
               targetHeight: target.height,
             );
           }
           payloadResult = GeneratePayloadUseCase(
             payloadConfig: payloadConfig,
-            i2iPlan: i2iPlan,
+            i2iPlan: i2iBatch?.plans.first,
           )();
-          _setCachedPayload(workerIndex, payloadResult, i2iPlan);
+          _setCachedPayload(workerIndex, payloadResult, i2iBatch);
           _setCacheRetries(workerIndex, 0);
         }
 
@@ -244,24 +303,38 @@ class GenerationPageViewmodel extends ChangeNotifier {
           if (balance != null) _lastAnlasBalances[token] = balance;
         }
 
-        final request = ApiRequest(
-          endpoint: endpoint,
-          proxy: settings.proxy,
-          headers: payloadConfig.getHeadersForToken(token),
-          payload: payloadResult.payload,
-        );
-        final response = await ApiService().fetchData(request);
-        // Even if response status is not 2xx, postprocess could throw correct exception.
-        var imageBytes = ImageService().processResponse(response.data);
-        // Paste the autocrop window back into the original image.
-        final composite = i2iPlan?.composite;
-        if (composite != null) {
-          imageBytes = await PrepareI2iRequestUseCase(
-            config: payloadConfig.i2iConfig,
-          ).compositeResponse(
-            responseBytes: imageBytes,
-            composite: composite,
+        final headers = payloadConfig.getHeadersForToken(token);
+        Future<Uint8List> sendPlan(Map<String, dynamic> payload) async {
+          final response = await ApiService().fetchData(ApiRequest(
+            endpoint: endpoint,
+            proxy: settings.proxy,
+            headers: headers,
+            payload: payload,
+          ));
+          // Even if response status is not 2xx, postprocess could throw
+          // the correct exception.
+          return ImageService().processResponse(response.data);
+        }
+
+        Uint8List imageBytes;
+        if (i2iBatch != null && i2iBatch.isSplit) {
+          imageBytes = await _runSplitInpaint(
+            batch: i2iBatch,
+            basePayloadResult: payloadResult,
+            sendPlan: sendPlan,
           );
+        } else {
+          imageBytes = await sendPlan(payloadResult.payload);
+          // Paste the focus frame back into the original image.
+          final composite = i2iBatch?.plans.first.composite;
+          if (composite != null) {
+            imageBytes = await PrepareI2iRequestUseCase(
+              config: payloadConfig.i2iConfig,
+            ).compositeResponse(
+              responseBytes: imageBytes,
+              composite: composite,
+            );
+          }
         }
         // Add custom metadata
         if (settings.metadataEraseEnabled) {
@@ -340,25 +413,25 @@ class GenerationPageViewmodel extends ChangeNotifier {
     return _extraWorkers[workerIndex]?.cachedPayloadResult;
   }
 
-  I2iRequestPlan? _getCachedPlan(int workerIndex) {
-    if (workerIndex == 0) return _cachedI2iPlan;
-    return _extraWorkers[workerIndex]?.cachedI2iPlan;
+  I2iRequestBatch? _getCachedBatch(int workerIndex) {
+    if (workerIndex == 0) return _cachedI2iBatch;
+    return _extraWorkers[workerIndex]?.cachedI2iBatch;
   }
 
   void _setCachedPayload(
     int workerIndex,
     PayloadGenerationResult? result,
-    I2iRequestPlan? plan,
+    I2iRequestBatch? batch,
   ) {
     if (workerIndex == 0) {
       _cachedPayloadResult = result;
-      _cachedI2iPlan = plan;
+      _cachedI2iBatch = batch;
       return;
     }
     final state = _extraWorkers[workerIndex];
     if (state == null) return;
     state.cachedPayloadResult = result;
-    state.cachedI2iPlan = plan;
+    state.cachedI2iBatch = batch;
   }
 
   int _getCacheRetries(int workerIndex) {
@@ -486,7 +559,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
     if (!payloadConfig.settings.rememberSequentialProgress) {
       payloadConfig.resetSequentialState();
       _cachedPayloadResult = null;
-      _cachedI2iPlan = null;
+      _cachedI2iBatch = null;
       _cacheRetriesCount = 0;
     }
     _clearExtraWorkers();

@@ -2,6 +2,8 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/core/constants/image_formats.dart';
+import 'package:nai_casrand/data/models/generation_size.dart';
+import 'package:nai_casrand/data/models/i2i_config.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
 import 'package:nai_casrand/ui/core/utils/platform_support.dart';
 import 'package:nai_casrand/ui/core/widgets/slider_list_tile.dart';
@@ -29,6 +31,7 @@ class I2iPageView extends StatelessWidget {
               _buildBaseImageCard(context),
               if (config.hasImage) _buildI2iParamsCard(context),
               if (config.hasImage) _buildInpaintCard(context),
+              if (config.hasImage) _buildEnhanceCard(context),
               if (config.hasImage) _buildActionCard(context),
             ],
           ),
@@ -108,8 +111,9 @@ class I2iPageView extends StatelessWidget {
               leading: const Icon(Icons.image_outlined),
               title: Text(tr('i2i_base_image')),
               subtitle: viewmodel.config.hasImage
-                  ? Text('${viewmodel.config.width} × ${viewmodel.config.height}')
-                  : Text(tr('i2i_active_note')),
+                  ? Text(
+                      '${viewmodel.config.width} × ${viewmodel.config.height}')
+                  : Text(tr('i2i_page_sections_hint')),
             ),
             dropArea,
             const SizedBox(height: 8),
@@ -245,6 +249,92 @@ class I2iPageView extends StatelessWidget {
     );
   }
 
+  Widget _buildEnhanceCard(BuildContext context) {
+    final config = viewmodel.config;
+    final scales = viewmodel.availableEnhanceScales;
+    final target = viewmodel.enhanceTargetSize;
+    return Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.auto_awesome_outlined),
+            title: Text(tr('enhance_section')),
+            subtitle: Text(tr('enhance_section_hint')),
+          ),
+          if (scales.isEmpty)
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.info_outline),
+              title: Text(tr('enhance_too_large')),
+            )
+          else ...[
+            ListTile(
+              title: Text(tr('enhance_scale_label')),
+              subtitle: Padding(
+                padding: const EdgeInsets.only(top: 8.0),
+                child: Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: scales.map((scale) {
+                    final size = viewmodel.enhanceTargetSizeFor(scale);
+                    return ChoiceChip(
+                      key: Key('enhance-scale-$scale'),
+                      selected: (config.enhanceScale - scale).abs() < 1e-6,
+                      onSelected: (_) => viewmodel.setEnhanceScale(scale),
+                      label: Text(
+                        '${scale}x  ${size.width}×${size.height}',
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ),
+            SliderListTile(
+              key: const Key('enhance-preset-slider'),
+              leading: const Icon(Icons.tune),
+              title: '${tr('enhance_strength_preset')}: '
+                  '${tr(viewmodel.enhancePreset.labelKey)} '
+                  '(${viewmodel.enhancePreset.strength.toStringAsFixed(2)})',
+              sliderValue: config.enhancePresetIndex.toDouble(),
+              min: 0,
+              max: (enhancePresets.length - 1).toDouble(),
+              divisions: enhancePresets.length - 1,
+              onChanged: (value) =>
+                  viewmodel.setEnhancePresetIndex(value.round()),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (config.hasMask)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8.0),
+                      child: Text(
+                        tr('enhance_clears_mask_notice'),
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                      ),
+                    ),
+                  FilledButton.tonalIcon(
+                    key: const Key('enhance-run'),
+                    onPressed: () => _runEnhance(context, target),
+                    icon: const Icon(Icons.auto_awesome),
+                    label: Text(
+                      '${tr('enhance_run')} → ${target.width}×${target.height}',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _buildActionCard(BuildContext context) {
     return Card(
       child: Column(
@@ -303,6 +393,23 @@ class I2iPageView extends StatelessWidget {
     );
     if (result == null) return;
     viewmodel.setMask(result.maskBytes, result.strokes);
+  }
+
+  void _runEnhance(BuildContext context, GenerationSize target) {
+    final generationViewmodel = GetIt.I<GenerationPageViewmodel>();
+    if (generationViewmodel.commandStatus.isGenerationActive.value ||
+        (generationViewmodel.currentCommand?.isExecuting.value ?? false)) {
+      showWarningBar(context, tr('i2i_generation_busy'));
+      return;
+    }
+    viewmodel.applyEnhance();
+    generationViewmodel.runSingleGeneration();
+    showInfoBar(
+      context,
+      tr('enhance_started', namedArgs: {
+        'size': '${target.width}×${target.height}',
+      }),
+    );
   }
 
   void _generateOnce(BuildContext context) {
