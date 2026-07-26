@@ -7,16 +7,29 @@ import 'package:nai_casrand/data/models/i2i_config.dart';
 import 'package:nai_casrand/data/services/image_service.dart';
 import 'package:nai_casrand/data/use_cases/autocrop_planner.dart';
 
-/// Composite instructions for pasting an autocrop response back into the
-/// original image.
+/// Composite instructions for pasting a focus-inpainting response back into
+/// the original image: take [contentWidth] x [contentHeight] pixels at
+/// ([contentOffsetX], [contentOffsetY]) out of the response, scale them back
+/// to the outer frame, and draw that at the frame's position.
 class AutocropCompositeInfo {
-  final CropRect window;
-  final bool scaled;
+  final CropRect outer;
+  final int contentOffsetX;
+  final int contentOffsetY;
+  final int contentWidth;
+  final int contentHeight;
+  final double scale;
 
   const AutocropCompositeInfo({
-    required this.window,
-    required this.scaled,
+    required this.outer,
+    required this.contentOffsetX,
+    required this.contentOffsetY,
+    required this.contentWidth,
+    required this.contentHeight,
+    required this.scale,
   });
+
+  /// True when the content is the outer frame at 1:1 and needs no resampling.
+  bool get isNativeScale => contentWidth == outer.w && contentHeight == outer.h;
 }
 
 /// Everything the payload builder needs for one img2img / infill request.
@@ -225,61 +238,68 @@ class PrepareI2iRequestUseCase {
     final cap = areaCapForSize(targetWidth, targetHeight);
 
     if (config.autocropEnabled) {
-      final plan = planAutocrop(
+      final plan = planFocusInpaint(
         imageWidth: base.width,
         imageHeight: base.height,
         cells: cells,
         maxArea: cap,
-      )!;
-      final window = plan.window;
-      final img.Image tileImage;
-      if (plan.wholeImageDirect) {
-        tileImage = base;
-      } else {
-        var tile = _cropWithPadding(base, window);
-        if (plan.scaled) {
-          tile = img.copyResize(
-            tile,
-            width: plan.requestWidth,
-            height: plan.requestHeight,
+      );
+      if (plan != null) {
+        // Crop the outer frame, magnify it to content size, then center it on
+        // the 64-aligned request canvas.
+        var content = _cropWithPadding(base, plan.outer);
+        if (plan.contentWidth != plan.outer.w ||
+            plan.contentHeight != plan.outer.h) {
+          content = img.copyResize(
+            content,
+            width: plan.contentWidth,
+            height: plan.contentHeight,
             interpolation: img.Interpolation.cubic,
           );
         }
-        tileImage = tile;
+        final canvas = img.Image(
+          width: plan.requestWidth,
+          height: plan.requestHeight,
+          numChannels: 3,
+        );
+        img.compositeImage(
+          canvas,
+          content,
+          dstX: plan.contentOffsetX,
+          dstY: plan.contentOffsetY,
+        );
+        final maskPng = _renderFocusMask(
+          mask: mask,
+          imageWidth: base.width,
+          imageHeight: base.height,
+          plan: plan,
+        );
+        return I2iRequestPlan(
+          imageB64: base64Encode(img.encodePng(canvas)),
+          maskB64: base64Encode(maskPng),
+          width: plan.requestWidth,
+          height: plan.requestHeight,
+          strength: config.strength,
+          noise: config.noise,
+          addOriginalImage: config.addOriginalImage,
+          composite: AutocropCompositeInfo(
+            outer: plan.outer,
+            contentOffsetX: plan.contentOffsetX,
+            contentOffsetY: plan.contentOffsetY,
+            contentWidth: plan.contentWidth,
+            contentHeight: plan.contentHeight,
+            scale: plan.scale,
+          ),
+          summary: 'inpaint focus: ${plan.describe()}, '
+              'strength ${config.strength.toStringAsFixed(2)}',
+        );
       }
-      final maskPng = _renderRequestMask(
-        mask: mask,
-        imageWidth: base.width,
-        imageHeight: base.height,
-        window: window,
-        requestWidth: plan.requestWidth,
-        requestHeight: plan.requestHeight,
-      );
-      final mode = plan.wholeImageDirect
-          ? 'whole image'
-          : plan.scaled
-              ? 'window ${window.w}x${window.h}@(${window.x},${window.y}) '
-                  'scaled to ${plan.requestWidth}x${plan.requestHeight}'
-              : 'window ${window.w}x${window.h}@(${window.x},${window.y})';
-      return I2iRequestPlan(
-        imageB64: base64Encode(plan.wholeImageDirect
-            ? _pngBytesForOriginal(base)
-            : img.encodePng(tileImage)),
-        maskB64: base64Encode(maskPng),
-        width: plan.requestWidth,
-        height: plan.requestHeight,
-        strength: config.strength,
-        noise: config.noise,
-        addOriginalImage: config.addOriginalImage,
-        composite: plan.wholeImageDirect
-            ? null
-            : AutocropCompositeInfo(window: window, scaled: plan.scaled),
-        summary: 'inpaint autocrop: $mode, '
-            'strength ${config.strength.toStringAsFixed(2)}',
-      );
+      // Mask plus its context margin exceeds the budget: focus inpainting
+      // refuses to shrink, so fall through to the whole-image path.
     }
 
-    // Autocrop off: send the whole image, scaled to a compliant size.
+    // Autocrop off, or the repaint area is too large to focus on: send the
+    // whole image, scaled down to a compliant size.
     final requestSize = requestSizeForWindow(base.width, base.height, cap);
     final window = CropRect(x: 0, y: 0, w: base.width, h: base.height);
     img.Image whole = base;
@@ -314,6 +334,72 @@ class PrepareI2iRequestUseCase {
     );
   }
 
+  /// Renders the request-resolution mask for a focus plan: mask pixels are
+  /// mapped through the outer frame and the content scale, quantized to the
+  /// 8-px latent grid, and the padding around the content stays black.
+  Uint8List _renderFocusMask({
+    required img.Image mask,
+    required int imageWidth,
+    required int imageHeight,
+    required FocusInpaintPlan plan,
+  }) {
+    final cellsW = (plan.requestWidth / maskCellSize).ceil();
+    final cellsH = (plan.requestHeight / maskCellSize).ceil();
+    final cells = Uint8List(cellsW * cellsH);
+    final outer = plan.outer;
+    for (var cy = 0; cy < cellsH; cy++) {
+      final ry0 = cy * maskCellSize;
+      final ry1 = min(plan.requestHeight, ry0 + maskCellSize);
+      // Request space -> content space -> outer space -> image space.
+      final cy0 = ry0 - plan.contentOffsetY;
+      final cy1 = ry1 - plan.contentOffsetY;
+      if (cy1 <= 0 || cy0 >= plan.contentHeight) continue;
+      final oy0 = outer.y + (cy0 * outer.h / plan.contentHeight).floor();
+      final oy1 = outer.y + (cy1 * outer.h / plan.contentHeight).ceil();
+      final iy0 = max(0, oy0);
+      final iy1 = min(imageHeight, oy1);
+      if (iy1 <= iy0) continue;
+      for (var cx = 0; cx < cellsW; cx++) {
+        final rx0 = cx * maskCellSize;
+        final rx1 = min(plan.requestWidth, rx0 + maskCellSize);
+        final cx0 = rx0 - plan.contentOffsetX;
+        final cx1 = rx1 - plan.contentOffsetX;
+        if (cx1 <= 0 || cx0 >= plan.contentWidth) continue;
+        final ox0 = outer.x + (cx0 * outer.w / plan.contentWidth).floor();
+        final ox1 = outer.x + (cx1 * outer.w / plan.contentWidth).ceil();
+        final ix0 = max(0, ox0);
+        final ix1 = min(imageWidth, ox1);
+        if (ix1 <= ix0) continue;
+        var found = false;
+        for (var y = iy0; y < iy1 && !found; y++) {
+          for (var x = ix0; x < ix1; x++) {
+            if (_maskPixelSet(mask, imageWidth, imageHeight, x, y)) {
+              found = true;
+              break;
+            }
+          }
+        }
+        if (found) cells[cy * cellsW + cx] = 1;
+      }
+    }
+
+    final maskImage = img.Image(
+      width: plan.requestWidth,
+      height: plan.requestHeight,
+      numChannels: 3,
+    );
+    for (var y = 0; y < plan.requestHeight; y++) {
+      final cy = min(cellsH - 1, y ~/ maskCellSize);
+      for (var x = 0; x < plan.requestWidth; x++) {
+        final cx = min(cellsW - 1, x ~/ maskCellSize);
+        if (cells[cy * cellsW + cx] > 0) {
+          maskImage.setPixelRgb(x, y, 255, 255, 255);
+        }
+      }
+    }
+    return img.encodePng(maskImage);
+  }
+
   /// Pastes the response tile back into the original image and returns the
   /// final PNG bytes (with the tile's stealth metadata re-embedded).
   Future<Uint8List> compositeResponse({
@@ -321,30 +407,39 @@ class PrepareI2iRequestUseCase {
     required AutocropCompositeInfo composite,
   }) async {
     final base = _requireBaseImage();
-    final mask = _requireMaskImage();
-    final tile = img.decodePng(responseBytes);
-    if (tile == null) {
+    final response = img.decodePng(responseBytes);
+    if (response == null) {
       throw Exception('Failed to decode generated tile for compositing.');
     }
-    final window = composite.window;
-
-    final canvas = img.Image.from(base);
-    if (!composite.scaled) {
-      _pasteIntersection(canvas, tile, window);
-    } else {
-      final upscaled = img.copyResize(
-        tile,
-        width: window.w,
-        height: window.h,
-        interpolation: img.Interpolation.cubic,
-      );
-      _pasteMaskedFeathered(
-        canvas: canvas,
-        tile: upscaled,
-        window: window,
-        mask: mask,
+    final outer = composite.outer;
+    if (response.width < composite.contentOffsetX + composite.contentWidth ||
+        response.height < composite.contentOffsetY + composite.contentHeight) {
+      throw Exception(
+        'Response ${response.width}x${response.height} is smaller than the '
+        'planned content area; cannot composite.',
       );
     }
+
+    // Cut the content out of the request canvas, then scale it back to the
+    // outer frame's own resolution.
+    var content = img.copyCrop(
+      response,
+      x: composite.contentOffsetX,
+      y: composite.contentOffsetY,
+      width: composite.contentWidth,
+      height: composite.contentHeight,
+    );
+    if (!composite.isNativeScale) {
+      content = img.copyResize(
+        content,
+        width: outer.w,
+        height: outer.h,
+        interpolation: img.Interpolation.cubic,
+      );
+    }
+
+    final canvas = img.Image.from(base);
+    _pasteIntersection(canvas, content, outer);
 
     var output = canvas;
     if (output.numChannels != 4) {
@@ -354,7 +449,7 @@ class PrepareI2iRequestUseCase {
 
     // Preserve the server's stealth metadata so imports keep working.
     try {
-      final metadataString = await ImageService().extractMetadata(tile);
+      final metadataString = await ImageService().extractMetadata(response);
       if (metadataString != null) {
         pngBytes = await ImageService().embedMetadata(pngBytes, metadataString);
       }
@@ -497,60 +592,5 @@ class PrepareI2iRequestUseCase {
       height: h,
     );
     img.compositeImage(canvas, srcPart, dstX: ix, dstY: iy);
-  }
-
-  /// Feathered mask-area-only paste, used when the tile was up-scaled so
-  /// untouched pixels keep their original quality.
-  void _pasteMaskedFeathered({
-    required img.Image canvas,
-    required img.Image tile,
-    required CropRect window,
-    required img.Image mask,
-  }) {
-    // Build a window-space alpha map from the quantized mask cells.
-    final alpha = img.Image(
-      width: window.w,
-      height: window.h,
-      numChannels: 1,
-    );
-    for (var y = 0; y < window.h; y++) {
-      final iy = window.y + y;
-      if (iy < 0 || iy >= canvas.height) continue;
-      for (var x = 0; x < window.w; x++) {
-        final ix = window.x + x;
-        if (ix < 0 || ix >= canvas.width) continue;
-        if (_maskPixelSet(mask, canvas.width, canvas.height, ix, iy)) {
-          alpha.setPixelRgb(x, y, 255, 0, 0);
-        }
-      }
-    }
-    final feathered = img.gaussianBlur(alpha, radius: maskCellSize);
-
-    final ix0 = max(0, window.x);
-    final iy0 = max(0, window.y);
-    final ix1 = min(canvas.width, window.right);
-    final iy1 = min(canvas.height, window.bottom);
-    for (var iy = iy0; iy < iy1; iy++) {
-      final wy = iy - window.y;
-      for (var ix = ix0; ix < ix1; ix++) {
-        final wx = ix - window.x;
-        final a = feathered.getPixel(wx, wy).r.toInt();
-        if (a <= 0) continue;
-        final src = tile.getPixel(wx, wy);
-        if (a >= 255) {
-          canvas.setPixelRgb(ix, iy, src.r, src.g, src.b);
-          continue;
-        }
-        final dst = canvas.getPixel(ix, iy);
-        final na = a / 255.0;
-        canvas.setPixelRgb(
-          ix,
-          iy,
-          (dst.r + (src.r - dst.r) * na).round(),
-          (dst.g + (src.g - dst.g) * na).round(),
-          (dst.b + (src.b - dst.b) * na).round(),
-        );
-      }
-    }
   }
 }
