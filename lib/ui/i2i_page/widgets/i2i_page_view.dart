@@ -4,19 +4,68 @@ import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/core/constants/image_formats.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/models/i2i_config.dart';
+import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
 import 'package:nai_casrand/ui/core/utils/platform_support.dart';
 import 'package:nai_casrand/ui/core/widgets/slider_list_tile.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
 import 'package:nai_casrand/ui/i2i_page/view_models/i2i_page_viewmodel.dart';
+import 'package:nai_casrand/ui/i2i_page/widgets/director_tool_card.dart';
 import 'package:nai_casrand/ui/i2i_page/widgets/mask_editor_view.dart';
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 
-/// The 图生图 / 局部重绘 (img2img / inpaint) destination page.
-class I2iPageView extends StatelessWidget {
+/// The 图生图 / Enhance destination page (img2img, inpainting, Enhance and
+/// Director Tools).
+class I2iPageView extends StatefulWidget {
   final I2iPageViewmodel viewmodel;
 
   const I2iPageView({super.key, required this.viewmodel});
+
+  @override
+  State<I2iPageView> createState() => _I2iPageViewState();
+}
+
+class _I2iPageViewState extends State<I2iPageView> {
+  final ScrollController _scrollController = ScrollController();
+  final GlobalKey _enhanceKey = GlobalKey();
+  final GlobalKey _directorKey = GlobalKey();
+  final GlobalKey _inpaintKey = GlobalKey();
+
+  I2iPageViewmodel get viewmodel => widget.viewmodel;
+
+  @override
+  void initState() {
+    super.initState();
+    // Act on how the page was entered ("send to Enhance", "inpaint", ...).
+    WidgetsBinding.instance.addPostFrameCallback((_) => _applyEntryMode());
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _applyEntryMode() async {
+    if (!mounted) return;
+    final mode = GetIt.I<NavigationRequest>().i2iEntryMode;
+    final target = switch (mode) {
+      I2iEntryMode.enhance => _enhanceKey,
+      I2iEntryMode.director => _directorKey,
+      I2iEntryMode.inpaint => _inpaintKey,
+      I2iEntryMode.baseImage => null,
+    };
+    if (target?.currentContext != null) {
+      await Scrollable.ensureVisible(
+        target!.currentContext!,
+        duration: const Duration(milliseconds: 300),
+        alignment: 0.1,
+      );
+    }
+    if (mode == I2iEntryMode.inpaint && mounted && viewmodel.config.hasImage) {
+      await _openMaskEditor(context);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -26,13 +75,21 @@ class I2iPageView extends StatelessWidget {
         final config = viewmodel.config;
         return Scaffold(
           body: ListView(
+            controller: _scrollController,
             padding: const EdgeInsets.all(12.0),
             children: [
               _buildBaseImageCard(context),
               if (config.hasImage) _buildI2iParamsCard(context),
-              if (config.hasImage) _buildInpaintCard(context),
-              if (config.hasImage) _buildEnhanceCard(context),
+              if (config.hasImage)
+                KeyedSubtree(key: _inpaintKey, child: _buildInpaintCard(context)),
+              if (config.hasImage)
+                KeyedSubtree(key: _enhanceKey, child: _buildEnhanceCard(context)),
               if (config.hasImage) _buildActionCard(context),
+              KeyedSubtree(
+                key: _directorKey,
+                child: _buildDirectorSourceCard(context),
+              ),
+              DirectorToolCard(viewmodel: viewmodel),
             ],
           ),
         );
@@ -351,6 +408,61 @@ class I2iPageView extends StatelessWidget {
               icon: const Icon(Icons.play_arrow),
               label: Text(tr('i2i_generate_once')),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Director Tools work on their own source image, which usually comes from
+  /// a result card but can also be the current base image.
+  Widget _buildDirectorSourceCard(BuildContext context) {
+    final director = viewmodel.directorToolConfig;
+    return Card(
+      child: Column(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.photo_library_outlined),
+            title: Text(tr('director_tool_source')),
+            subtitle: Text(
+              director.hasImage
+                  ? '${director.width} × ${director.height}'
+                  : tr('director_tool_no_image'),
+            ),
+          ),
+          if (director.hasImage)
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 220),
+              child: Image.memory(
+                director.imageBytes!,
+                fit: BoxFit.contain,
+                gaplessPlayback: true,
+              ),
+            ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton.icon(
+                key: const Key('director-import-image'),
+                onPressed: () => viewmodel.pickAndSetDirectorImage(),
+                icon: const Icon(Icons.file_open_outlined),
+                label: Text(tr('i2i_import_image')),
+              ),
+              if (viewmodel.config.hasImage)
+                TextButton.icon(
+                  key: const Key('director-use-base-image'),
+                  onPressed: viewmodel.useBaseImageForDirector,
+                  icon: const Icon(Icons.download_outlined),
+                  label: Text(tr('director_tool_use_base')),
+                ),
+              if (director.hasImage)
+                TextButton.icon(
+                  key: const Key('director-remove-image'),
+                  onPressed: viewmodel.removeDirectorImage,
+                  icon: const Icon(Icons.delete_outline),
+                  label: Text(tr('i2i_remove_image')),
+                ),
+            ],
           ),
         ],
       ),

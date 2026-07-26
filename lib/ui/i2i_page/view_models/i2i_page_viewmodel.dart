@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:get_it/get_it.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:nai_casrand/data/models/director_tool_config.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/models/i2i_config.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
@@ -142,6 +143,57 @@ class I2iPageViewmodel extends ChangeNotifier {
 
   void setEnhancePresetIndex(int value) {
     config.setEnhancePresetIndex(value);
+    notifyListeners();
+  }
+
+  // --- Director Tools ------------------------------------------------------
+
+  DirectorToolConfig get directorToolConfig => payloadConfig.directorToolConfig;
+
+  Future<bool> pickAndSetDirectorImage() async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(source: ImageSource.gallery);
+    if (picked == null) return false;
+    directorToolConfig.setImage(await picked.readAsBytes());
+    notifyListeners();
+    return true;
+  }
+
+  /// Reuses the Img2Img base image as the Director Tools source.
+  void useBaseImageForDirector() {
+    final bytes = config.imageBytes;
+    if (bytes == null) return;
+    directorToolConfig.setImage(bytes);
+    notifyListeners();
+  }
+
+  void setDirectorTool(String type) {
+    directorToolConfig.setType(type);
+    notifyListeners();
+  }
+
+  void toggleDirectorEmotion(String emotion, bool selected) {
+    directorToolConfig.toggleEmotion(emotion, selected);
+    notifyListeners();
+  }
+
+  void setDirectorDefry(int value) {
+    directorToolConfig.setDefry(value);
+    notifyListeners();
+  }
+
+  void setDirectorOverrideEnabled(bool value) {
+    directorToolConfig.setOverrideEnabled(value);
+    notifyListeners();
+  }
+
+  void setDirectorOverridePrompt(String value) {
+    directorToolConfig.setOverridePrompt(value);
+    notifyListeners();
+  }
+
+  void removeDirectorImage() {
+    directorToolConfig.removeImage();
     notifyListeners();
   }
 

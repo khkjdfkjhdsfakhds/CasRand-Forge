@@ -8,6 +8,7 @@ import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/generated_image_view.dart';
+import 'package:nai_casrand/ui/generation_page/widgets/result_actions.dart';
 import 'package:flutter_command/flutter_command.dart';
 
 class InfoCard extends StatelessWidget {
@@ -149,24 +150,125 @@ class InfoCard extends StatelessWidget {
   }
 }
 
-class InfoDetailPage extends StatelessWidget {
+/// Width at which the detail page switches from a stacked layout to image
+/// beside prompt, matching the navigation shell's own breakpoint.
+const double detailWideLayoutBreakpoint = 640;
+
+class InfoDetailPage extends StatefulWidget {
   final InfoCardContent content;
 
   const InfoDetailPage({super.key, required this.content});
 
   @override
+  State<InfoDetailPage> createState() => _InfoDetailPageState();
+}
+
+class _InfoDetailPageState extends State<InfoDetailPage> {
+  final FocusNode _focusNode = FocusNode();
+
+  InfoCardContent get content => widget.content;
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.space &&
+        content.imageBytes != null) {
+      _openFullscreenImage(context, content);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      Navigator.of(context).pop();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    List<Widget> contents = [
+    return Scaffold(
+      appBar: AppBar(title: Text(content.title)),
+      body: Focus(
+        focusNode: _focusNode,
+        autofocus: true,
+        onKeyEvent: _handleKey,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final wide =
+                constraints.maxWidth >= detailWideLayoutBreakpoint &&
+                    content.imageBytes != null;
+            return wide ? _buildWideLayout(context) : _buildStackedLayout(context);
+          },
+        ),
+      ),
+    );
+  }
+
+  /// Image on the left, prompt and parameters on the right — the layout the
+  /// result cards use, so a tall image no longer pushes the prompt off-screen.
+  Widget _buildWideLayout(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(
+          flex: 5,
+          child: Column(
+            children: [
+              ResultActionBar(content: content),
+              Expanded(child: _buildImage(context, fit: BoxFit.contain)),
+            ],
+          ),
+        ),
+        const VerticalDivider(width: 1),
+        Expanded(
+          flex: 4,
+          child: SingleChildScrollView(
+            child: Column(children: _buildInfoTiles(context)),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// The original single-column layout, kept for narrow windows and phones.
+  Widget _buildStackedLayout(BuildContext context) {
+    return SingleChildScrollView(
+      child: Column(
+        children: [
+          if (content.imageBytes != null) ...[
+            ResultActionBar(content: content),
+            _buildImage(context, fit: BoxFit.contain),
+          ],
+          ..._buildInfoTiles(context),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildImage(BuildContext context, {required BoxFit fit}) {
+    if (content.imageBytes == null) return const SizedBox.shrink();
+    return GeneratedImageView(
+      content: content,
+      child: GestureDetector(
+        key: const Key('detail-image-zoom-target'),
+        onTap: () => _openFullscreenImage(context, content),
+        child: Image.memory(content.imageBytes!, fit: fit),
+      ),
+    );
+  }
+
+  List<Widget> _buildInfoTiles(BuildContext context) {
+    final tiles = <Widget>[
       buildInfoTile(tr('title'), content.title, context),
       buildInfoTile(tr('info'), content.info, context),
       if (content.tokenLabel != null)
         buildInfoTile(tr('api_token'), content.tokenLabel!, context),
       if (content.anlasCost != null)
-        buildInfoTile(
-          tr('anlas_cost'),
-          content.anlasCost.toString(),
-          context,
-        ),
+        buildInfoTile(tr('anlas_cost'), content.anlasCost.toString(), context),
       if (content.anlasRemaining != null)
         buildInfoTile(
           tr('anlas_remaining'),
@@ -175,34 +277,30 @@ class InfoDetailPage extends StatelessWidget {
         ),
     ];
     for (final item in content.additionalInfo.entries) {
-      contents.add(buildInfoTile(item.key, item.value.toString(), context));
+      tiles.add(buildInfoTile(item.key, item.value.toString(), context));
     }
+    return tiles;
+  }
 
-    final body = Scaffold(
-      appBar: AppBar(title: Text(content.title)),
-      body: SingleChildScrollView(
-        child: Column(
-          children: [
-            if (content.imageBytes != null)
-              GeneratedImageView(
-                content: content,
-                child: GestureDetector(
-                  key: const Key('detail-image-zoom-target'),
-                  onTap: () => _openFullscreenImage(context, content),
-                  child: Image.memory(content.imageBytes!, fit: BoxFit.contain),
-                ),
-              ),
-            ...contents,
-          ],
-        ),
+  Widget buildInfoTile(String title, String body, BuildContext context) {
+    return Column(children: [
+      ListTile(
+        titleAlignment: ListTileTitleAlignment.top,
+        title: Text(title),
+        subtitle: SelectableText(body),
+        trailing: IconButton(
+            onPressed: () => _copyContent(body, context),
+            tooltip: tr('copy_to_clipboard'),
+            icon: const Icon(Icons.copy)),
       ),
-    );
+      const Divider(),
+    ]);
+  }
 
-    // Tapping outside the image closes the page; the image itself zooms.
-    return GestureDetector(
-      onTap: () => Navigator.of(context).pop(),
-      child: body,
-    );
+  void _copyContent(String body, BuildContext context) async {
+    await Clipboard.setData(ClipboardData(text: body));
+    if (!context.mounted) return;
+    showInfoBar(context, '${tr('info_export_to_clipboard')}${tr('succeed')}');
   }
 
   void _openFullscreenImage(BuildContext context, InfoCardContent content) {
@@ -213,49 +311,37 @@ class InfoDetailPage extends StatelessWidget {
       ),
     );
   }
-
-  Widget buildInfoTile(String title, String content, BuildContext context) {
-    return Column(children: [
-      ListTile(
-        titleAlignment: ListTileTitleAlignment.top,
-        title: Text(title),
-        subtitle: SelectableText(content),
-        trailing: IconButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              _copyContent(content, context);
-            },
-            tooltip: tr('copy_to_clipboard'),
-            icon: const Icon(Icons.copy)),
-      ),
-      const Divider(),
-    ]);
-  }
-
-  void _copyContent(String content, BuildContext context) async {
-    await Clipboard.setData(ClipboardData(text: content));
-    if (!context.mounted) return;
-    showInfoBar(context, '${tr('info_export_to_clipboard')}${tr('succeed')}');
-  }
-
-  getSelectableTextPage(String title, String text) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(tr('selectable') + tr('colon') + title),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: SelectableText(text),
-      ),
-    );
-  }
 }
 
-/// Fullscreen viewer with pinch/scroll zoom and panning.
-class FullscreenImageView extends StatelessWidget {
+/// Fullscreen viewer with pinch/scroll zoom and panning. Space or Escape
+/// returns to the detail page.
+class FullscreenImageView extends StatefulWidget {
   final InfoCardContent content;
 
   const FullscreenImageView({super.key, required this.content});
+
+  @override
+  State<FullscreenImageView> createState() => _FullscreenImageViewState();
+}
+
+class _FullscreenImageViewState extends State<FullscreenImageView> {
+  final FocusNode _focusNode = FocusNode();
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.space ||
+        event.logicalKey == LogicalKeyboardKey.escape) {
+      Navigator.of(context).pop();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -265,20 +351,25 @@ class FullscreenImageView extends StatelessWidget {
         backgroundColor: Colors.black54,
         foregroundColor: Colors.white,
         title: Text(
-          content.title,
+          widget.content.title,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
       ),
-      body: Center(
-        child: InteractiveViewer(
-          key: const Key('fullscreen-image-viewer'),
-          minScale: 1.0,
-          maxScale: 8.0,
-          child: Image.memory(
-            content.imageBytes!,
-            fit: BoxFit.contain,
-            filterQuality: FilterQuality.high,
+      body: Focus(
+        focusNode: _focusNode,
+        autofocus: true,
+        onKeyEvent: _handleKey,
+        child: Center(
+          child: InteractiveViewer(
+            key: const Key('fullscreen-image-viewer'),
+            minScale: 1.0,
+            maxScale: 8.0,
+            child: Image.memory(
+              widget.content.imageBytes!,
+              fit: BoxFit.contain,
+              filterQuality: FilterQuality.high,
+            ),
           ),
         ),
       ),

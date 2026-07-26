@@ -1,4 +1,5 @@
 import 'package:nai_casrand/data/models/character_config.dart';
+import 'package:nai_casrand/data/models/director_tool_config.dart';
 import 'package:nai_casrand/data/models/i2i_config.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/precise_reference_config.dart';
@@ -46,6 +47,7 @@ class PayloadConfig {
   Settings settings;
 
   I2IConfig i2iConfig = I2IConfig();
+  DirectorToolConfig directorToolConfig = DirectorToolConfig();
   List<VibeConfig> vibeConfigList = [];
   List<VibeConfigV4> vibeConfigListV4 = [];
   List<PreciseReferenceConfig> preciseReferenceConfigList = [];
@@ -93,6 +95,7 @@ class PayloadConfig {
 
   void resetTransientConfigs() {
     i2iConfig = I2IConfig();
+    directorToolConfig = DirectorToolConfig();
     vibeConfigList.clear();
     vibeConfigListV4.clear();
     preciseReferenceConfigList.clear();

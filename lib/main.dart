@@ -2,6 +2,7 @@ import 'package:adaptive_theme/adaptive_theme.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:nai_casrand/data/models/command_status.dart';
+import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/services/config_service.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
@@ -22,6 +23,7 @@ void main() async {
   GetIt.instance
       .registerLazySingleton(() => PayloadConfig.fromJson(savedConfig));
   GetIt.instance.registerLazySingleton(() => CommandStatus());
+  GetIt.instance.registerLazySingleton(() => NavigationRequest());
 
   GetIt.instance.registerLazySingleton(() => GenerationPageViewmodel());
 

@@ -8,6 +8,7 @@ import 'package:flutter_command/flutter_command.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/data/models/api_request.dart';
 import 'package:nai_casrand/data/models/command_status.dart';
+import 'package:nai_casrand/data/models/director_tool_config.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
@@ -293,14 +294,16 @@ class GenerationPageViewmodel extends ChangeNotifier {
           _setCacheRetries(workerIndex, 0);
         }
 
-        // Fetch the starting balance once per token so cost can be derived.
+        // Fetch the starting balance once per token so cost can be derived,
+        // and record the tier so cost estimates know about Opus.
         if (!settings.debugApiEnabled &&
             !_lastAnlasBalances.containsKey(token)) {
-          final balance = await AccountService().fetchAnlasBalance(
+          final info = await AccountService().fetchSubscription(
             token: token,
             proxy: settings.proxy,
           );
-          if (balance != null) _lastAnlasBalances[token] = balance;
+          if (info?.anlas != null) _lastAnlasBalances[token] = info!.anlas!;
+          if (info != null) settings.subscriptionTier = info.tier;
         }
 
         final headers = payloadConfig.getHeadersForToken(token);
@@ -465,6 +468,75 @@ class GenerationPageViewmodel extends ChangeNotifier {
     });
 
     // Execute command
+    currentCommand = command;
+    addAndRunCommand(command);
+  }
+
+  /// Runs one Director Tool against its source image. These go to the
+  /// augment-image endpoint and consume no Anlas.
+  void runDirectorTool() {
+    if (commandStatus.isGenerationActive.value) return;
+    if (currentCommand != null && currentCommand!.isExecuting.value) return;
+    final config = payloadConfig.directorToolConfig;
+    if (!config.hasImage) return;
+    commandStatus.generationTimestamp = DateTime.now();
+
+    commandFunc() async {
+      final settings = payloadConfig.settings;
+      final payload = config.getPayload();
+      final toolName = config.displayName;
+      try {
+        final response = await ApiService().fetchData(ApiRequest(
+          endpoint: augmentImageEndpoint,
+          proxy: settings.proxy,
+          headers: payloadConfig.getHeadersForToken(settings.apiKey),
+          payload: payload,
+        ));
+        var imageBytes = ImageService().processResponse(response.data);
+        if (settings.metadataEraseEnabled) {
+          final metadataString = settings.customMetadataEnabled
+              ? settings.customMetadataContent
+              : '';
+          imageBytes =
+              await ImageService().embedMetadata(imageBytes, metadataString);
+        }
+        final fileName = [
+          FileService()
+              .generateTimestampString(commandStatus.generationTimestamp),
+          commandStatus.currentGenerationCount.toString().padLeft(6, '0'),
+          config.type,
+          '${FileService().generateRandomString()}.png',
+        ].join('-');
+        final imageFilePath = await FileService().savePictureToFile(
+          imageBytes,
+          fileName,
+          settings.outputFolderPath,
+        );
+        commandStatus.currentGenerationCount++;
+        // The request carries the source image inline; keep it out of the card.
+        final info = Map<String, dynamic>.from(payload)..remove('image');
+        return InfoCardContent(
+          title: fileName,
+          info: '$toolName\n${info.entries.map((e) => '${e.key}: ${e.value}')
+              .join('\n')}',
+          additionalInfo: info,
+          imageBytes: imageBytes,
+          imageFilePath: imageFilePath,
+        );
+      } catch (e) {
+        return InfoCardContent(
+          title: 'Error occurred in Director Tools.',
+          info: e.toString(),
+          additionalInfo: const {},
+        );
+      }
+    }
+
+    final command = Command.createAsyncNoParam(
+      commandFunc,
+      initialValue: InfoCardContent.fromEmpty(),
+    );
+    command.isExecuting.addListener(notifyListeners);
     currentCommand = command;
     addAndRunCommand(command);
   }

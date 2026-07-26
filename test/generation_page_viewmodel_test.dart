@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/data/models/api_token_config.dart';
 import 'package:nai_casrand/data/models/command_status.dart';
+import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
@@ -52,6 +53,7 @@ void main() {
   setUp(() async {
     await GetIt.instance.reset();
     GetIt.instance.registerSingleton(CommandStatus());
+    GetIt.instance.registerSingleton(NavigationRequest());
     GetIt.instance.registerSingleton(
       PayloadConfig(
         rootPromptConfig: PromptConfig(strs: [], prompts: []),

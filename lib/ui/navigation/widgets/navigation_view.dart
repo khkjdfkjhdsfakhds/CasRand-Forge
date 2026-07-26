@@ -7,6 +7,7 @@ import 'package:nai_casrand/ui/config_page/widgets/config_page_view.dart';
 import 'package:nai_casrand/ui/config_page/view_models/config_page_viewmodel.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/generation_page_view.dart';
+import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/ui/i2i_page/view_models/i2i_page_viewmodel.dart';
 import 'package:nai_casrand/ui/i2i_page/widgets/i2i_page_view.dart';
 import 'package:nai_casrand/ui/navigation/view_models/navigation_view_model.dart';
@@ -32,6 +33,8 @@ class NavigationViewState extends State<NavigationView> {
 
   DateTime? _lastBackButtonPressTime;
 
+  NavigationRequest get _navigationRequest => GetIt.I<NavigationRequest>();
+
   void _changeIndex(int value) {
     widget.viewModel.changeIndex(value);
     setState(() {
@@ -39,12 +42,29 @@ class NavigationViewState extends State<NavigationView> {
     });
   }
 
+  /// Handles a jump asked for by another page (e.g. "use as base image").
+  void _handleNavigationRequest() {
+    final destination = _navigationRequest.requestedDestination.value;
+    if (destination == null) return;
+    _changeIndex(destination.destinationIndex);
+    _navigationRequest.consume();
+  }
+
   @override
   void initState() {
     super.initState();
+    _navigationRequest.requestedDestination
+        .addListener(_handleNavigationRequest);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _showWelcomeDialog();
     });
+  }
+
+  @override
+  void dispose() {
+    _navigationRequest.requestedDestination
+        .removeListener(_handleNavigationRequest);
+    super.dispose();
   }
 
   @override

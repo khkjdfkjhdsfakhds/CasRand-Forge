@@ -22,6 +22,10 @@ class Settings {
   /// Multi-token support. Empty list means "use [apiKey] only".
   List<ApiTokenConfig> apiTokens;
 
+  /// Subscription tier of the active account (3 = Opus), refreshed from the
+  /// balance query. Drives the "free under Opus" cost estimate.
+  int subscriptionTier;
+
   // Output dir, for windows only
   String outputFolderPath;
 
@@ -63,6 +67,7 @@ class Settings {
     required this.generationPageColumnCount,
     required this.themeMode,
     this.resultDisplayMode = 'waterfall',
+    this.subscriptionTier = 0,
     List<ApiTokenConfig>? apiTokens,
   }) : apiTokens = apiTokens ?? [];
 
@@ -100,6 +105,7 @@ class Settings {
       apiKey: json['api_key'] ?? 'pst-abcd',
       apiTokens: apiTokens,
       resultDisplayMode: json['result_display_mode'] ?? 'waterfall',
+      subscriptionTier: json['subscription_tier'] ?? 0,
       outputFolderPath: json['output_folder'] ?? '',
       proxy: json['proxy'] ?? '',
       debugApiEnabled: false,
@@ -125,6 +131,7 @@ class Settings {
       'api_key': apiKey,
       'api_tokens': apiTokens.map((entry) => entry.toJson()).toList(),
       'result_display_mode': resultDisplayMode,
+      'subscription_tier': subscriptionTier,
       'output_folder': outputFolderPath,
       'proxy': proxy,
       'metadata_erase_enabled': metadataEraseEnabled,
