@@ -276,14 +276,17 @@
     "action_director_done": "Loaded into Director Tools.",
     "anlas_free": "Free",
     "director_tool_section": "Director Tools",
-    "director_tool_hint": "Single-image tools that run on the source image, separate from generation.",
+    "director_tool_hint": "Single-image tools, independent of the generation pipeline. Import a source image to begin.",
     "director_tool_emotions": "Emotions (one is picked at random)",
     "director_tool_defry": "Prompt strength (defry)",
     "director_tool_prompt": "Extra prompt",
     "director_tool_run": "Run tool",
     "director_tool_started": "Running {tool}. Check the Generation page for the result.",
     "director_tool_no_image": "Import a source image first.",
-    "director_tool_free": "Director Tools do not consume Anlas.",
     "director_tool_source": "Director Tools source",
-    "director_tool_use_base": "Use base image"
+    "director_tool_use_base": "Use base image",
+    "director_tool_cost_notice": "Director Tools consume Anlas",
+    "director_tool_cost_value": "This run costs about {anlas} Anlas. Background removal is the most expensive tool; cost scales with image size and Opus grants no free allowance here.",
+    "i2i_sections_locked": "Import a base image to unlock",
+    "i2i_sections_locked_hint": "Img2Img parameters, Inpaint and Enhance all work on the base image above."
 }

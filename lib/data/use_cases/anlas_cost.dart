@@ -133,3 +133,28 @@ AnlasCost estimateBatchAnlasCost({
     perImageAnlas: perImage,
   );
 }
+
+/// Director Tools are billed per image, scaled by pixel count. Background
+/// removal costs noticeably more than the rest and carries a flat base fee.
+///
+/// Measured against the live API (the docs do not publish these numbers):
+/// bg-removal 384→14, 512→20, 1024→65; every other tool 512→5, 1024→20.
+const int directorToolUnitPixels = 512 * 512;
+const double directorToolAnlasPerUnit = 5;
+const double bgRemovalAnlasPerUnit = 15;
+const double bgRemovalBaseAnlas = 5;
+
+/// Anlas a Director Tool run will consume. Unlike generation, Opus grants no
+/// free allowance here.
+int estimateDirectorToolAnlas({
+  required String tool,
+  required int width,
+  required int height,
+}) {
+  if (width <= 0 || height <= 0) return 0;
+  final units = (width * height) / directorToolUnitPixels;
+  final raw = tool == 'bg-removal'
+      ? bgRemovalBaseAnlas + bgRemovalAnlasPerUnit * units
+      : directorToolAnlasPerUnit * units;
+  return max(1, raw.ceil());
+}

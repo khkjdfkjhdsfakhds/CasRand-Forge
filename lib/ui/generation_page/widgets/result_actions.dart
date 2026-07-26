@@ -92,7 +92,7 @@ class ResultActions {
     final bytes = content.imageBytes;
     if (bytes == null) return;
     _payloadConfig.directorToolConfig.setImage(Uint8List.fromList(bytes));
-    _navigation.goToI2i(I2iEntryMode.director);
+    _navigation.goTo(AppDestination.directorTools);
     showInfoBar(context, tr('action_director_done'));
   }
 

@@ -296,6 +296,8 @@ void main() {
     expect(payloadConfig.directorToolConfig.hasImage, isTrue);
     // Director Tools works on its own source, not the img2img base image.
     expect(payloadConfig.i2iConfig.hasImage, isFalse);
-    expect(navigation.i2iEntryMode, I2iEntryMode.director);
+    // It is its own destination, not a section of the Img2Img page.
+    expect(navigation.requestedDestination.value,
+        AppDestination.directorTools);
   });
 }

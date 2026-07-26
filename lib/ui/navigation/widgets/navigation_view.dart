@@ -8,6 +8,8 @@ import 'package:nai_casrand/ui/config_page/view_models/config_page_viewmodel.dar
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/generation_page_view.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
+import 'package:nai_casrand/ui/director_page/view_models/director_page_viewmodel.dart';
+import 'package:nai_casrand/ui/director_page/widgets/director_page_view.dart';
 import 'package:nai_casrand/ui/i2i_page/view_models/i2i_page_viewmodel.dart';
 import 'package:nai_casrand/ui/i2i_page/widgets/i2i_page_view.dart';
 import 'package:nai_casrand/ui/navigation/view_models/navigation_view_model.dart';
@@ -99,6 +101,7 @@ class NavigationViewState extends State<NavigationView> {
     final pages = [
       GenerationPageView(viewmodel: GetIt.I()),
       I2iPageView(viewmodel: I2iPageViewmodel()),
+      DirectorPageView(viewmodel: DirectorPageViewmodel()),
       ConfigPageView(
         viewmodel: ConfigPageViewmodel(),
       ),
@@ -125,6 +128,9 @@ class NavigationViewState extends State<NavigationView> {
                       icon: const Icon(Icons.brush),
                       label: Text(context.tr('i2i_inpaint'))),
                   NavigationRailDestination(
+                      icon: const Icon(Icons.auto_fix_high),
+                      label: Text(context.tr('director_tool'))),
+                  NavigationRailDestination(
                       icon: const Icon(Icons.visibility),
                       label: Text(context.tr('prompt_config'))),
                   NavigationRailDestination(
@@ -150,6 +156,9 @@ class NavigationViewState extends State<NavigationView> {
                   BottomNavigationBarItem(
                       icon: const Icon(Icons.brush),
                       label: context.tr('i2i_inpaint')),
+                  BottomNavigationBarItem(
+                      icon: const Icon(Icons.auto_fix_high),
+                      label: context.tr('director_tool')),
                   BottomNavigationBarItem(
                       icon: const Icon(Icons.visibility),
                       label: context.tr('prompt_config')),
@@ -185,8 +194,7 @@ class NavigationViewState extends State<NavigationView> {
               onTapLink: (text, href, title) {
                 if (href == null) return;
                 if (href == '#jump_to_settings') {
-                  // Jump to settings page (index 3 since the I2I page landed)
-                  _changeIndex(3);
+                  _changeIndex(AppDestination.settings.destinationIndex);
                   Navigator.of(dialogContext).pop();
                 } else {
                   // Launch link

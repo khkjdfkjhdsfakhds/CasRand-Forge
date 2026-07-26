@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 enum AppDestination {
   generation,
   imageToImage,
+  directorTools,
   config,
   settings;
 
@@ -22,8 +23,6 @@ enum I2iEntryMode {
   /// Set the base image and focus the Enhance section.
   enhance,
 
-  /// Focus the Director Tools section.
-  director,
 }
 
 /// Lets a page ask the navigation shell to switch destinations, so result

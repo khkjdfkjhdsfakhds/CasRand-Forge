@@ -10,7 +10,6 @@ import 'package:nai_casrand/ui/core/utils/platform_support.dart';
 import 'package:nai_casrand/ui/core/widgets/slider_list_tile.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
 import 'package:nai_casrand/ui/i2i_page/view_models/i2i_page_viewmodel.dart';
-import 'package:nai_casrand/ui/i2i_page/widgets/director_tool_card.dart';
 import 'package:nai_casrand/ui/i2i_page/widgets/mask_editor_view.dart';
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 
@@ -28,7 +27,6 @@ class I2iPageView extends StatefulWidget {
 class _I2iPageViewState extends State<I2iPageView> {
   final ScrollController _scrollController = ScrollController();
   final GlobalKey _enhanceKey = GlobalKey();
-  final GlobalKey _directorKey = GlobalKey();
   final GlobalKey _inpaintKey = GlobalKey();
 
   I2iPageViewmodel get viewmodel => widget.viewmodel;
@@ -51,7 +49,6 @@ class _I2iPageViewState extends State<I2iPageView> {
     final mode = GetIt.I<NavigationRequest>().i2iEntryMode;
     final target = switch (mode) {
       I2iEntryMode.enhance => _enhanceKey,
-      I2iEntryMode.director => _directorKey,
       I2iEntryMode.inpaint => _inpaintKey,
       I2iEntryMode.baseImage => null,
     };
@@ -79,17 +76,19 @@ class _I2iPageViewState extends State<I2iPageView> {
             padding: const EdgeInsets.all(12.0),
             children: [
               _buildBaseImageCard(context),
-              if (config.hasImage) _buildI2iParamsCard(context),
-              if (config.hasImage)
-                KeyedSubtree(key: _inpaintKey, child: _buildInpaintCard(context)),
-              if (config.hasImage)
-                KeyedSubtree(key: _enhanceKey, child: _buildEnhanceCard(context)),
-              if (config.hasImage) _buildActionCard(context),
-              KeyedSubtree(
-                key: _directorKey,
-                child: _buildDirectorSourceCard(context),
-              ),
-              DirectorToolCard(viewmodel: viewmodel),
+              if (config.hasImage) ...[
+                _buildI2iParamsCard(context),
+                KeyedSubtree(
+                  key: _inpaintKey,
+                  child: _buildInpaintCard(context),
+                ),
+                KeyedSubtree(
+                  key: _enhanceKey,
+                  child: _buildEnhanceCard(context),
+                ),
+                _buildActionCard(context),
+              ] else
+                _buildSectionPreview(context),
             ],
           ),
         );
@@ -194,6 +193,43 @@ class _I2iPageViewState extends State<I2iPageView> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// Without a base image the page would show nothing but the drop area,
+  /// which makes Inpaint and Enhance look missing. List what unlocks instead.
+  Widget _buildSectionPreview(BuildContext context) {
+    final disabled = Theme.of(context).disabledColor;
+    return Card(
+      child: Column(
+        children: [
+          ListTile(
+            leading: Icon(Icons.lock_outline, color: disabled),
+            title: Text(tr('i2i_sections_locked')),
+            subtitle: Text(tr('i2i_sections_locked_hint')),
+          ),
+          ListTile(
+            dense: true,
+            leading: Icon(Icons.tune, color: disabled),
+            title: Text(tr('i2i_parameters'),
+                style: TextStyle(color: disabled)),
+          ),
+          ListTile(
+            dense: true,
+            leading: Icon(Icons.brush_outlined, color: disabled),
+            title: Text(tr('inpaint_section'),
+                style: TextStyle(color: disabled)),
+          ),
+          ListTile(
+            dense: true,
+            leading: Icon(Icons.auto_awesome_outlined, color: disabled),
+            title: Text(tr('enhance_section'),
+                style: TextStyle(color: disabled)),
+            subtitle: Text(tr('enhance_section_hint'),
+                style: TextStyle(color: disabled)),
+          ),
+        ],
       ),
     );
   }
@@ -408,61 +444,6 @@ class _I2iPageViewState extends State<I2iPageView> {
               icon: const Icon(Icons.play_arrow),
               label: Text(tr('i2i_generate_once')),
             ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Director Tools work on their own source image, which usually comes from
-  /// a result card but can also be the current base image.
-  Widget _buildDirectorSourceCard(BuildContext context) {
-    final director = viewmodel.directorToolConfig;
-    return Card(
-      child: Column(
-        children: [
-          ListTile(
-            leading: const Icon(Icons.photo_library_outlined),
-            title: Text(tr('director_tool_source')),
-            subtitle: Text(
-              director.hasImage
-                  ? '${director.width} × ${director.height}'
-                  : tr('director_tool_no_image'),
-            ),
-          ),
-          if (director.hasImage)
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 220),
-              child: Image.memory(
-                director.imageBytes!,
-                fit: BoxFit.contain,
-                gaplessPlayback: true,
-              ),
-            ),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              TextButton.icon(
-                key: const Key('director-import-image'),
-                onPressed: () => viewmodel.pickAndSetDirectorImage(),
-                icon: const Icon(Icons.file_open_outlined),
-                label: Text(tr('i2i_import_image')),
-              ),
-              if (viewmodel.config.hasImage)
-                TextButton.icon(
-                  key: const Key('director-use-base-image'),
-                  onPressed: viewmodel.useBaseImageForDirector,
-                  icon: const Icon(Icons.download_outlined),
-                  label: Text(tr('director_tool_use_base')),
-                ),
-              if (director.hasImage)
-                TextButton.icon(
-                  key: const Key('director-remove-image'),
-                  onPressed: viewmodel.removeDirectorImage,
-                  icon: const Icon(Icons.delete_outline),
-                  label: Text(tr('i2i_remove_image')),
-                ),
-            ],
           ),
         ],
       ),

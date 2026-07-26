@@ -178,4 +178,64 @@ void main() {
     expect(cost.anlas, greaterThan(0));
     expect(cost.isFreeUnderOpus, isFalse);
   });
+
+  group('director tools', () {
+    test('matches the measured background-removal prices', () {
+      // Measured live; there is no published formula.
+      expect(
+        estimateDirectorToolAnlas(tool: 'bg-removal', width: 384, height: 384),
+        14,
+      );
+      expect(
+        estimateDirectorToolAnlas(tool: 'bg-removal', width: 512, height: 512),
+        20,
+      );
+      expect(
+        estimateDirectorToolAnlas(
+            tool: 'bg-removal', width: 1024, height: 1024),
+        65,
+      );
+    });
+
+    test('matches the measured price of the other tools', () {
+      for (final tool in ['lineart', 'emotion', 'declutter-keep-bubbles']) {
+        expect(
+          estimateDirectorToolAnlas(tool: tool, width: 512, height: 512),
+          5,
+          reason: '$tool at 512',
+        );
+      }
+      expect(
+        estimateDirectorToolAnlas(tool: 'lineart', width: 1024, height: 1024),
+        20,
+      );
+    });
+
+    test('background removal always costs more than the other tools', () {
+      for (final size in [384, 512, 768, 1024, 1472]) {
+        final bg = estimateDirectorToolAnlas(
+            tool: 'bg-removal', width: size, height: size);
+        final other = estimateDirectorToolAnlas(
+            tool: 'lineart', width: size, height: size);
+        expect(bg, greaterThan(other), reason: 'at $size');
+      }
+    });
+
+    test('cost scales with pixels and is never zero', () {
+      expect(
+        estimateDirectorToolAnlas(tool: 'lineart', width: 1024, height: 1024),
+        greaterThan(
+          estimateDirectorToolAnlas(tool: 'lineart', width: 512, height: 512),
+        ),
+      );
+      expect(
+        estimateDirectorToolAnlas(tool: 'lineart', width: 8, height: 8),
+        greaterThanOrEqualTo(1),
+      );
+      expect(
+        estimateDirectorToolAnlas(tool: 'lineart', width: 0, height: 0),
+        0,
+      );
+    });
+  });
 }

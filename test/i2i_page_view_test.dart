@@ -141,10 +141,15 @@ void main() {
 
     expect(find.byKey(const Key('i2i-import-image-area')), findsOneWidget);
     expect(find.text('Base Image'), findsOneWidget);
-    // Parameter, inpaint and action cards stay hidden until an image exists.
+    // The interactive controls stay hidden until an image exists...
     expect(find.byKey(const Key('inpaint-edit-mask')), findsNothing);
     expect(find.byKey(const Key('i2i-generate-once')), findsNothing);
-    expect(find.text('Img2Img Parameters'), findsNothing);
+    expect(find.byKey(const Key('enhance-run')), findsNothing);
+    // ...but the page still lists what importing an image unlocks, so Enhance
+    // and Inpaint do not look missing.
+    expect(find.text('Import a base image to unlock'), findsOneWidget);
+    expect(find.text('Img2Img Parameters'), findsOneWidget);
+    expect(find.text('Enhance'), findsOneWidget);
   });
 
   testWidgets('base image reveals parameters, inpaint entry and generate', (
@@ -264,8 +269,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(config.hasImage, isFalse);
-    expect(find.text('Img2Img Parameters'), findsNothing);
     expect(find.byKey(const Key('i2i-generate-once')), findsNothing);
+    expect(find.byKey(const Key('enhance-run')), findsNothing);
+    // Back to the locked-sections preview.
+    expect(find.text('Import a base image to unlock'), findsOneWidget);
   });
 
   testWidgets('use image size applies the snapped size to parameters', (

@@ -275,14 +275,17 @@
     "action_director_done": "已载入 Director Tools。",
     "anlas_free": "免费",
     "director_tool_section": "Director Tools",
-    "director_tool_hint": "针对单张图片的工具，与常规生成流程相互独立。",
+    "director_tool_hint": "针对单张图片的工具，与常规生成流程相互独立。请先导入源图片。",
     "director_tool_emotions": "表情（每次随机选取其一）",
     "director_tool_defry": "提示词强度（defry）",
     "director_tool_prompt": "附加提示词",
     "director_tool_run": "运行工具",
     "director_tool_started": "正在运行 {tool}，请到「图片生成」页查看结果。",
     "director_tool_no_image": "请先导入源图片。",
-    "director_tool_free": "Director Tools 不消耗 Anlas。",
     "director_tool_source": "Director Tools 源图片",
-    "director_tool_use_base": "使用当前底图"
+    "director_tool_use_base": "使用当前底图",
+    "director_tool_cost_notice": "Director Tools 会消耗 Anlas",
+    "director_tool_cost_value": "本次约消耗 {anlas} Anlas。Remove BG 是其中最贵的工具；消耗随图片尺寸增加，且 Opus 的免费额度在这里不适用。",
+    "i2i_sections_locked": "导入底图后解锁以下功能",
+    "i2i_sections_locked_hint": "图生图参数、局部重绘和 Enhance 都基于上方的底图工作。"
 }
