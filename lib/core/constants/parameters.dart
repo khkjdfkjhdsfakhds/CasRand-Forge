@@ -59,6 +59,16 @@ const List<String> commentKeys = [
   'use_coords',
 ];
 
+/// Inpainting model variants, matching the official web frontend.
+const Map<String, String> inpaintModelMapping = {
+  'nai-diffusion-4-5-full': 'nai-diffusion-4-5-full-inpainting',
+  'nai-diffusion-4-5-curated': 'nai-diffusion-4-5-curated-inpainting',
+  'nai-diffusion-4-full': 'nai-diffusion-4-full-inpainting',
+  'nai-diffusion-4-curated-preview': 'nai-diffusion-4-curated-inpainting',
+  'nai-diffusion-3': 'nai-diffusion-3-inpainting',
+  'nai-diffusion-furry-3': 'nai-diffusion-furry-3-inpainting',
+};
+
 const Map<String, String> sourceToModel = {
   'Stable Diffusion XL C1E1DE52': 'nai-diffusion-3',
   'Stable Diffusion XL 7BCCAA2C': 'nai-diffusion-3',

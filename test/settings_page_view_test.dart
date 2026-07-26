@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:adaptive_theme/adaptive_theme.dart';
+import 'package:image/image.dart' as img;
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -232,7 +233,9 @@ void main() {
       ..settings.apiKey = 'current api key'
       ..overridePrompt = 'current override'
       ..useOverridePrompt = true;
-    payloadConfig.i2iConfig.imageB64 = 'current image';
+    payloadConfig.i2iConfig.setImage(
+      Uint8List.fromList(img.encodePng(img.Image(width: 8, height: 8))),
+    );
     payloadConfig.vibeConfigList.add(VibeConfig(
       imageB64: 'vibe',
       fileName: 'vibe.png',

@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nai_casrand/data/models/api_token_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
 
 void main() {
@@ -101,5 +102,57 @@ void main() {
 
     expect(settings.generationIntervalSec, 3);
     expect(settings.generationCount, 5);
+  });
+
+  test('api tokens and display mode survive a JSON round trip', () {
+    final settings = Settings.fromJson({});
+    settings.apiTokens.addAll([
+      ApiTokenConfig(label: 'Main', token: 'pst-main'),
+      ApiTokenConfig(label: 'Alt', token: 'pst-alt', enabled: false),
+    ]);
+    settings.resultDisplayMode = 'classic';
+
+    final restored = Settings.fromJson(
+      json.decode(json.encode(settings.toJson())) as Map<String, dynamic>,
+    );
+
+    expect(restored.apiTokens, hasLength(2));
+    expect(restored.apiTokens[0].label, 'Main');
+    expect(restored.apiTokens[0].token, 'pst-main');
+    expect(restored.apiTokens[0].enabled, isTrue);
+    expect(restored.apiTokens[1].enabled, isFalse);
+    expect(restored.resultDisplayMode, 'classic');
+  });
+
+  test('legacy configs without token list fall back to the api key', () {
+    final settings = Settings.fromJson({'api_key': 'pst-legacy'});
+
+    expect(settings.apiTokens, isEmpty);
+    final effective = settings.effectiveApiTokens;
+    expect(effective, hasLength(1));
+    expect(effective.single.token, 'pst-legacy');
+    expect(settings.resultDisplayMode, 'waterfall');
+  });
+
+  test('effective tokens skip disabled and empty entries', () {
+    final settings = Settings.fromJson({'api_key': 'pst-legacy'});
+    settings.apiTokens.addAll([
+      ApiTokenConfig(label: 'Off', token: 'pst-off', enabled: false),
+      ApiTokenConfig(label: 'Empty', token: ''),
+      ApiTokenConfig(label: 'On', token: 'pst-on'),
+    ]);
+
+    final effective = settings.effectiveApiTokens;
+    expect(effective, hasLength(1));
+    expect(effective.single.token, 'pst-on');
+
+    settings.syncLegacyApiKey();
+    expect(settings.apiKey, 'pst-on');
+  });
+
+  test('masked token hides the middle of the value', () {
+    final token = ApiTokenConfig(label: 'A', token: 'pst-abcdefghijklmnop');
+    expect(token.maskedToken, 'pst-ab···mnop');
+    expect(token.maskedToken.contains('cdefgh'), isFalse);
   });
 }

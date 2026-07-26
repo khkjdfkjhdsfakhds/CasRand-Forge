@@ -22,6 +22,11 @@ class SettingsPageViewmodel extends ChangeNotifier {
     return payloadConfig.settings;
   }
 
+  /// Re-reads settings-backed state (e.g. after returning from a sub-page).
+  void refresh() {
+    notifyListeners();
+  }
+
   void setApiKey(String value) {
     payloadConfig.settings.apiKey = value;
     notifyListeners();

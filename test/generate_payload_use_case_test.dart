@@ -7,6 +7,7 @@ import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
 import 'package:nai_casrand/data/models/vibe_config_v4.dart';
 import 'package:nai_casrand/data/use_cases/generate_payload_use_case.dart';
+import 'package:nai_casrand/data/use_cases/prepare_i2i_request_use_case.dart';
 
 void main() {
   test('override prompt replaces generated root prompt when enabled', () {
@@ -372,5 +373,116 @@ void main() {
 
     expect(parameters.containsKey('director_reference_images'), isFalse);
     expect(parameters['reference_image_multiple'], isEmpty);
+  });
+
+  PayloadConfig buildPlainConfig({String model = 'nai-diffusion-4-5-full'}) {
+    return PayloadConfig(
+      rootPromptConfig: PromptConfig(
+        shuffled: false,
+        strs: ['positive prompt'],
+        prompts: [],
+      ),
+      negativePromptConfig: PromptConfig(
+        shuffled: false,
+        strs: ['negative prompt'],
+        prompts: [],
+      ),
+      characterConfigList: [],
+      savedPromptConfigList: [],
+      paramConfig: ParamConfig(model: model, randomSeed: false, seed: 5),
+      settings: Settings.fromJson({}),
+      overridePrompt: '',
+      useOverridePrompt: false,
+      useCharacterPromptWithOverride: false,
+    );
+  }
+
+  test('img2img plan switches action and adds image parameters', () {
+    final config = buildPlainConfig();
+    const plan = I2iRequestPlan(
+      imageB64: 'aW1hZ2U=',
+      maskB64: null,
+      width: 640,
+      height: 960,
+      strength: 0.55,
+      noise: 0.1,
+      addOriginalImage: true,
+      composite: null,
+      summary: 'img2img test',
+    );
+
+    final result =
+        GeneratePayloadUseCase(payloadConfig: config, i2iPlan: plan)();
+    final parameters = result.payload['parameters'];
+
+    expect(result.payload['action'], 'img2img');
+    expect(result.payload['model'], 'nai-diffusion-4-5-full');
+    expect(parameters['image'], 'aW1hZ2U=');
+    expect(parameters['strength'], 0.55);
+    expect(parameters['noise'], 0.1);
+    expect(parameters['width'], 640);
+    expect(parameters['height'], 960);
+    expect(parameters['extra_noise_seed'], 4);
+    expect(parameters.containsKey('mask'), isFalse);
+    expect(parameters.containsKey('inpaintImg2ImgStrength'), isFalse);
+    expect(result.comment, contains('img2img test'));
+  });
+
+  test('inpaint plan uses infill action and the inpainting model', () {
+    final config = buildPlainConfig();
+    const plan = I2iRequestPlan(
+      imageB64: 'aW1hZ2U=',
+      maskB64: 'bWFzaw==',
+      width: 1024,
+      height: 1024,
+      strength: 0.6,
+      noise: 0,
+      addOriginalImage: true,
+      composite: null,
+      summary: 'inpaint test',
+    );
+
+    final result =
+        GeneratePayloadUseCase(payloadConfig: config, i2iPlan: plan)();
+    final parameters = result.payload['parameters'];
+
+    expect(result.payload['action'], 'infill');
+    expect(result.payload['model'], 'nai-diffusion-4-5-full-inpainting');
+    expect(parameters['image'], 'aW1hZ2U=');
+    expect(parameters['mask'], 'bWFzaw==');
+    expect(parameters['add_original_image'], isTrue);
+    expect(parameters['strength'], 0.7);
+    expect(parameters['noise'], 0.2);
+    expect(parameters['inpaintImg2ImgStrength'], 0.6);
+    expect(parameters['img2img'], {
+      'strength': 0.6,
+      'color_correct': true,
+    });
+    expect(parameters['extra_noise_seed'], 4);
+  });
+
+  test('inpaint plan at full strength omits the img2img blend object', () {
+    final config = buildPlainConfig(model: 'nai-diffusion-3');
+    const plan = I2iRequestPlan(
+      imageB64: 'aW1hZ2U=',
+      maskB64: 'bWFzaw==',
+      width: 1024,
+      height: 1024,
+      strength: 1.0,
+      noise: 0,
+      addOriginalImage: false,
+      composite: null,
+      summary: 'inpaint full strength',
+    );
+
+    final result =
+        GeneratePayloadUseCase(payloadConfig: config, i2iPlan: plan)();
+    final parameters = result.payload['parameters'];
+
+    expect(result.payload['action'], 'infill');
+    expect(result.payload['model'], 'nai-diffusion-3-inpainting');
+    expect(parameters['add_original_image'], isFalse);
+    expect(parameters['inpaintImg2ImgStrength'], 1.0);
+    expect(parameters.containsKey('img2img'), isFalse);
   });
 }

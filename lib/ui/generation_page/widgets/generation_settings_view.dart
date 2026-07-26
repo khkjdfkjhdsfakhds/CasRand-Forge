@@ -87,6 +87,35 @@ class GenerationSettingsView extends StatelessWidget {
                 divisions: 4,
                 onChanged: (value) => viewmodel.setCardsPerCol(value.toInt()),
               ),
+              ListTile(
+                key: const Key('generation-settings-display-mode'),
+                leading: const Icon(Icons.view_quilt_outlined),
+                title: Text(context.tr('result_display_mode')),
+                subtitle: Padding(
+                  padding: const EdgeInsets.only(top: 8.0),
+                  child: SegmentedButton<String>(
+                    segments: [
+                      ButtonSegment(
+                        value: 'waterfall',
+                        icon: const Icon(Icons.view_column_outlined),
+                        label: Text(context.tr('display_mode_waterfall')),
+                      ),
+                      ButtonSegment(
+                        value: 'classic',
+                        icon: const Icon(Icons.grid_on_outlined),
+                        label: Text(context.tr('display_mode_classic')),
+                      ),
+                    ],
+                    selected: {
+                      settings.resultDisplayMode == 'classic'
+                          ? 'classic'
+                          : 'waterfall'
+                    },
+                    onSelectionChanged: (selection) =>
+                        viewmodel.setResultDisplayMode(selection.first),
+                  ),
+                ),
+              ),
               if (FeatureFlags.overridePrompt) ...[
                 CheckboxListTile(
                   secondary: const Icon(Icons.edit),

@@ -1,6 +1,7 @@
 import 'package:flutter_command/flutter_command.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get_it/get_it.dart';
+import 'package:nai_casrand/data/models/api_token_config.dart';
 import 'package:nai_casrand/data/models/command_status.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
@@ -17,6 +18,33 @@ class _SchedulingViewmodel extends GenerationPageViewmodel {
   @override
   void nextCommand() {
     nextCommandCalls++;
+  }
+}
+
+class _WorkerRecordingViewmodel extends GenerationPageViewmodel {
+  final List<int> createdWorkers = [];
+
+  @override
+  Command<void, InfoCardContent> createGenerationCommand({
+    required int workerIndex,
+  }) {
+    createdWorkers.add(workerIndex);
+    return Command.createAsyncNoParam(
+      () async => InfoCardContent(
+        title: 'worker-$workerIndex',
+        info: '',
+        additionalInfo: const {},
+      ),
+      initialValue: InfoCardContent.fromEmpty(),
+    );
+  }
+
+  /// Records the command without executing it, so tests stay free of the
+  /// zero-duration notification timers flutter_command schedules.
+  @override
+  void addAndRunCommand(Command<void, InfoCardContent> command) {
+    commandList.add(command);
+    notifyListeners();
   }
 }
 
@@ -253,6 +281,89 @@ void main() {
     expect(commandStatus.isWaitingForNextGeneration.value, isTrue);
     await tester.pump(const Duration(seconds: 1));
     expect(viewmodel.nextCommandCalls, 1);
+    viewmodel.dispose();
+  });
+
+  testWidgets('multiple enabled tokens start one parallel worker each', (
+    tester,
+  ) async {
+    final viewmodel = _WorkerRecordingViewmodel();
+    final settings = GetIt.I<PayloadConfig>().settings;
+    settings.apiTokens.addAll([
+      ApiTokenConfig(label: 'A', token: 'pst-a'),
+      ApiTokenConfig(label: 'B', token: 'pst-b'),
+      ApiTokenConfig(label: 'C', token: 'pst-c'),
+    ]);
+
+    viewmodel.startGeneration();
+
+    expect(viewmodel.createdWorkers, [0, 1, 2]);
+    expect(viewmodel.commandList, hasLength(3));
+    viewmodel.stopGeneration();
+    await tester.pump();
+    viewmodel.dispose();
+  });
+
+  testWidgets('disabled tokens do not get workers', (tester) async {
+    final viewmodel = _WorkerRecordingViewmodel();
+    final settings = GetIt.I<PayloadConfig>().settings;
+    settings.apiTokens.addAll([
+      ApiTokenConfig(label: 'A', token: 'pst-a'),
+      ApiTokenConfig(label: 'B', token: 'pst-b', enabled: false),
+      ApiTokenConfig(label: 'C', token: 'pst-c'),
+    ]);
+
+    viewmodel.startGeneration();
+
+    expect(viewmodel.createdWorkers, [0, 1]);
+    viewmodel.stopGeneration();
+    await tester.pump();
+    viewmodel.dispose();
+  });
+
+  testWidgets('worker count never exceeds the requested generation count', (
+    tester,
+  ) async {
+    final viewmodel = _WorkerRecordingViewmodel();
+    final settings = GetIt.I<PayloadConfig>().settings;
+    settings.generationCount = 2;
+    settings.apiTokens.addAll([
+      ApiTokenConfig(label: 'A', token: 'pst-a'),
+      ApiTokenConfig(label: 'B', token: 'pst-b'),
+      ApiTokenConfig(label: 'C', token: 'pst-c'),
+    ]);
+
+    viewmodel.startGeneration();
+
+    expect(viewmodel.createdWorkers, [0, 1]);
+    viewmodel.stopGeneration();
+    await tester.pump();
+    viewmodel.dispose();
+  });
+
+  testWidgets('legacy single API key keeps the single-worker behaviour', (
+    tester,
+  ) async {
+    final viewmodel = _WorkerRecordingViewmodel();
+
+    viewmodel.startGeneration();
+
+    expect(viewmodel.createdWorkers, [0]);
+    viewmodel.stopGeneration();
+    await tester.pump();
+    viewmodel.dispose();
+  });
+
+  testWidgets('runSingleGeneration issues one worker-0 command outside the loop',
+      (tester) async {
+    final viewmodel = _WorkerRecordingViewmodel();
+    final commandStatus = GetIt.I<CommandStatus>();
+
+    viewmodel.runSingleGeneration();
+
+    expect(viewmodel.createdWorkers, [0]);
+    expect(commandStatus.isGenerationActive.value, isFalse);
+    await tester.pump();
     viewmodel.dispose();
   });
 

@@ -12,12 +12,24 @@ import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:lorem_ipsum/lorem_ipsum.dart';
+import 'package:nai_casrand/data/services/account_service.dart';
 import 'package:nai_casrand/data/services/api_service.dart';
 import 'package:nai_casrand/data/services/file_service.dart';
 import 'package:nai_casrand/data/services/image_service.dart';
 import 'package:nai_casrand/data/use_cases/generate_payload_use_case.dart';
+import 'package:nai_casrand/data/use_cases/prepare_i2i_request_use_case.dart';
 
 const infoCardContentListLength = 200;
+
+/// Per-worker generation state. Worker 0 is the legacy single-token path;
+/// additional workers exist only while multiple API tokens are enabled.
+class _WorkerState {
+  PayloadGenerationResult? cachedPayloadResult;
+  I2iRequestPlan? cachedI2iPlan;
+  int cacheRetriesCount = 0;
+  Timer? intervalTimer;
+  Command<void, InfoCardContent>? command;
+}
 
 class GenerationPageViewmodel extends ChangeNotifier {
   PayloadConfig get payloadConfig => GetIt.I<PayloadConfig>();
@@ -29,11 +41,26 @@ class GenerationPageViewmodel extends ChangeNotifier {
   Command<void, InfoCardContent>? currentCommand;
 
   PayloadGenerationResult? _cachedPayloadResult;
+  I2iRequestPlan? _cachedI2iPlan;
   int _cacheRetriesCount = 0;
   Timer? _generationIntervalTimer;
 
+  /// Tokens captured at generation start; index-aligned with workers.
+  List<String> _activeTokens = [];
+  List<String> _activeTokenLabels = [];
+  final Map<int, _WorkerState> _extraWorkers = {};
+
+  /// Last known Anlas balance per token (updated after each generation).
+  final Map<String, int> _lastAnlasBalances = {};
+  Map<String, int> get lastAnlasBalances => Map.of(_lastAnlasBalances);
+
   void setCardsPerCol(int value) {
     payloadConfig.settings.generationPageColumnCount = value;
+    notifyListeners();
+  }
+
+  void setResultDisplayMode(String value) {
+    payloadConfig.settings.resultDisplayMode = value;
     notifyListeners();
   }
 
@@ -155,46 +182,91 @@ class GenerationPageViewmodel extends ChangeNotifier {
     addAndRunCommand(command);
   }
 
-  void nextCommand() {
-    if (!commandStatus.isGenerationActive.value) return;
-    if (commandStatus.isWaitingForNextGeneration.value) return;
+  String _tokenForWorker(int workerIndex) {
+    if (workerIndex < _activeTokens.length) return _activeTokens[workerIndex];
+    return payloadConfig.settings.apiKey;
+  }
 
-    // Skip if active command exists
-    if (currentCommand != null && currentCommand!.isExecuting.value) return;
+  String? _tokenLabelForWorker(int workerIndex) {
+    if (_activeTokens.length <= 1) return null;
+    if (workerIndex < _activeTokenLabels.length) {
+      return _activeTokenLabels[workerIndex];
+    }
+    return null;
+  }
 
-    // Generate, postprocess and save image
+  /// Builds the actual generation command for one attempt. Overridable in
+  /// tests to avoid network access.
+  @visibleForTesting
+  Command<void, InfoCardContent> createGenerationCommand({
+    required int workerIndex,
+  }) {
     commandFunc() async {
-      final endpoint = payloadConfig.settings.debugApiEnabled
-          ? payloadConfig.settings.debugApiPath
+      final settings = payloadConfig.settings;
+      final endpoint = settings.debugApiEnabled
+          ? settings.debugApiPath
           : 'https://image.novelai.net/ai/generate-image';
+      final token = _tokenForWorker(workerIndex);
 
-      // Check whether cached payload exists, use cache if exists
-      PayloadGenerationResult payloadResult;
-      if (_cachedPayloadResult != null && _cacheRetriesCount < 3) {
-        // Use cached payload, increment counter
-        payloadResult = _cachedPayloadResult!;
-        _cacheRetriesCount++;
-      } else {
-        // Generate new payload
-        payloadResult = GeneratePayloadUseCase(payloadConfig: payloadConfig)();
-        _cachedPayloadResult = payloadResult; // Cache generated payload
-        _cacheRetriesCount = 0;
-      }
-
-      final request = ApiRequest(
-        endpoint: endpoint,
-        proxy: payloadConfig.settings.proxy,
-        headers: payloadConfig.getHeaders(),
-        payload: payloadResult.payload,
-      );
+      PayloadGenerationResult? payloadResult;
       try {
+        // Check whether cached payload exists, use cache if exists
+        I2iRequestPlan? i2iPlan;
+        if (_getCachedPayload(workerIndex) != null &&
+            _getCacheRetries(workerIndex) < 3) {
+          payloadResult = _getCachedPayload(workerIndex)!;
+          i2iPlan = _getCachedPlan(workerIndex);
+          _setCacheRetries(workerIndex, _getCacheRetries(workerIndex) + 1);
+        } else {
+          final i2iConfig = payloadConfig.i2iConfig;
+          if (i2iConfig.hasImage) {
+            final target = payloadConfig.paramConfig.pickSize();
+            i2iPlan = await PrepareI2iRequestUseCase(config: i2iConfig)(
+              targetWidth: target.width,
+              targetHeight: target.height,
+            );
+          }
+          payloadResult = GeneratePayloadUseCase(
+            payloadConfig: payloadConfig,
+            i2iPlan: i2iPlan,
+          )();
+          _setCachedPayload(workerIndex, payloadResult, i2iPlan);
+          _setCacheRetries(workerIndex, 0);
+        }
+
+        // Fetch the starting balance once per token so cost can be derived.
+        if (!settings.debugApiEnabled &&
+            !_lastAnlasBalances.containsKey(token)) {
+          final balance = await AccountService().fetchAnlasBalance(
+            token: token,
+            proxy: settings.proxy,
+          );
+          if (balance != null) _lastAnlasBalances[token] = balance;
+        }
+
+        final request = ApiRequest(
+          endpoint: endpoint,
+          proxy: settings.proxy,
+          headers: payloadConfig.getHeadersForToken(token),
+          payload: payloadResult.payload,
+        );
         final response = await ApiService().fetchData(request);
         // Even if response status is not 2xx, postprocess could throw correct exception.
         var imageBytes = ImageService().processResponse(response.data);
+        // Paste the autocrop window back into the original image.
+        final composite = i2iPlan?.composite;
+        if (composite != null) {
+          imageBytes = await PrepareI2iRequestUseCase(
+            config: payloadConfig.i2iConfig,
+          ).compositeResponse(
+            responseBytes: imageBytes,
+            composite: composite,
+          );
+        }
         // Add custom metadata
-        if (payloadConfig.settings.metadataEraseEnabled) {
-          final metadataString = payloadConfig.settings.customMetadataEnabled
-              ? payloadConfig.settings.customMetadataContent
+        if (settings.metadataEraseEnabled) {
+          final metadataString = settings.customMetadataEnabled
+              ? settings.customMetadataContent
               : '';
           imageBytes =
               await ImageService().embedMetadata(imageBytes, metadataString);
@@ -213,10 +285,27 @@ class GenerationPageViewmodel extends ChangeNotifier {
         final imageFilePath = await FileService().savePictureToFile(
           imageBytes,
           fileName,
-          payloadConfig.settings.outputFolderPath,
+          settings.outputFolderPath,
         );
+        // Anlas cost via balance difference (token-sequential, so exact).
+        int? anlasCost;
+        int? anlasRemaining;
+        if (!settings.debugApiEnabled) {
+          final previousBalance = _lastAnlasBalances[token];
+          final newBalance = await AccountService().fetchAnlasBalance(
+            token: token,
+            proxy: settings.proxy,
+          );
+          if (newBalance != null) {
+            anlasRemaining = newBalance;
+            if (previousBalance != null && previousBalance >= newBalance) {
+              anlasCost = previousBalance - newBalance;
+            }
+            _lastAnlasBalances[token] = newBalance;
+          }
+        }
         // Reset cache after successful generation
-        _cachedPayloadResult = null;
+        _setCachedPayload(workerIndex, null, null);
         // Only increment total count after successful generation
         commandStatus.currentGenerationCount++;
         return InfoCardContent(
@@ -225,21 +314,75 @@ class GenerationPageViewmodel extends ChangeNotifier {
           additionalInfo: digestPayloadResult(payloadResult),
           imageBytes: imageBytes,
           imageFilePath: imageFilePath,
+          anlasCost: anlasCost,
+          anlasRemaining: anlasRemaining,
+          tokenLabel: _tokenLabelForWorker(workerIndex),
         );
       } catch (e) {
         return InfoCardContent(
           title: 'Error occurred in generation process.',
           info: e.toString(),
-          additionalInfo: digestPayloadResult(payloadResult),
+          additionalInfo:
+              payloadResult != null ? digestPayloadResult(payloadResult) : {},
+          tokenLabel: _tokenLabelForWorker(workerIndex),
         );
       }
     }
 
-    // Create command and attach post-command operations
-    final command = Command.createAsyncNoParam(
+    return Command.createAsyncNoParam(
       commandFunc,
       initialValue: InfoCardContent.fromEmpty(),
     );
+  }
+
+  PayloadGenerationResult? _getCachedPayload(int workerIndex) {
+    if (workerIndex == 0) return _cachedPayloadResult;
+    return _extraWorkers[workerIndex]?.cachedPayloadResult;
+  }
+
+  I2iRequestPlan? _getCachedPlan(int workerIndex) {
+    if (workerIndex == 0) return _cachedI2iPlan;
+    return _extraWorkers[workerIndex]?.cachedI2iPlan;
+  }
+
+  void _setCachedPayload(
+    int workerIndex,
+    PayloadGenerationResult? result,
+    I2iRequestPlan? plan,
+  ) {
+    if (workerIndex == 0) {
+      _cachedPayloadResult = result;
+      _cachedI2iPlan = plan;
+      return;
+    }
+    final state = _extraWorkers[workerIndex];
+    if (state == null) return;
+    state.cachedPayloadResult = result;
+    state.cachedI2iPlan = plan;
+  }
+
+  int _getCacheRetries(int workerIndex) {
+    if (workerIndex == 0) return _cacheRetriesCount;
+    return _extraWorkers[workerIndex]?.cacheRetriesCount ?? 0;
+  }
+
+  void _setCacheRetries(int workerIndex, int value) {
+    if (workerIndex == 0) {
+      _cacheRetriesCount = value;
+      return;
+    }
+    _extraWorkers[workerIndex]?.cacheRetriesCount = value;
+  }
+
+  void nextCommand() {
+    if (!commandStatus.isGenerationActive.value) return;
+    if (commandStatus.isWaitingForNextGeneration.value) return;
+
+    // Skip if active command exists
+    if (currentCommand != null && currentCommand!.isExecuting.value) return;
+
+    // Create command and attach post-command operations
+    final command = createGenerationCommand(workerIndex: 0);
     command.isExecuting.addListener(() {
       notifyListeners();
       // Only update after execution
@@ -253,6 +396,85 @@ class GenerationPageViewmodel extends ChangeNotifier {
     addAndRunCommand(command);
   }
 
+  /// Runs one generation outside the start/stop loop (used by the
+  /// img2img page's "generate once" action).
+  void runSingleGeneration() {
+    if (commandStatus.isGenerationActive.value) return;
+    if (currentCommand != null && currentCommand!.isExecuting.value) return;
+    final paramConfig = payloadConfig.paramConfig;
+    if (!paramConfig.randomSeed && paramConfig.seed == null) {
+      paramConfig.seed = 0;
+    }
+    commandStatus.generationTimestamp = DateTime.now();
+    final command = createGenerationCommand(workerIndex: 0);
+    command.isExecuting.addListener(notifyListeners);
+    currentCommand = command;
+    addAndRunCommand(command);
+  }
+
+  void _nextCommandForExtraWorker(int workerIndex) {
+    if (!commandStatus.isGenerationActive.value) return;
+    final state = _extraWorkers[workerIndex];
+    if (state == null) return;
+    if (state.command != null && state.command!.isExecuting.value) return;
+
+    final command = createGenerationCommand(workerIndex: workerIndex);
+    command.isExecuting.addListener(() {
+      notifyListeners();
+      if (command.isExecuting.value) return;
+      _continueExtraWorkerAfterAttempt(workerIndex);
+    });
+    state.command = command;
+    addAndRunCommand(command);
+  }
+
+  void _continueExtraWorkerAfterAttempt(int workerIndex) {
+    if (!commandStatus.isGenerationActive.value) return;
+
+    final generationCount = payloadConfig.settings.generationCount;
+    if (generationCount != 0 &&
+        commandStatus.currentGenerationCount >= generationCount) {
+      stopGeneration();
+      return;
+    }
+
+    final state = _extraWorkers[workerIndex];
+    if (state == null) return;
+    state.intervalTimer?.cancel();
+    final interval = payloadConfig.settings.generationIntervalSec;
+    if (interval == 0) {
+      _nextCommandForExtraWorker(workerIndex);
+      return;
+    }
+    state.intervalTimer = Timer(
+      Duration(seconds: interval),
+      () {
+        state.intervalTimer = null;
+        _nextCommandForExtraWorker(workerIndex);
+      },
+    );
+  }
+
+  void _startExtraWorkers() {
+    final generationCount = payloadConfig.settings.generationCount;
+    var workerCount = _activeTokens.length;
+    // No point running more workers than requested images.
+    if (generationCount != 0) {
+      workerCount = min(workerCount, generationCount);
+    }
+    for (var index = 1; index < workerCount; index++) {
+      _extraWorkers[index] = _WorkerState();
+      _nextCommandForExtraWorker(index);
+    }
+  }
+
+  void _clearExtraWorkers() {
+    for (final state in _extraWorkers.values) {
+      state.intervalTimer?.cancel();
+    }
+    _extraWorkers.clear();
+  }
+
   void startGeneration() {
     final paramConfig = payloadConfig.paramConfig;
     if (!paramConfig.randomSeed && paramConfig.seed == null) {
@@ -264,17 +486,25 @@ class GenerationPageViewmodel extends ChangeNotifier {
     if (!payloadConfig.settings.rememberSequentialProgress) {
       payloadConfig.resetSequentialState();
       _cachedPayloadResult = null;
+      _cachedI2iPlan = null;
       _cacheRetriesCount = 0;
     }
+    _clearExtraWorkers();
+    final tokens = payloadConfig.settings.effectiveApiTokens;
+    _activeTokens = tokens.map((entry) => entry.token).toList(growable: false);
+    _activeTokenLabels =
+        tokens.map((entry) => entry.label).toList(growable: false);
     commandStatus.currentGenerationCount = 0;
     commandStatus.isGenerationActive.value = true;
     commandStatus.generationTimestamp = DateTime.now();
     nextCommand();
+    _startExtraWorkers();
   }
 
   void stopGeneration() {
     _generationIntervalTimer?.cancel();
     _generationIntervalTimer = null;
+    _clearExtraWorkers();
     commandStatus.isWaitingForNextGeneration.value = false;
     commandStatus.isGenerationActive.value = false;
   }
@@ -324,6 +554,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
   @override
   void dispose() {
     _generationIntervalTimer?.cancel();
+    _clearExtraWorkers();
     super.dispose();
   }
 
@@ -348,6 +579,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
       'director_reference_information_extracted',
       'director_reference_strength_values',
       'director_reference_secondary_strength_values',
+      'image',
+      'mask',
     ]) {
       additionalInfoParam.remove(key);
     }

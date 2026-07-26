@@ -2,6 +2,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:nai_casrand/core/constants/feature_flags.dart';
 import 'package:nai_casrand/ui/core/widgets/editable_list_tile.dart';
+import 'package:nai_casrand/ui/generation_page/widgets/classic_info_card.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/generation_settings_view.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/info_card.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
@@ -18,19 +19,38 @@ class GenerationPageView extends StatelessWidget {
         listenable: viewmodel,
         builder: (context, _) {
           final itemCount = viewmodel.commandList.length;
+          final useClassicMode =
+              viewmodel.payloadConfig.settings.resultDisplayMode == 'classic';
           return Column(
             children: [
               Expanded(
-                child: WaterfallFlow.builder(
-                  gridDelegate:
-                      SliverWaterfallFlowDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: viewmodel.colNum),
-                  padding: const EdgeInsets.all(8.0),
-                  itemCount: itemCount,
-                  itemBuilder: (context, index) => InfoCard(
-                    command: viewmodel.commandList[itemCount - 1 - index],
-                  ),
-                ),
+                child: useClassicMode
+                    ? GridView.builder(
+                        gridDelegate:
+                            SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: viewmodel.colNum,
+                          childAspectRatio: 1.6,
+                          mainAxisSpacing: 8.0,
+                          crossAxisSpacing: 8.0,
+                        ),
+                        padding: const EdgeInsets.all(8.0),
+                        itemCount: itemCount,
+                        itemBuilder: (context, index) => ClassicInfoCard(
+                          command:
+                              viewmodel.commandList[itemCount - 1 - index],
+                        ),
+                      )
+                    : WaterfallFlow.builder(
+                        gridDelegate:
+                            SliverWaterfallFlowDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: viewmodel.colNum),
+                        padding: const EdgeInsets.all(8.0),
+                        itemCount: itemCount,
+                        itemBuilder: (context, index) => InfoCard(
+                          command:
+                              viewmodel.commandList[itemCount - 1 - index],
+                        ),
+                      ),
               ),
               if (FeatureFlags.overridePrompt &&
                   viewmodel.payloadConfig.useOverridePrompt)

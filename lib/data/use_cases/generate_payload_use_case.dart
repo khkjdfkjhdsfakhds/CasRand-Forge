@@ -1,12 +1,15 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:nai_casrand/core/constants/feature_flags.dart';
+import 'package:nai_casrand/core/constants/parameters.dart';
 import 'package:nai_casrand/data/models/character_config.dart';
+import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/precise_reference_config.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/vibe_config.dart';
 import 'package:nai_casrand/data/models/vibe_config_v4.dart';
+import 'package:nai_casrand/data/use_cases/prepare_i2i_request_use_case.dart';
 
 const Map<int, String> xMapping = {
   0: 'X',
@@ -51,8 +54,13 @@ class PayloadGenerationResult {
 class GeneratePayloadUseCase {
   final PayloadConfig payloadConfig;
 
+  /// Optional img2img / inpainting request plan. When present the payload
+  /// switches to the corresponding action and uses the plan's request size.
+  final I2iRequestPlan? i2iPlan;
+
   GeneratePayloadUseCase({
     required this.payloadConfig,
+    this.i2iPlan,
   });
 
   ParamConfig get paramConfig => payloadConfig.paramConfig;
@@ -91,7 +99,15 @@ class GeneratePayloadUseCase {
       prompt: basePromptResult.toPrompt(),
       comment: basePromptResult.toComment(),
     );
-    final paramPayload = paramConfig.getPayload();
+    final plan = i2iPlan;
+    final paramPayload = plan == null
+        ? paramConfig.getPayload()
+        : paramConfig.getPayload(
+            overrideSize: GenerationSize(
+              width: plan.width,
+              height: plan.height,
+            ),
+          );
     String payloadComment = basePair.comment;
 
     // Get character prompt
@@ -226,6 +242,37 @@ class GeneratePayloadUseCase {
           infoExtractedList;
     }
 
+    // img2img / inpainting request fields, mirroring the official frontend.
+    var action = 'generate';
+    var model = paramConfig.model;
+    if (plan != null) {
+      final seed = paramPayload['seed'] as int;
+      paramPayload['image'] = plan.imageB64;
+      paramPayload['extra_noise_seed'] = (seed - 1) & 0xFFFFFFFF;
+      if (plan.isInpaint) {
+        action = 'infill';
+        model = inpaintModelMapping[model] ?? model;
+        paramPayload['mask'] = plan.maskB64;
+        paramPayload['add_original_image'] = plan.addOriginalImage;
+        // The user-facing strength maps to inpaintImg2ImgStrength; the legacy
+        // strength/noise pair takes fixed values on modern inpainting.
+        paramPayload['strength'] = 0.7;
+        paramPayload['noise'] = 0.2;
+        paramPayload['inpaintImg2ImgStrength'] = plan.strength;
+        if (plan.strength < 1) {
+          paramPayload['img2img'] = {
+            'strength': plan.strength,
+            'color_correct': true,
+          };
+        }
+      } else {
+        action = 'img2img';
+        paramPayload['strength'] = plan.strength;
+        paramPayload['noise'] = plan.noise;
+      }
+      payloadComment += '\n\nI2I: ${plan.summary}';
+    }
+
     final processedFileName =
         _processFileNameKey(fileNameKey, basePromptResult);
 
@@ -234,8 +281,8 @@ class GeneratePayloadUseCase {
       suggestedFileName: processedFileName,
       payload: {
         'input': basePair.prompt,
-        'model': paramConfig.model,
-        'action': 'generate',
+        'model': model,
+        'action': action,
         'parameters': paramPayload,
       },
     );

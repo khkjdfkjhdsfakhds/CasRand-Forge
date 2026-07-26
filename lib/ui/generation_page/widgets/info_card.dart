@@ -113,6 +113,7 @@ class InfoCard extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
+                subtitle: _anlasSubtitle(content),
               ),
               GeneratedImageView(
                 content: content,
@@ -124,6 +125,27 @@ class InfoCard extends StatelessWidget {
               ),
             ],
           );
+  }
+
+  Widget? _anlasSubtitle(InfoCardContent content) {
+    final parts = <String>[];
+    if (content.tokenLabel != null) parts.add(content.tokenLabel!);
+    if (content.anlasCost != null) {
+      parts.add(tr('anlas_info', namedArgs: {
+        'cost': content.anlasCost.toString(),
+        'remaining': content.anlasRemaining?.toString() ?? '?',
+      }));
+    } else if (content.anlasRemaining != null) {
+      parts.add(tr('anlas_remaining_only', namedArgs: {
+        'remaining': content.anlasRemaining.toString(),
+      }));
+    }
+    if (parts.isEmpty) return null;
+    return Text(
+      parts.join(' · '),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+    );
   }
 }
 
@@ -137,6 +159,20 @@ class InfoDetailPage extends StatelessWidget {
     List<Widget> contents = [
       buildInfoTile(tr('title'), content.title, context),
       buildInfoTile(tr('info'), content.info, context),
+      if (content.tokenLabel != null)
+        buildInfoTile(tr('api_token'), content.tokenLabel!, context),
+      if (content.anlasCost != null)
+        buildInfoTile(
+          tr('anlas_cost'),
+          content.anlasCost.toString(),
+          context,
+        ),
+      if (content.anlasRemaining != null)
+        buildInfoTile(
+          tr('anlas_remaining'),
+          content.anlasRemaining.toString(),
+          context,
+        ),
     ];
     for (final item in content.additionalInfo.entries) {
       contents.add(buildInfoTile(item.key, item.value.toString(), context));

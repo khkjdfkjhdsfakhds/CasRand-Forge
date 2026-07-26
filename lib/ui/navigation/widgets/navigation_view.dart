@@ -7,6 +7,8 @@ import 'package:nai_casrand/ui/config_page/widgets/config_page_view.dart';
 import 'package:nai_casrand/ui/config_page/view_models/config_page_viewmodel.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/generation_page_view.dart';
+import 'package:nai_casrand/ui/i2i_page/view_models/i2i_page_viewmodel.dart';
+import 'package:nai_casrand/ui/i2i_page/widgets/i2i_page_view.dart';
 import 'package:nai_casrand/ui/navigation/view_models/navigation_view_model.dart';
 import 'package:nai_casrand/ui/navigation/widgets/metadata_drop_area.dart';
 import 'package:nai_casrand/ui/navigation/widgets/navigation_appbar.dart';
@@ -76,6 +78,7 @@ class NavigationViewState extends State<NavigationView> {
   Widget getBody() {
     final pages = [
       GenerationPageView(viewmodel: GetIt.I()),
+      I2iPageView(viewmodel: I2iPageViewmodel()),
       ConfigPageView(
         viewmodel: ConfigPageViewmodel(),
       ),
@@ -99,6 +102,9 @@ class NavigationViewState extends State<NavigationView> {
                       icon: const Icon(Icons.create),
                       label: Text(context.tr('generation'))),
                   NavigationRailDestination(
+                      icon: const Icon(Icons.brush),
+                      label: Text(context.tr('i2i_inpaint'))),
+                  NavigationRailDestination(
                       icon: const Icon(Icons.visibility),
                       label: Text(context.tr('prompt_config'))),
                   NavigationRailDestination(
@@ -116,10 +122,14 @@ class NavigationViewState extends State<NavigationView> {
               Expanded(child: pages[_currentIndex]), // 内容区域
               BottomNavigationBar(
                 currentIndex: _currentIndex,
+                type: BottomNavigationBarType.fixed,
                 items: [
                   BottomNavigationBarItem(
                       icon: const Icon(Icons.create),
                       label: context.tr('generation')),
+                  BottomNavigationBarItem(
+                      icon: const Icon(Icons.brush),
+                      label: context.tr('i2i_inpaint')),
                   BottomNavigationBarItem(
                       icon: const Icon(Icons.visibility),
                       label: context.tr('prompt_config')),
@@ -155,8 +165,8 @@ class NavigationViewState extends State<NavigationView> {
               onTapLink: (text, href, title) {
                 if (href == null) return;
                 if (href == '#jump_to_settings') {
-                  // Jump to settings page
-                  _changeIndex(2);
+                  // Jump to settings page (index 3 since the I2I page landed)
+                  _changeIndex(3);
                   Navigator.of(dialogContext).pop();
                 } else {
                   // Launch link

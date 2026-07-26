@@ -7,6 +7,7 @@ import 'package:nai_casrand/core/constants/settings.dart';
 import 'package:nai_casrand/ui/settings_page/view_models/settings_page_viewmodel.dart';
 import 'package:nai_casrand/ui/core/widgets/editable_list_tile.dart';
 import 'package:nai_casrand/ui/settings_page/widgets/config_selection_page_view.dart';
+import 'package:nai_casrand/ui/settings_page/widgets/token_manager_page_view.dart';
 import 'package:provider/provider.dart';
 
 import '../../../core/constants/defaults.dart';
@@ -29,6 +30,7 @@ class SettingsPageView extends StatelessWidget {
         builder: (context, viewmodel, child) => Column(
           children: [
             _buildApiKeyTile(),
+            _buildTokenManagerTile(context),
             _buildRememberSequentialProgressTile(),
             _buildEraseMetadataTile(context),
             if (!kIsWeb && (Platform.isWindows || Platform.isMacOS))
@@ -81,6 +83,32 @@ class SettingsPageView extends StatelessWidget {
         currentValue: viewmodel.settings.apiKey,
         confirmOnSubmit: true,
         onEditComplete: (value) => viewmodel.setApiKey(value));
+  }
+
+  Widget _buildTokenManagerTile(BuildContext context) {
+    final tokenCount = viewmodel.settings.apiTokens.length;
+    final enabledCount =
+        viewmodel.settings.apiTokens.where((entry) => entry.enabled).length;
+    return ListTile(
+      key: const Key('multi-token-manager-tile'),
+      leading: const Icon(Icons.key_outlined),
+      title: Text(tr('api_tokens_manage')),
+      subtitle: Text(
+        tokenCount == 0
+            ? tr('api_tokens_empty_note')
+            : tr('api_tokens_summary', namedArgs: {
+                'count': tokenCount.toString(),
+                'enabled': enabledCount.toString(),
+              }),
+      ),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () async {
+        await Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const TokenManagerPageView()),
+        );
+        viewmodel.refresh();
+      },
+    );
   }
 
   Widget _buildRememberSequentialProgressTile() {

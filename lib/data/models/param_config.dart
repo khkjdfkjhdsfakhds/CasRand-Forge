@@ -103,8 +103,14 @@ class ParamConfig {
     };
   }
 
+  /// Picks the generation size for one request (uniformly random when
+  /// multiple sizes are configured).
+  GenerationSize pickSize() => sizes[Random().nextInt(sizes.length)];
+
   /// Different from toJson(), some fields in payload need to be calculated from other params.
-  Map<String, dynamic> getPayload() {
+  /// [overrideSize] replaces the random size pick (used by img2img/inpaint
+  /// requests whose size is derived from the input image).
+  Map<String, dynamic> getPayload({GenerationSize? overrideSize}) {
     bool? effectiveDeliberateEulerAncestralBug = deliberateEulerAncestralBug;
     bool? effectivePreferBrownian = preferBrownian;
     final hasImportedSamplerOverrides =
@@ -116,7 +122,7 @@ class ParamConfig {
       effectivePreferBrownian = true;
     }
     double? skipCfgAboveSigma;
-    final selectedSize = sizes[Random().nextInt(sizes.length)];
+    final selectedSize = overrideSize ?? pickSize();
     final width = selectedSize.width;
     final height = selectedSize.height;
     if (varietyPlus) {

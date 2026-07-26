@@ -18,11 +18,12 @@ void main() {
     await EasyLocalization.ensureInitialized();
   });
 
-  testWidgets('sequential selection displays the repeat count editor', (
+  testWidgets('prompt config editor keeps its controls easy to click', (
     tester,
   ) async {
     final viewModel = PromptConfigViewModel(
       config: PromptConfig(
+        comment: 'Unnamed config',
         selectionMethod: 'single_sequential',
         num: 3,
         strs: ['first', 'second'],
@@ -50,5 +51,15 @@ void main() {
     expect(find.byType(EditableListTile), findsOneWidget);
     expect(find.text('Repeat Number'), findsOneWidget);
     expect(find.text('3'), findsOneWidget);
+
+    final titleTarget = find.byKey(const Key('prompt-config-title-edit'));
+    final targetRect = tester.getRect(titleTarget);
+    expect(targetRect.height, greaterThanOrEqualTo(kMinInteractiveDimension));
+    expect(targetRect.width, greaterThan(300));
+
+    await tester.tapAt(Offset(targetRect.right - 8, targetRect.center.dy));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(TextField), findsOneWidget);
   });
 }

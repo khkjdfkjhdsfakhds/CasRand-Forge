@@ -12,8 +12,19 @@ class PromptConfigEditView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final title = InkWell(
-      child: Text(viewModel.config.comment),
+      key: const Key('prompt-config-title-edit'),
       onTap: () => _showEditCommentDialog(context),
+      borderRadius: BorderRadius.circular(4),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: kMinInteractiveDimension),
+        child: Row(
+          children: [
+            Expanded(child: Text(viewModel.config.comment)),
+            const SizedBox(width: 8),
+            const Icon(Icons.edit_outlined, size: 20),
+          ],
+        ),
+      ),
     );
     return ListenableBuilder(
       listenable: viewModel,

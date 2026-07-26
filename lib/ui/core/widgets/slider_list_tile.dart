@@ -38,7 +38,7 @@ class SliderListTile extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.only(bottom: 10),
           child: SizedBox(
-            height: 10,
+            height: kMinInteractiveDimension,
             child: Slider(
                 value: sliderValue.clamp(min, max),
                 min: min,
@@ -86,7 +86,7 @@ class RangeListTile extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.only(bottom: 10),
           child: SizedBox(
-            height: 10,
+            height: kMinInteractiveDimension,
             child: RangeSlider(
                 values: RangeValues(
                     sliderStart.clamp(min, max), sliderEnd.clamp(min, max)),

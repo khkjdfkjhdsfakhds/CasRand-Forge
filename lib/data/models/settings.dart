@@ -1,5 +1,6 @@
 import 'package:adaptive_theme/adaptive_theme.dart';
 import 'package:nai_casrand/core/constants/settings.dart';
+import 'package:nai_casrand/data/models/api_token_config.dart';
 
 import '../../core/constants/defaults.dart';
 
@@ -11,8 +12,15 @@ class Settings {
   int generationPageColumnCount;
   String themeMode;
 
-  // API key
+  /// Result display style: 'waterfall' (default) or 'classic' (0.55-style
+  /// grid with the prompt shown beside the image).
+  String resultDisplayMode;
+
+  // API key (legacy single-token field, kept in sync with [apiTokens])
   String apiKey;
+
+  /// Multi-token support. Empty list means "use [apiKey] only".
+  List<ApiTokenConfig> apiTokens;
 
   // Output dir, for windows only
   String outputFolderPath;
@@ -54,12 +62,44 @@ class Settings {
     required this.fileNamePrefixKey,
     required this.generationPageColumnCount,
     required this.themeMode,
-  });
+    this.resultDisplayMode = 'waterfall',
+    List<ApiTokenConfig>? apiTokens,
+  }) : apiTokens = apiTokens ?? [];
+
+  /// Tokens that generation should use, in order. Falls back to the legacy
+  /// [apiKey] when no explicit token entries exist.
+  List<ApiTokenConfig> get effectiveApiTokens {
+    final active = apiTokens
+        .where((entry) => entry.enabled && entry.token.isNotEmpty)
+        .toList(growable: false);
+    if (active.isNotEmpty) return active;
+    return [ApiTokenConfig(label: 'Token 1', token: apiKey, enabled: true)];
+  }
+
+  /// Keeps the legacy single-token field aligned with the token list so old
+  /// exports and older app versions stay compatible.
+  void syncLegacyApiKey() {
+    final active = apiTokens
+        .where((entry) => entry.enabled && entry.token.isNotEmpty)
+        .toList(growable: false);
+    if (active.isNotEmpty) {
+      apiKey = active.first.token;
+    }
+  }
 
   factory Settings.fromJson(Map<String, dynamic> json) {
+    final tokenListJson = json['api_tokens'];
+    final apiTokens = tokenListJson is List
+        ? tokenListJson
+            .whereType<Map<String, dynamic>>()
+            .map(ApiTokenConfig.fromJson)
+            .toList()
+        : <ApiTokenConfig>[];
     return Settings(
       welcomeMessageVersion: json['welcome_message_version'] ?? '',
       apiKey: json['api_key'] ?? 'pst-abcd',
+      apiTokens: apiTokens,
+      resultDisplayMode: json['result_display_mode'] ?? 'waterfall',
       outputFolderPath: json['output_folder'] ?? '',
       proxy: json['proxy'] ?? '',
       debugApiEnabled: false,
@@ -83,6 +123,8 @@ class Settings {
     return {
       'welcome_message_version': welcomeMessageVersion,
       'api_key': apiKey,
+      'api_tokens': apiTokens.map((entry) => entry.toJson()).toList(),
+      'result_display_mode': resultDisplayMode,
       'output_folder': outputFolderPath,
       'proxy': proxy,
       'metadata_erase_enabled': metadataEraseEnabled,
