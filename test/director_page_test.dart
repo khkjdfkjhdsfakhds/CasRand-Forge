@@ -16,6 +16,7 @@ import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
 import 'package:nai_casrand/ui/director_page/view_models/director_page_viewmodel.dart';
 import 'package:nai_casrand/ui/director_page/widgets/director_page_view.dart';
+import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
 
 class _TestAssetLoader extends AssetLoader {
   final Map<String, dynamic> translations;
@@ -83,6 +84,7 @@ void main() {
         useCharacterPromptWithOverride: false,
       ),
     );
+    GetIt.instance.registerSingleton(GenerationPageViewmodel());
   });
 
   tearDown(() async {
@@ -109,7 +111,9 @@ void main() {
     );
   }
 
-  testWidgets('without a source only the import area shows', (tester) async {
+  testWidgets('without a source workspace and controls stay visible', (
+    tester,
+  ) async {
     await tester.binding.setSurfaceSize(const Size(1000, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -119,8 +123,23 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('director-import-image-area')), findsOneWidget);
-    expect(find.byKey(const Key('director-run')), findsNothing);
-    expect(find.byKey(const Key('director-tool-bg-removal')), findsNothing);
+    expect(find.byKey(const Key('transform-original-stage')), findsOneWidget);
+    expect(find.byKey(const Key('transform-result-stage')), findsOneWidget);
+    expect(find.byKey(const Key('director-tool-bg-removal')), findsOneWidget);
+    expect(
+      tester
+          .widget<ChoiceChip>(
+            find.byKey(const Key('director-tool-bg-removal')),
+          )
+          .onSelected,
+      isNotNull,
+    );
+    expect(
+      tester
+          .widget<FilledButton>(find.byKey(const Key('director-run')))
+          .onPressed,
+      isNull,
+    );
   });
 
   testWidgets('a source reveals all seven tools with their prices', (
@@ -148,9 +167,9 @@ void main() {
           reason: tool);
     }
     // Measured prices at 512x512: bg-removal 20, everything else 5.
-    expect(find.text('Remove BG  ·  20'), findsOneWidget);
-    expect(find.text('Line Art  ·  5'), findsOneWidget);
-    expect(find.text('Declutter (keep bubbles)  ·  5'), findsOneWidget);
+    expect(find.text('Remove BG · 20'), findsOneWidget);
+    expect(find.text('Line Art · 5'), findsOneWidget);
+    expect(find.text('Declutter (keep bubbles) · 5'), findsOneWidget);
   });
 
   testWidgets('the run button and notice state the cost', (tester) async {
@@ -163,9 +182,11 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Director Tools consume Anlas'), findsOneWidget);
-    expect(find.textContaining('costs about 20 Anlas'), findsOneWidget);
-    expect(find.textContaining('Run tool  ·  20'), findsOneWidget);
+    expect(find.textContaining('Run tool · 20'), findsOneWidget);
+    expect(
+      tester.widget<Tooltip>(find.byType(Tooltip).first).message,
+      contains('20'),
+    );
   });
 
   testWidgets('picking a cheaper tool updates the quoted cost', (tester) async {
@@ -178,7 +199,7 @@ void main() {
       localizedApp(DirectorPageView(viewmodel: DirectorPageViewmodel())),
     );
     await tester.pumpAndSettle();
-    expect(find.textContaining('Run tool  ·  20'), findsOneWidget);
+    expect(find.textContaining('Run tool · 20'), findsOneWidget);
 
     final lineart = find.byKey(const Key('director-tool-lineart'));
     await tester.ensureVisible(lineart);
@@ -186,8 +207,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(config.type, 'lineart');
-    expect(find.textContaining('Run tool  ·  5'), findsOneWidget);
-    expect(find.textContaining('costs about 5 Anlas'), findsOneWidget);
+    expect(find.textContaining('Run tool · 5'), findsOneWidget);
   });
 
   testWidgets('emotion exposes its emotion picker and defry', (tester) async {
@@ -225,7 +245,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // Measured at 1024x1024: bg-removal 65.
-    expect(find.text('Remove BG  ·  65'), findsOneWidget);
-    expect(find.textContaining('Run tool  ·  65'), findsOneWidget);
+    expect(find.text('Remove BG · 65'), findsOneWidget);
+    expect(find.textContaining('Run tool · 65'), findsOneWidget);
   });
 }

@@ -16,6 +16,17 @@ class Settings {
   /// grid with the prompt shown beside the image).
   String resultDisplayMode;
 
+  // Optional top-level workspaces. Image Generation, Generation Config and
+  // Settings are deliberately mandatory and therefore have no switches.
+  bool showImageToImagePage;
+  bool showVibeReferencePage;
+  bool showEnhancePage;
+  bool showDirectorToolsPage;
+
+  /// Manual prompt-mode changes ask for confirmation unless the user opted
+  /// out. Automatic metadata/Enhance activation still reports the new mode.
+  bool confirmPromptModeSwitch;
+
   // API key (legacy single-token field, kept in sync with [apiTokens])
   String apiKey;
 
@@ -25,6 +36,11 @@ class Settings {
   /// Subscription tier of the active account (3 = Opus), refreshed from the
   /// balance query. Drives the "free under Opus" cost estimate.
   int subscriptionTier;
+
+  /// Runtime-only verification state. It is deliberately not restored from a
+  /// saved config because subscription status can expire between launches.
+  bool subscriptionActive;
+  bool subscriptionStatusKnown;
 
   // Output dir, for windows only
   String outputFolderPath;
@@ -67,7 +83,14 @@ class Settings {
     required this.generationPageColumnCount,
     required this.themeMode,
     this.resultDisplayMode = 'waterfall',
+    this.showImageToImagePage = true,
+    this.showVibeReferencePage = true,
+    this.showEnhancePage = true,
+    this.showDirectorToolsPage = true,
+    this.confirmPromptModeSwitch = true,
     this.subscriptionTier = 0,
+    this.subscriptionActive = false,
+    this.subscriptionStatusKnown = false,
     List<ApiTokenConfig>? apiTokens,
   }) : apiTokens = apiTokens ?? [];
 
@@ -96,15 +119,20 @@ class Settings {
     final tokenListJson = json['api_tokens'];
     final apiTokens = tokenListJson is List
         ? tokenListJson
-            .whereType<Map<String, dynamic>>()
-            .map(ApiTokenConfig.fromJson)
-            .toList()
+              .whereType<Map<String, dynamic>>()
+              .map(ApiTokenConfig.fromJson)
+              .toList()
         : <ApiTokenConfig>[];
     return Settings(
       welcomeMessageVersion: json['welcome_message_version'] ?? '',
       apiKey: json['api_key'] ?? 'pst-abcd',
       apiTokens: apiTokens,
       resultDisplayMode: json['result_display_mode'] ?? 'waterfall',
+      showImageToImagePage: json['show_image_to_image_page'] ?? true,
+      showVibeReferencePage: json['show_vibe_reference_page'] ?? true,
+      showEnhancePage: json['show_enhance_page'] ?? true,
+      showDirectorToolsPage: json['show_director_tools_page'] ?? true,
+      confirmPromptModeSwitch: json['confirm_prompt_mode_switch'] ?? true,
       subscriptionTier: json['subscription_tier'] ?? 0,
       outputFolderPath: json['output_folder'] ?? '',
       proxy: json['proxy'] ?? '',
@@ -131,6 +159,11 @@ class Settings {
       'api_key': apiKey,
       'api_tokens': apiTokens.map((entry) => entry.toJson()).toList(),
       'result_display_mode': resultDisplayMode,
+      'show_image_to_image_page': showImageToImagePage,
+      'show_vibe_reference_page': showVibeReferencePage,
+      'show_enhance_page': showEnhancePage,
+      'show_director_tools_page': showDirectorToolsPage,
+      'confirm_prompt_mode_switch': confirmPromptModeSwitch,
       'subscription_tier': subscriptionTier,
       'output_folder': outputFolderPath,
       'proxy': proxy,

@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get_it/get_it.dart';
@@ -15,6 +16,8 @@ import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
+import 'package:nai_casrand/data/use_cases/autocrop_planner.dart' show CropRect;
+import 'package:nai_casrand/data/use_cases/i2i_request_size.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/classic_info_card.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/generation_page_view.dart';
@@ -128,7 +131,7 @@ void main() {
     );
   }
 
-  testWidgets('I2I page shows only the import area without a base image', (
+  testWidgets('I2I page keeps controls visible and only disables generation', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(1200, 1000));
@@ -141,15 +144,48 @@ void main() {
 
     expect(find.byKey(const Key('i2i-import-image-area')), findsOneWidget);
     expect(find.text('Base Image'), findsOneWidget);
-    // The interactive controls stay hidden until an image exists...
-    expect(find.byKey(const Key('inpaint-edit-mask')), findsNothing);
-    expect(find.byKey(const Key('i2i-generate-once')), findsNothing);
-    expect(find.byKey(const Key('enhance-run')), findsNothing);
-    // ...but the page still lists what importing an image unlocks, so Enhance
-    // and Inpaint do not look missing.
-    expect(find.text('Import a base image to unlock'), findsOneWidget);
+    expect(find.byKey(const Key('inpaint-edit-mask')), findsOneWidget);
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.byKey(const Key('inpaint-edit-mask')),
+          )
+          .onPressed,
+      isNotNull,
+    );
+    final generate = tester.widget<FilledButton>(
+      find.byKey(const Key('i2i-generate-once')),
+    );
+    expect(generate.onPressed, isNull);
     expect(find.text('Img2Img Parameters'), findsOneWidget);
-    expect(find.text('Enhance'), findsOneWidget);
+  });
+
+  testWidgets('inpaint action overlays the top-right of the import area', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      localizedApp(I2iPageView(viewmodel: I2iPageViewmodel())),
+    );
+    await tester.pumpAndSettle();
+
+    final importArea = tester.getRect(
+      find.byKey(const Key('i2i-import-image-area')),
+    );
+    final inpaintAction = tester.getRect(
+      find.byKey(const Key('inpaint-edit-mask')),
+    );
+
+    expect(inpaintAction.left, greaterThan(importArea.center.dx));
+    expect(inpaintAction.top, greaterThanOrEqualTo(importArea.top));
+    expect(inpaintAction.right, lessThan(importArea.right));
+    expect(inpaintAction.center.dy, lessThan(importArea.center.dy));
+    expect(
+      inpaintAction.top,
+      lessThan(tester.getTopLeft(find.text('Img2Img Parameters')).dy),
+    );
   });
 
   testWidgets('base image reveals parameters, inpaint entry and generate', (
@@ -173,7 +209,9 @@ void main() {
     expect(find.textContaining('Noise: 0.00'), findsOneWidget);
     // Inpaint-only switches stay hidden until a mask exists.
     expect(find.byKey(const Key('inpaint-autocrop')), findsNothing);
-    expect(find.text('No mask: plain img2img'), findsOneWidget);
+    // The only Inpaint entry is the top-right overlay.
+    expect(find.text('Inpaint'), findsOneWidget);
+    expect(find.text('No mask: plain img2img'), findsNothing);
   });
 
   testWidgets('mask presence swaps noise for the inpaint switches', (
@@ -197,10 +235,9 @@ void main() {
     );
     expect(find.byKey(const Key('inpaint-clear-mask')), findsOneWidget);
     expect(find.textContaining('Noise:'), findsNothing);
+    expect(find.text('Inpaint'), findsOneWidget);
     expect(
-      find.text('Mask painted: masked area will be repainted'),
-      findsOneWidget,
-    );
+        find.text('Mask painted: masked area will be repainted'), findsNothing);
   });
 
   testWidgets('autocrop switch toggles the config and its hint', (
@@ -244,7 +281,11 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('inpaint-clear-mask')));
+    final clearButton = tester.widget<FilledButton>(
+      find.byKey(const Key('inpaint-clear-mask')),
+    );
+    expect(clearButton.onPressed, isNotNull);
+    clearButton.onPressed!();
     await tester.pumpAndSettle();
 
     expect(config.hasMask, isFalse);
@@ -269,10 +310,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(config.hasImage, isFalse);
-    expect(find.byKey(const Key('i2i-generate-once')), findsNothing);
-    expect(find.byKey(const Key('enhance-run')), findsNothing);
-    // Back to the locked-sections preview.
-    expect(find.text('Import a base image to unlock'), findsOneWidget);
+    final generate = tester.widget<FilledButton>(
+      find.byKey(const Key('i2i-generate-once')),
+    );
+    expect(generate.onPressed, isNull);
+    expect(find.text('Img2Img Parameters'), findsOneWidget);
   });
 
   testWidgets('use image size applies the snapped size to parameters', (
@@ -293,89 +335,170 @@ void main() {
     await tester.tap(useSizeButton);
     await tester.pumpAndSettle();
 
-    // 500 -> 512, 300 -> 320 (nearest multiple of 64).
+    // 500 -> 512, 300 -> 320 (nearest multiple of 64). The button switches
+    // mode even when Auto happened to choose the same dimensions.
+    expect(
+      payloadConfig.i2iConfig.requestSize,
+      const GenerationSize(width: 512, height: 320),
+    );
     expect(
       payloadConfig.paramConfig.sizes,
-      [const GenerationSize(width: 512, height: 320)],
+      [const GenerationSize(width: 832, height: 1216)],
     );
-    expect(find.byKey(const Key('i2i-use-image-size')), findsNothing);
+    expect(
+      payloadConfig.i2iConfig.sizeMode,
+      I2iSizeMode.original,
+    );
+    expect(find.byKey(const Key('i2i-use-image-size')), findsOneWidget);
   });
 
-  testWidgets('enhance section offers magnifications and a preset', (
+  testWidgets('manual size dialog snaps and applies the request size', (
     tester,
   ) async {
-    await tester.binding.setSurfaceSize(const Size(1200, 1800));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    GetIt.I<PayloadConfig>().i2iConfig.setImage(solidPng(512, 512));
-
-    await tester.pumpWidget(
-      localizedApp(I2iPageView(viewmodel: I2iPageViewmodel())),
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.text('Enhance'), findsOneWidget);
-    // The official panel offers 1x and 1.5x only.
-    expect(find.byKey(const Key('enhance-scale-1.0')), findsOneWidget);
-    expect(find.byKey(const Key('enhance-scale-1.5')), findsOneWidget);
-    expect(find.byKey(const Key('enhance-scale-2.0')), findsNothing);
-    expect(find.text('1.5x  768×768'), findsOneWidget);
-    expect(find.byKey(const Key('enhance-preset-slider')), findsOneWidget);
-    expect(find.byKey(const Key('enhance-run')), findsOneWidget);
-    expect(find.textContaining('Enhance once → 768×768'), findsOneWidget);
-  });
-
-  testWidgets('enhance applies the target size, preset and clears the mask', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(1200, 1800));
+    await tester.binding.setSurfaceSize(const Size(1200, 1400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final payloadConfig = GetIt.I<PayloadConfig>();
-    final config = payloadConfig.i2iConfig;
-    config.setImage(solidPng(512, 512));
-    config.setMask(maskPng(512, 512), const <MaskStroke>[]);
-
-    final viewmodel = I2iPageViewmodel();
-    await tester.pumpWidget(localizedApp(I2iPageView(viewmodel: viewmodel)));
-    await tester.pumpAndSettle();
-
-    // Pick 1.5x and the strongest magnitude, then run.
-    final scaleChip = find.byKey(const Key('enhance-scale-1.5'));
-    await tester.ensureVisible(scaleChip);
-    await tester.tap(scaleChip);
-    await tester.pumpAndSettle();
-    viewmodel.setEnhancePresetIndex(4);
-    await tester.pumpAndSettle();
-
-    final runButton = find.byKey(const Key('enhance-run'));
-    await tester.ensureVisible(runButton);
-    await tester.tap(runButton);
-    await tester.pumpAndSettle();
-
-    // 512 * 1.5 = 768, already a multiple of 64.
-    expect(
-      payloadConfig.paramConfig.sizes,
-      [const GenerationSize(width: 768, height: 768)],
-    );
-    expect(config.strength, 0.7);
-    expect(config.noise, 0.1);
-    expect(config.hasMask, isFalse, reason: 'enhance re-renders the whole image');
-  });
-
-  testWidgets('enhance offers nothing when the image is already at the cap', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(1200, 1800));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    // 1728x1728 is exactly the cap, so 1x is offered but 1.5x is not.
-    GetIt.I<PayloadConfig>().i2iConfig.setImage(solidPng(1728, 1728));
+    payloadConfig.i2iConfig.setImage(solidPng(500, 300));
 
     await tester.pumpWidget(
       localizedApp(I2iPageView(viewmodel: I2iPageViewmodel())),
     );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('enhance-scale-1.0')), findsOneWidget);
-    expect(find.byKey(const Key('enhance-scale-1.5')), findsNothing);
+    final manualButton = find.byKey(const Key('i2i-manual-size'));
+    await tester.ensureVisible(manualButton);
+    await tester.tap(manualButton);
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const Key('i2i-manual-size-width')),
+      '900',
+    );
+    await tester.enterText(
+      find.byKey(const Key('i2i-manual-size-height')),
+      '1250',
+    );
+    await tester.tap(find.byKey(const Key('i2i-manual-size-confirm')));
+    await tester.pumpAndSettle();
+
+    // 900 -> 896, 1250 -> 1280 (nearest multiples of 64).
+    expect(
+      payloadConfig.i2iConfig.requestSize,
+      const GenerationSize(width: 896, height: 1280),
+    );
+    expect(
+      payloadConfig.paramConfig.sizes,
+      [const GenerationSize(width: 832, height: 1216)],
+    );
+  });
+
+  testWidgets(
+      'generation action buttons share a compact width and expand on hover',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      localizedApp(
+        GenerationPageView(viewmodel: GetIt.I<GenerationPageViewmodel>()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final actionKeys = [
+      const Key('generation-settings-fab'),
+      const Key('prompt-mode-switch'),
+      const Key('generate-prompt-fab'),
+      const Key('generation-toggle-fab'),
+    ];
+    final collapsedWidths =
+        actionKeys.map((key) => tester.getSize(find.byKey(key)).width).toList();
+    expect(collapsedWidths.toSet(), hasLength(1));
+
+    final settings = find.byKey(const Key('generation-settings-fab'));
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(settings));
+    await tester.pumpAndSettle();
+    expect(
+      tester.getSize(settings).width,
+      greaterThan(collapsedWidths.first),
+    );
+    expect(find.text('Generation Settings'), findsWidgets);
+    await mouse.removePointer();
+  });
+
+  testWidgets('a manual focus frame replaces the autocrop switch', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final config = GetIt.I<PayloadConfig>().i2iConfig;
+    config.setImage(solidPng(500, 300));
+    config.setMask(maskPng(500, 300), const <MaskStroke>[]);
+    config.setManualFocusFrame(
+      const CropRect(x: 0, y: 0, w: 128, h: 128),
+    );
+
+    await tester.pumpWidget(
+      localizedApp(I2iPageView(viewmodel: I2iPageViewmodel())),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('inpaint-manual-frame')), findsOneWidget);
+    expect(find.byKey(const Key('inpaint-autocrop')), findsNothing);
+    expect(find.textContaining('128 × 128'), findsOneWidget);
+
+    final clearButton = find.byKey(const Key('inpaint-clear-frame'));
+    await tester.ensureVisible(clearButton);
+    await tester.tap(clearButton);
+    await tester.pumpAndSettle();
+
+    expect(config.manualFocusFrame, isNull);
+    expect(find.byKey(const Key('inpaint-autocrop')), findsOneWidget);
+  });
+
+  testWidgets('saved mask and Focus frame are overlaid on the base preview', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final config = GetIt.I<PayloadConfig>().i2iConfig;
+    config.setImage(solidPng(500, 300));
+    config.setMask(
+      solidPng(500, 300),
+      const [
+        MaskStroke(
+          isErase: false,
+          brushSize: 40,
+          points: [Offset(100, 100), Offset(180, 140)],
+        ),
+      ],
+    );
+    config.setManualFocusFrame(const CropRect(x: 60, y: 40, w: 260, h: 180));
+
+    await tester.pumpWidget(
+      localizedApp(I2iPageView(viewmodel: I2iPageViewmodel())),
+    );
+    await tester.pumpAndSettle();
+
+    final previewSize = tester.getSize(
+      find.byKey(const Key('i2i-image-preview-stack')),
+    );
+    expect(previewSize.width / previewSize.height, closeTo(500 / 300, 0.001));
+    expect(
+      find.byKey(const Key('i2i-mask-preview-overlay')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('inpaint-manual-frame')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('inpaint-clear-mask')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('i2i-mask-preview-overlay')),
+      findsNothing,
+    );
+    expect(config.manualFocusFrame, isNull);
   });
 
   testWidgets('display mode switch changes the result card widget', (

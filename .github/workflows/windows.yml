@@ -11,7 +11,7 @@ jobs:
     # super_native_extensions 0.8.x still uses the VS 2022 coroutine headers.
     runs-on: windows-2022
     env:
-      ASSET_NAME: CasRand-Forge-v0.9.3-Windows-x64.zip
+      ASSET_NAME: CasRand-Forge-v0.9.4-Windows-x64.zip
 
     steps:
       - name: Check out source
@@ -58,7 +58,7 @@ jobs:
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: windows-beta
+          name: windows-stable
           path: ${{ env.ASSET_NAME }}
           if-no-files-found: error
           retention-days: 14

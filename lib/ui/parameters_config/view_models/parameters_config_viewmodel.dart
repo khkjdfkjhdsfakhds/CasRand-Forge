@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
-import 'package:nai_casrand/ui/core/utils/flushbar.dart';
+import 'package:nai_casrand/ui/core/widgets/prompt_mode_switch_button.dart';
 
 class ParametersConfigViewmodel extends ChangeNotifier {
   PayloadConfig get payloadConfig => GetIt.I();
@@ -71,6 +71,19 @@ class ParametersConfigViewmodel extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setModelFromMetadata(BuildContext context, String value) {
+    payloadConfig.fixedProfile.paramConfig.model = value;
+    payloadConfig.promptMode = PromptMode.fixed;
+    notifyListeners();
+    showFixedModeImportNotice(
+      context,
+      tr(
+        'pasted_parameter',
+        namedArgs: {'parameter_name': tr('generation_model')},
+      ),
+    );
+  }
+
   bool get isV4 => config.model.contains('-4-');
 
   void setLegacyUc(bool? value) {
@@ -85,18 +98,13 @@ class ParametersConfigViewmodel extends ChangeNotifier {
     String? prompt,
     String? model,
   ) {
-    int loadedCount = payloadConfig.loadParamJson(commentData);
-    if (prompt != null) {
-      payloadConfig.overridePrompt = prompt;
-      payloadConfig.useOverridePrompt = true;
-      loadedCount++;
-    }
-    if (model != null) {
-      payloadConfig.paramConfig.model = model;
-      loadedCount++;
-    }
+    final loadedCount = payloadConfig.importMetadataToFixedProfile(
+      commentData,
+      prompt: prompt,
+      model: model,
+    );
     notifyListeners();
-    showInfoBar(
+    showFixedModeImportNotice(
         context,
         tr(
           'loaded_parameters_count',
@@ -109,7 +117,7 @@ class ParametersConfigViewmodel extends ChangeNotifier {
     final loadedCount = payloadConfig.loadParamJson(commentData);
     if (loadedCount == 0) return;
     notifyListeners();
-    showInfoBar(
+    showFixedModeImportNotice(
         context,
         tr(
           'pasted_parameter',
@@ -119,10 +127,11 @@ class ParametersConfigViewmodel extends ChangeNotifier {
 
   void setOverridePrompt(BuildContext context, String? prompt) {
     if (prompt == null) return;
-    payloadConfig.overridePrompt = prompt;
-    payloadConfig.useOverridePrompt = true;
+    payloadConfig.fixedProfile.rootPromptConfig =
+        PayloadConfig.fixedPromptConfig(prompt);
+    payloadConfig.promptMode = PromptMode.fixed;
     notifyListeners();
-    showInfoBar(
+    showFixedModeImportNotice(
         context,
         tr(
           'pasted_parameter',

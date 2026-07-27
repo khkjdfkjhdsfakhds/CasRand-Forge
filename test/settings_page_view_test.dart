@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
+import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/precise_reference_config.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
@@ -46,6 +47,12 @@ class _FakeConfigService extends ConfigService {
 
   @override
   Future<String> loadDefaultConfig() async => json.encode(defaultConfig);
+
+  @override
+  Future<void> saveConfig(Map<String, dynamic> jsonData) async {
+    savedConfigs[currentUuid] =
+        json.decode(json.encode(jsonData)) as Map<String, dynamic>;
+  }
 
   @override
   Future<String> saveNewConfig(
@@ -101,6 +108,7 @@ void main() {
     await GetIt.instance.reset();
     configService = _FakeConfigService(defaultConfigJson());
     GetIt.instance.registerSingleton<ConfigService>(configService);
+    GetIt.instance.registerSingleton(NavigationRequest());
     GetIt.instance.registerSingleton(
       PayloadConfig(
         rootPromptConfig: PromptConfig(strs: [], prompts: []),
@@ -171,6 +179,27 @@ void main() {
     expect(
       GetIt.I<PayloadConfig>().settings.rememberSequentialProgress,
       isTrue,
+    );
+  });
+
+  testWidgets('optional navigation pages can be hidden and are persisted', (
+    tester,
+  ) async {
+    await tester.pumpWidget(localizedSettingsPage());
+    await tester.pumpAndSettle();
+
+    final toggle = find.byKey(const Key('show-enhance-page'));
+    expect(toggle, findsOneWidget);
+    expect(GetIt.I<PayloadConfig>().settings.showEnhancePage, isTrue);
+
+    await tester.ensureVisible(toggle);
+    await tester.tap(toggle);
+    await tester.pump();
+
+    expect(GetIt.I<PayloadConfig>().settings.showEnhancePage, isFalse);
+    expect(
+      GetIt.I<PayloadConfig>().settings.toJson()['show_enhance_page'],
+      isFalse,
     );
   });
 

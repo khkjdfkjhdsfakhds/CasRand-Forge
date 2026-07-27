@@ -326,8 +326,26 @@ _ContentGeometry? _planContent(int outerW, int outerH, int areaCap) {
       ((sqrt(areaCap / (outerW * outerH)) + 1e-9) * scaleQuantum).floor();
   steps = max(scaleQuantum, steps);
   for (var step = steps; step >= scaleQuantum; step--) {
-    final geometry =
-        _contentGeometry(outerW, outerH, step / scaleQuantum);
+    final geometry = _contentGeometry(outerW, outerH, step / scaleQuantum);
+    if (geometry.area > areaCap) continue;
+    if (geometry.contentWidth % latentGrid != 0) continue;
+    if (geometry.contentHeight % latentGrid != 0) continue;
+    if (geometry.requestWidth > maxRequestSide) continue;
+    if (geometry.requestHeight > maxRequestSide) continue;
+    return geometry;
+  }
+  return null;
+}
+
+/// Like [_planContent], but also accepts scales below 1.0. A hand-drawn frame
+/// may exceed the request budget, in which case its content is scaled down to
+/// fit — matching the official manual focus frame, which fits the frame to the
+/// request resolution instead of refusing.
+_ContentGeometry? _planContentAllowShrink(int outerW, int outerH, int areaCap) {
+  final enlarged = _planContent(outerW, outerH, areaCap);
+  if (enlarged != null) return enlarged;
+  for (var step = scaleQuantum - 1; step >= 5; step--) {
+    final geometry = _contentGeometry(outerW, outerH, step / scaleQuantum);
     if (geometry.area > areaCap) continue;
     if (geometry.contentWidth % latentGrid != 0) continue;
     if (geometry.contentHeight % latentGrid != 0) continue;
@@ -450,8 +468,7 @@ FocusInpaintPlan? _planFrameForRegion({
 
   // The whole image is the largest frame there is; prefer it whenever it fits
   // the budget, so a compliant source is sent untouched at 1:1.
-  final wholeImage =
-      CropRect(x: 0, y: 0, w: imageWidth, h: imageHeight);
+  final wholeImage = CropRect(x: 0, y: 0, w: imageWidth, h: imageHeight);
   if (wholeImage.contains(must) &&
       _planContent(imageWidth, imageHeight, cap) != null) {
     best = wholeImage;
@@ -520,6 +537,73 @@ FocusInpaintPlan? _planFrameForRegion({
     ),
     contextPx: effectiveContext,
     scale: scale,
+    contentWidth: geometry.contentWidth,
+    contentHeight: geometry.contentHeight,
+    contentOffsetX: geometry.contentOffsetX,
+    contentOffsetY: geometry.contentOffsetY,
+    requestWidth: geometry.requestWidth,
+    requestHeight: geometry.requestHeight,
+  );
+}
+
+/// Whether any cell of [cells] inside [frame] is masked.
+bool _frameTouchesMask(
+  MaskCellGrid cells,
+  CropRect frame,
+  int imageWidth,
+  int imageHeight,
+) {
+  return maskedCellRatio(cells, frame, imageWidth, imageHeight) > 0;
+}
+
+/// Snap a hand-drawn frame onto the latent grid, clipped to the image.
+/// Returns null when the frame has no usable area.
+CropRect? normalizeManualFrame({
+  required CropRect frame,
+  required int imageWidth,
+  required int imageHeight,
+}) {
+  if (frame.w <= 0 || frame.h <= 0) return null;
+  final left = _clampInt(_floorTo(frame.x, latentGrid), 0, imageWidth);
+  final top = _clampInt(_floorTo(frame.y, latentGrid), 0, imageHeight);
+  final right = _clampInt(_ceilTo(frame.right, latentGrid), 0, imageWidth);
+  final bottom = _clampInt(_ceilTo(frame.bottom, latentGrid), 0, imageHeight);
+  if (right - left < latentGrid || bottom - top < latentGrid) return null;
+  return CropRect(x: left, y: top, w: right - left, h: bottom - top);
+}
+
+/// Plans one focus-inpainting request for a hand-drawn frame.
+///
+/// The frame replaces Autocrop's automatic search: it is snapped to the
+/// latent grid, and its content is scaled to fill the request budget — up
+/// like Autocrop, or *down* when the frame itself exceeds the budget (the
+/// official manual frame fits oversized frames instead of refusing). Only the
+/// mask inside the frame is repainted. Returns null when the frame contains
+/// no mask or cannot be planned; the caller falls back to the automatic path.
+FocusInpaintPlan? planManualFocusInpaint({
+  required int imageWidth,
+  required int imageHeight,
+  required MaskCellGrid cells,
+  required CropRect frame,
+  required int maxArea,
+}) {
+  final snapped = normalizeManualFrame(
+    frame: frame,
+    imageWidth: imageWidth,
+    imageHeight: imageHeight,
+  );
+  if (snapped == null) return null;
+  if (!_frameTouchesMask(cells, snapped, imageWidth, imageHeight)) return null;
+
+  final cap = max(minRequestSide * minRequestSide, maxArea);
+  final geometry = _planContentAllowShrink(snapped.w, snapped.h, cap);
+  if (geometry == null) return null;
+
+  return FocusInpaintPlan(
+    outer: snapped,
+    inner: snapped,
+    contextPx: 0,
+    scale: geometry.scale,
     contentWidth: geometry.contentWidth,
     contentHeight: geometry.contentHeight,
     contentOffsetX: geometry.contentOffsetX,
@@ -741,8 +825,7 @@ FocusInpaintBatch? planFocusInpaintBatch({
     // The mask does not fit one frame; tile it.
     final tileSize = bestTileSizeFor(bbox, cap);
     regions = splitIntoGrid(bbox, tileSize.x, tileSize.y);
-    splitMode =
-        regions.length > 1 ? FocusSplitMode.grid : FocusSplitMode.none;
+    splitMode = regions.length > 1 ? FocusSplitMode.grid : FocusSplitMode.none;
   }
 
   // Plan each region, dropping duplicate frames so overlapping regions that

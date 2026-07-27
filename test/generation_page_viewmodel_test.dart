@@ -11,6 +11,7 @@ import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
 import 'package:nai_casrand/data/use_cases/generate_payload_use_case.dart';
+import 'package:nai_casrand/data/use_cases/prepare_i2i_request_use_case.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
 
 class _SchedulingViewmodel extends GenerationPageViewmodel {
@@ -28,6 +29,7 @@ class _WorkerRecordingViewmodel extends GenerationPageViewmodel {
   @override
   Command<void, InfoCardContent> createGenerationCommand({
     required int workerIndex,
+    I2iRequestBatch? presetBatch,
   }) {
     createdWorkers.add(workerIndex);
     return Command.createAsyncNoParam(
@@ -356,7 +358,8 @@ void main() {
     viewmodel.dispose();
   });
 
-  testWidgets('runSingleGeneration issues one worker-0 command outside the loop',
+  testWidgets(
+      'runSingleGeneration issues one worker-0 command outside the loop',
       (tester) async {
     final viewmodel = _WorkerRecordingViewmodel();
     final commandStatus = GetIt.I<CommandStatus>();

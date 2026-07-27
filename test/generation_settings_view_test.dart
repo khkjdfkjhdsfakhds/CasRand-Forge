@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:easy_localization/easy_localization.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -127,8 +128,7 @@ void main() {
     expect(find.text('Generation interval (seconds)'), findsOneWidget);
     expect(find.text('Batch settings'), findsNothing);
     expect(find.text('Fixed Seed'), findsNothing);
-    expect(find.text('Override random prompts'), findsOneWidget);
-    expect(find.text('Use generated character prompts'), findsNothing);
+    expect(find.text('Override random prompts'), findsNothing);
 
     final orderedSettings = [
       find.text('Generation count'),
@@ -139,16 +139,10 @@ void main() {
       // because it now applies to both result layouts.
       find.text('Result display style'),
       find.text('Columns per row: 2'),
-      find.text('Override random prompts'),
     ];
     final verticalOffsets =
         orderedSettings.map((finder) => tester.getTopLeft(finder).dy).toList();
     expect(verticalOffsets, orderedEquals(List.of(verticalOffsets)..sort()));
-    expect(
-      tester.getTopLeft(find.text('Override random prompts')).dy,
-      tester.getTopLeft(orderedSettings.last).dy,
-    );
-
     await tester.tap(
       find.byKey(const Key('generation-settings-random-seed')),
     );
@@ -188,36 +182,14 @@ void main() {
     expect(find.text('Interval between batches (seconds)'), findsNothing);
   });
 
-  testWidgets('override prompt settings show without clearing data', (
+  testWidgets('prompt mode button explains and preserves both profiles', (
     tester,
   ) async {
     final config = GetIt.I<PayloadConfig>();
-    config.useOverridePrompt = true;
-    config.useCharacterPromptWithOverride = true;
-    config.overridePrompt = 'preserved prompt';
-
-    await tester.pumpWidget(
-      localizedApp(
-        Scaffold(
-          body: GenerationSettingsView(viewmodel: GenerationPageViewmodel()),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.text('Override random prompts'), findsOneWidget);
-    expect(find.text('Use generated character prompts'), findsOneWidget);
-    expect(config.useOverridePrompt, isTrue);
-    expect(config.useCharacterPromptWithOverride, isTrue);
-    expect(config.overridePrompt, 'preserved prompt');
-  });
-
-  testWidgets('previously enabled override prompt fields are editable', (
-    tester,
-  ) async {
-    final config = GetIt.I<PayloadConfig>();
-    config.useOverridePrompt = true;
-    config.overridePrompt = 'preserved prompt';
+    config.fixedProfile.rootPromptConfig =
+        PayloadConfig.fixedPromptConfig('preserved prompt');
+    config.randomProfile.paramConfig.steps = 17;
+    config.fixedProfile.paramConfig.steps = 31;
 
     await tester.pumpWidget(
       localizedApp(
@@ -226,10 +198,70 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Override prompts'), findsOneWidget);
-    expect(find.text('Unwanted content'), findsOneWidget);
-    expect(config.useOverridePrompt, isTrue);
+    expect(find.byIcon(Icons.shuffle), findsOneWidget);
+    await tester.tap(find.byKey(const Key('prompt-mode-switch')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Switch generation profile'), findsOneWidget);
+    expect(
+      find.textContaining('other profile will not be deleted'),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const Key('prompt-mode-dont-ask-again')));
+    await tester.tap(find.byKey(const Key('prompt-mode-confirm-switch')));
+    await tester.pumpAndSettle();
+
+    expect(config.promptMode, PromptMode.fixed);
+    expect(find.byIcon(Icons.push_pin), findsOneWidget);
+    expect(config.settings.confirmPromptModeSwitch, isFalse);
     expect(config.overridePrompt, 'preserved prompt');
+    expect(config.paramConfig.steps, 31);
+    expect(config.randomProfile.paramConfig.steps, 17);
+  });
+
+  testWidgets('fixed prompt mode exposes its separate prompt fields', (
+    tester,
+  ) async {
+    final config = GetIt.I<PayloadConfig>();
+    config.promptMode = PromptMode.fixed;
+    config.overridePrompt = 'preserved prompt';
+
+    await tester.pumpWidget(
+      localizedApp(
+        PromptTabView(
+          viewmodel: PromptTabViewmodel(payloadConfig: config),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Fixed-prompt profile is active'), findsOneWidget);
+    expect(find.byKey(const Key('fixed-positive-prompt')), findsOneWidget);
+    expect(find.byKey(const Key('fixed-negative-prompt')), findsOneWidget);
+    expect(config.overridePrompt, 'preserved prompt');
+  });
+
+  testWidgets('prompt settings mode button expands on hover', (tester) async {
+    final config = GetIt.I<PayloadConfig>();
+    await tester.pumpWidget(
+      localizedApp(
+        PromptTabView(
+          viewmodel: PromptTabViewmodel(payloadConfig: config),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final button = find.byKey(const Key('prompt-mode-switch'));
+    final collapsedWidth = tester.getSize(button).width;
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(button));
+    await tester.pumpAndSettle();
+
+    expect(tester.getSize(button).width, greaterThan(collapsedWidth));
+    expect(find.text('Random prompts'), findsOneWidget);
+    await mouse.removePointer();
   });
 
   testWidgets('image size selector still supports preset and manual sizes', (
@@ -686,7 +718,7 @@ void main() {
     );
   });
 
-  testWidgets('Vibe Transfer / Precise Reference and parameters keep order', (
+  testWidgets('configuration tabs keep their simplified order', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -702,11 +734,7 @@ void main() {
         .toList();
     expect(
       labels,
-      [
-        'Prompt Config',
-        'Vibe Transfer / Precise Reference',
-        'Generation Parameters',
-      ],
+      ['Prompt Config', 'Generation Parameters'],
     );
   });
 }

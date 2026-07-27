@@ -187,7 +187,7 @@ class ParametersConfigView extends StatelessWidget {
           ? ListTile(
               title: Text(tr('generation_model')),
               subtitle: Text(model),
-              onTap: () => viewmodel.setModel(model),
+              onTap: () => viewmodel.setModelFromMetadata(context, model),
             )
           : const SizedBox.shrink();
       final sizeTile = ListTile(

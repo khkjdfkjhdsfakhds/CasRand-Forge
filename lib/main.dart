@@ -36,6 +36,49 @@ void main() async {
   runApp(appWithLocales);
 }
 
+/// App-wide look: soft elevation-free cards on a layered surface, rounded
+/// corners everywhere, and a quiet navigation rail — closer to the official
+/// web editor's calm panel look while keeping the CasRand pink identity.
+ThemeData buildAppTheme(Brightness brightness) {
+  final scheme = ColorScheme.fromSeed(
+    seedColor: Colors.pinkAccent,
+    brightness: brightness,
+  );
+  return ThemeData(
+    colorScheme: scheme,
+    useMaterial3: true,
+    cardTheme: CardThemeData(
+      elevation: 0,
+      color: scheme.surfaceContainerLow,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 0),
+    ),
+    appBarTheme: AppBarTheme(
+      backgroundColor: scheme.surfaceContainer,
+      scrolledUnderElevation: 0,
+    ),
+    navigationRailTheme: NavigationRailThemeData(
+      backgroundColor: scheme.surfaceContainer,
+      indicatorColor: scheme.primaryContainer,
+      indicatorShape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+    ),
+    dialogTheme: DialogThemeData(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+    ),
+    snackBarTheme: SnackBarThemeData(
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    ),
+    chipTheme: ChipThemeData(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+    ),
+    dividerTheme: DividerThemeData(
+      color: scheme.outlineVariant.withValues(alpha: 0.5),
+    ),
+  );
+}
+
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
@@ -43,18 +86,8 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     final config = GetIt.I<PayloadConfig>();
     return AdaptiveTheme(
-      light: ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: Colors.pinkAccent,
-            brightness: Brightness.light,
-          ),
-          useMaterial3: true),
-      dark: ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: Colors.pinkAccent,
-            brightness: Brightness.dark,
-          ),
-          useMaterial3: true),
+      light: buildAppTheme(Brightness.light),
+      dark: buildAppTheme(Brightness.dark),
       initial: config.settings.theme,
       builder: (theme, darkTheme) => MaterialApp(
         theme: theme,

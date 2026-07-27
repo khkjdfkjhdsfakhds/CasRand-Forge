@@ -1,5 +1,10 @@
+import 'dart:math';
+
 import 'package:nai_casrand/data/models/character_config.dart';
 import 'package:nai_casrand/data/models/director_tool_config.dart';
+import 'package:nai_casrand/data/models/enhance_config.dart';
+import 'package:nai_casrand/data/models/generation_profile.dart';
+import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/models/i2i_config.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/precise_reference_config.dart';
@@ -7,16 +12,23 @@ import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
 import 'package:nai_casrand/data/models/vibe_config.dart';
 import 'package:nai_casrand/data/models/vibe_config_v4.dart';
+import 'package:nai_casrand/data/use_cases/i2i_request_size.dart';
 
 class PayloadResult {
   final String comment;
   final Map<String, dynamic> payload;
 
-  const PayloadResult({
-    required this.comment,
-    required this.payload,
-  });
+  const PayloadResult({required this.comment, required this.payload});
 }
+
+I2iSizeMode _i2iSizeModeFromJson(dynamic value) {
+  return I2iSizeMode.values.firstWhere(
+    (mode) => mode.name == value,
+    orElse: () => I2iSizeMode.automatic,
+  );
+}
+
+enum PromptMode { random, fixed }
 
 const Map<int, String> xMapping = {
   0: 'X',
@@ -33,40 +45,109 @@ const Map<int, double> doubleMapping = {
   2: 0.3,
   3: 0.5,
   4: 0.7,
-  5: 0.9
+  5: 0.9,
 };
 
 class PayloadConfig {
-  PromptConfig rootPromptConfig;
-  PromptConfig negativePromptConfig;
-  List<CharacterConfig> characterConfigList;
-  List<PromptConfig> savedPromptConfigList;
+  GenerationProfile randomProfile;
+  GenerationProfile fixedProfile;
+  PromptMode promptMode;
 
-  ParamConfig paramConfig;
+  GenerationProfile get activeProfile =>
+      promptMode == PromptMode.fixed ? fixedProfile : randomProfile;
+
+  PromptConfig get rootPromptConfig => activeProfile.rootPromptConfig;
+  set rootPromptConfig(PromptConfig value) =>
+      activeProfile.rootPromptConfig = value;
+  PromptConfig get negativePromptConfig => activeProfile.negativePromptConfig;
+  set negativePromptConfig(PromptConfig value) =>
+      activeProfile.negativePromptConfig = value;
+  List<CharacterConfig> get characterConfigList =>
+      activeProfile.characterConfigList;
+  set characterConfigList(List<CharacterConfig> value) =>
+      activeProfile.characterConfigList = value;
+  List<PromptConfig> get savedPromptConfigList =>
+      activeProfile.savedPromptConfigList;
+  set savedPromptConfigList(List<PromptConfig> value) =>
+      activeProfile.savedPromptConfigList = value;
+  ParamConfig get paramConfig => activeProfile.paramConfig;
+  set paramConfig(ParamConfig value) => activeProfile.paramConfig = value;
 
   Settings settings;
 
   I2IConfig i2iConfig = I2IConfig();
+  EnhanceConfig enhanceConfig = EnhanceConfig();
   DirectorToolConfig directorToolConfig = DirectorToolConfig();
   List<VibeConfig> vibeConfigList = [];
   List<VibeConfigV4> vibeConfigListV4 = [];
   List<PreciseReferenceConfig> preciseReferenceConfigList = [];
 
-  String overridePrompt;
-  bool useOverridePrompt;
-  bool useCharacterPromptWithOverride;
+  /// Compatibility accessors for pre-profile code and old saved files.
+  String get overridePrompt => _plainPrompt(fixedProfile.rootPromptConfig);
+  set overridePrompt(String value) =>
+      fixedProfile.rootPromptConfig = fixedPromptConfig(value);
+  bool get useOverridePrompt => promptMode == PromptMode.fixed;
+  set useOverridePrompt(bool value) =>
+      promptMode = value ? PromptMode.fixed : PromptMode.random;
+  bool get useCharacterPromptWithOverride =>
+      fixedProfile.characterConfigList.any((character) => character.enabled);
+  set useCharacterPromptWithOverride(bool value) {
+    for (final character in fixedProfile.characterConfigList) {
+      character.enabled = value;
+    }
+  }
 
   PayloadConfig({
-    required this.rootPromptConfig,
-    required this.negativePromptConfig,
-    required this.characterConfigList,
-    required this.savedPromptConfigList,
-    required this.paramConfig,
+    required PromptConfig rootPromptConfig,
+    required PromptConfig negativePromptConfig,
+    required List<CharacterConfig> characterConfigList,
+    required List<PromptConfig> savedPromptConfigList,
+    required ParamConfig paramConfig,
     required this.settings,
-    required this.overridePrompt,
-    required this.useOverridePrompt,
-    required this.useCharacterPromptWithOverride,
-  });
+    required String overridePrompt,
+    required bool useOverridePrompt,
+    required bool useCharacterPromptWithOverride,
+    GenerationProfile? fixedProfile,
+    PromptMode? promptMode,
+    GenerationSize? i2iRequestSize,
+    I2iSizeMode i2iSizeMode = I2iSizeMode.automatic,
+  }) : randomProfile = GenerationProfile(
+         rootPromptConfig: rootPromptConfig,
+         negativePromptConfig: negativePromptConfig,
+         characterConfigList: characterConfigList,
+         savedPromptConfigList: savedPromptConfigList,
+         paramConfig: paramConfig,
+       ),
+       fixedProfile =
+           fixedProfile ??
+           GenerationProfile(
+             rootPromptConfig: fixedPromptConfig(overridePrompt),
+             negativePromptConfig: fixedPromptConfig(
+               paramConfig.negativePrompt,
+               negative: true,
+             ),
+             characterConfigList: useCharacterPromptWithOverride
+                 ? characterConfigList
+                       .map(
+                         (config) => CharacterConfig.fromJson(config.toJson()),
+                       )
+                       .toList()
+                 : [],
+             savedPromptConfigList: [],
+             paramConfig: ParamConfig.fromJson(paramConfig.toJson()),
+           ),
+       promptMode =
+           promptMode ??
+           (useOverridePrompt ? PromptMode.fixed : PromptMode.random) {
+    i2iConfig = I2IConfig(
+      requestSize:
+          i2iRequestSize ??
+          (paramConfig.sizes.isNotEmpty
+              ? paramConfig.sizes.first
+              : const GenerationSize(width: 832, height: 1216)),
+      sizeMode: i2iSizeMode,
+    );
+  }
 
   Map<String, String> getHeaders() {
     return getHeadersForToken(settings.apiKey);
@@ -77,24 +158,30 @@ class PayloadConfig {
       "authorization": "Bearer $token",
       "referer": "https://novelai.net",
       "user-agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0"
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
     };
   }
 
   void resetSequentialState() {
-    rootPromptConfig.resetSequentialState();
-    negativePromptConfig.resetSequentialState();
-    for (final config in savedPromptConfigList) {
-      config.resetSequentialState();
-    }
-    for (final characterConfig in characterConfigList) {
-      characterConfig.positivePromptConfig.resetSequentialState();
-      characterConfig.negativePromptConfig.resetSequentialState();
+    for (final profile in [randomProfile, fixedProfile]) {
+      profile.rootPromptConfig.resetSequentialState();
+      profile.negativePromptConfig.resetSequentialState();
+      for (final config in profile.savedPromptConfigList) {
+        config.resetSequentialState();
+      }
+      for (final characterConfig in profile.characterConfigList) {
+        characterConfig.positivePromptConfig.resetSequentialState();
+        characterConfig.negativePromptConfig.resetSequentialState();
+      }
     }
   }
 
   void resetTransientConfigs() {
-    i2iConfig = I2IConfig();
+    i2iConfig = I2IConfig(
+      requestSize: i2iConfig.requestSize,
+      sizeMode: i2iConfig.sizeMode,
+    );
+    enhanceConfig = EnhanceConfig();
     directorToolConfig = DirectorToolConfig();
     vibeConfigList.clear();
     vibeConfigListV4.clear();
@@ -103,17 +190,23 @@ class PayloadConfig {
 
   Map<String, dynamic> toJson() {
     return {
-      "prompt_config": rootPromptConfig.toJson(),
-      "negative_prompt_config": negativePromptConfig.toJson(),
-      "character_config":
-          characterConfigList.map((elem) => elem.toJson()).toList(),
-      "saved_config":
-          savedPromptConfigList.map((elem) => elem.toJson()).toList(),
-      "param_config": paramConfig.toJson(),
+      "prompt_config": randomProfile.rootPromptConfig.toJson(),
+      "negative_prompt_config": randomProfile.negativePromptConfig.toJson(),
+      "character_config": randomProfile.characterConfigList
+          .map((elem) => elem.toJson())
+          .toList(),
+      "saved_config": randomProfile.savedPromptConfigList
+          .map((elem) => elem.toJson())
+          .toList(),
+      "param_config": randomProfile.paramConfig.toJson(),
       "settings": settings.toJson(),
       'override_prompt': overridePrompt,
       'use_override_prompt': useOverridePrompt,
       'use_character_prompt_with_override': useCharacterPromptWithOverride,
+      'prompt_mode': promptMode.name,
+      'fixed_profile': fixedProfile.toJson(),
+      'i2i_request_size': i2iConfig.requestSize.toJson(),
+      'i2i_size_mode': i2iConfig.sizeMode.name,
     };
   }
 
@@ -132,6 +225,8 @@ class PayloadConfig {
         .toList();
     final paramConfig = ParamConfig.fromJson(jsonData['param_config'] ?? {});
     final negativePromptConfigJson = jsonData['negative_prompt_config'];
+    final fixedJson = jsonData['fixed_profile'];
+    final i2iSizeJson = jsonData['i2i_request_size'];
     return PayloadConfig(
       rootPromptConfig: PromptConfig.fromJson(jsonData['prompt_config']),
       negativePromptConfig: negativePromptConfigJson is Map<String, dynamic>
@@ -145,6 +240,14 @@ class PayloadConfig {
       useOverridePrompt: jsonData['use_override_prompt'] ?? false,
       useCharacterPromptWithOverride:
           jsonData['use_character_prompt_with_override'] ?? false,
+      fixedProfile: fixedJson is Map<String, dynamic>
+          ? GenerationProfile.fromJson(fixedJson)
+          : null,
+      promptMode: _promptModeFromJson(jsonData),
+      i2iRequestSize: i2iSizeJson is Map<String, dynamic>
+          ? GenerationSize.fromJson(i2iSizeJson)
+          : (paramConfig.sizes.isNotEmpty ? paramConfig.sizes.first : null),
+      i2iSizeMode: _i2iSizeModeFromJson(jsonData['i2i_size_mode']),
     );
   }
 
@@ -161,21 +264,56 @@ class PayloadConfig {
     final savedList = jsonSavedPromptList
         .map((configJson) => PromptConfig.fromJson(configJson))
         .toList();
-    rootPromptConfig = PromptConfig.fromJson(jsonData['prompt_config']);
-    characterConfigList = characterList;
-    savedPromptConfigList = savedList;
-    paramConfig = ParamConfig.fromJson(jsonData['param_config'] ?? {});
+    final randomParamConfig = ParamConfig.fromJson(
+      jsonData['param_config'] ?? {},
+    );
     final negativePromptConfigJson = jsonData['negative_prompt_config'];
-    negativePromptConfig = negativePromptConfigJson is Map<String, dynamic>
-        ? _negativePromptConfigFromJson(negativePromptConfigJson)
-        : _negativePromptConfigFromLegacy(paramConfig.negativePrompt);
+    randomProfile = GenerationProfile(
+      rootPromptConfig: PromptConfig.fromJson(jsonData['prompt_config']),
+      characterConfigList: characterList,
+      savedPromptConfigList: savedList,
+      paramConfig: randomParamConfig,
+      negativePromptConfig: negativePromptConfigJson is Map<String, dynamic>
+          ? _negativePromptConfigFromJson(negativePromptConfigJson)
+          : _negativePromptConfigFromLegacy(randomParamConfig.negativePrompt),
+    );
     settings = Settings.fromJson(jsonData['settings'] ?? {});
-    overridePrompt = jsonData['override_prompt'] ?? '';
-    useOverridePrompt = jsonData['use_override_prompt'] ?? false;
-    useCharacterPromptWithOverride =
-        jsonData['use_character_prompt_with_override'] ?? false;
+    final fixedJson = jsonData['fixed_profile'];
+    fixedProfile = fixedJson is Map<String, dynamic>
+        ? GenerationProfile.fromJson(fixedJson)
+        : GenerationProfile(
+            rootPromptConfig: fixedPromptConfig(
+              jsonData['override_prompt'] ?? '',
+            ),
+            negativePromptConfig: fixedPromptConfig(
+              randomParamConfig.negativePrompt,
+              negative: true,
+            ),
+            characterConfigList:
+                jsonData['use_character_prompt_with_override'] == true
+                ? characterList
+                      .map(
+                        (config) => CharacterConfig.fromJson(config.toJson()),
+                      )
+                      .toList()
+                : [],
+            savedPromptConfigList: [],
+            paramConfig: ParamConfig.fromJson(randomParamConfig.toJson()),
+          );
+    promptMode = _promptModeFromJson(jsonData);
+    final i2iSizeJson = jsonData['i2i_request_size'];
+    i2iConfig.setRequestSize(
+      i2iSizeJson is Map<String, dynamic>
+          ? GenerationSize.fromJson(i2iSizeJson)
+          : (randomParamConfig.sizes.isNotEmpty
+                ? randomParamConfig.sizes.first
+                : const GenerationSize(width: 832, height: 1216)),
+      mode: _i2iSizeModeFromJson(jsonData['i2i_size_mode']),
+    );
   }
 
+  /// Metadata always targets the fixed profile. It must never alter the
+  /// random profile's prompts, negative cascade, seed mode, or other params.
   int loadParamJson(Map<String, dynamic> json) {
     final paramJson = Map<String, dynamic>.from(json);
     final v4Prompt = json['v4_prompt'];
@@ -184,17 +322,30 @@ class PayloadConfig {
         v4Prompt['use_coords'] is bool) {
       paramJson['use_coords'] = v4Prompt['use_coords'];
     }
-    final loadedCount = paramConfig.loadJson(paramJson);
-    if (paramJson.containsKey('negative_prompt') ||
-        paramJson.containsKey('uc')) {
-      setNegativePromptFromString(paramConfig.negativePrompt);
+    final loadedCount = fixedProfile.paramConfig.loadJson(paramJson);
+    final negative = _metadataNegativePrompt(json);
+    if (negative != null) {
+      fixedProfile.negativePromptConfig = fixedPromptConfig(
+        negative,
+        negative: true,
+      );
+      fixedProfile.paramConfig.negativePrompt = negative;
     }
+    promptMode = PromptMode.fixed;
     return loadedCount;
   }
 
   void setNegativePromptFromString(String value) {
+    if (promptMode == PromptMode.fixed) {
+      fixedProfile.negativePromptConfig = fixedPromptConfig(
+        value,
+        negative: true,
+      );
+      fixedProfile.paramConfig.negativePrompt = value;
+      return;
+    }
     final migrated = _negativePromptConfigFromLegacy(value);
-    negativePromptConfig
+    randomProfile.negativePromptConfig
       ..selectionMethod = migrated.selectionMethod
       ..shuffled = migrated.shuffled
       ..prob = migrated.prob
@@ -207,8 +358,153 @@ class PayloadConfig {
       ..strs = migrated.strs
       ..prompts = migrated.prompts
       ..enabled = migrated.enabled;
-    negativePromptConfig.resetSequentialState();
-    paramConfig.negativePrompt = value;
+    randomProfile.negativePromptConfig.resetSequentialState();
+    randomProfile.paramConfig.negativePrompt = value;
+  }
+
+  int importMetadataToFixedProfile(
+    Map<String, dynamic> metadata, {
+    String? prompt,
+    String? model,
+  }) {
+    var loadedCount = loadParamJson(metadata);
+    final positive = prompt ?? _metadataBasePrompt(metadata);
+    if (positive != null) {
+      fixedProfile.rootPromptConfig = fixedPromptConfig(positive);
+      loadedCount++;
+    }
+    final characters = _metadataCharacters(metadata);
+    if (characters != null) {
+      fixedProfile.characterConfigList = characters;
+      loadedCount += characters.length;
+    }
+    if (model != null && model.isNotEmpty) {
+      fixedProfile.paramConfig.model = model;
+      loadedCount++;
+    }
+    promptMode = PromptMode.fixed;
+    return loadedCount;
+  }
+
+  void switchPromptMode() {
+    promptMode = promptMode == PromptMode.random
+        ? PromptMode.fixed
+        : PromptMode.random;
+  }
+
+  static PromptMode _promptModeFromJson(Map<String, dynamic> json) {
+    if (json['prompt_mode'] == PromptMode.fixed.name) return PromptMode.fixed;
+    if (json['prompt_mode'] == PromptMode.random.name) return PromptMode.random;
+    return json['use_override_prompt'] == true
+        ? PromptMode.fixed
+        : PromptMode.random;
+  }
+
+  static PromptConfig fixedPromptConfig(String value, {bool negative = false}) {
+    return PromptConfig(
+      selectionMethod: 'all',
+      shuffled: false,
+      comment: negative ? '负面内容' : '提示词',
+      strs: value.isEmpty ? [] : [value],
+      prompts: [],
+    );
+  }
+
+  static String _plainPrompt(PromptConfig config) {
+    if (config.strs.isNotEmpty) return config.strs.first;
+    return '';
+  }
+
+  static String? _metadataBasePrompt(Map<String, dynamic> json) {
+    final v4 = json['v4_prompt'];
+    if (v4 is Map) {
+      final caption = v4['caption'];
+      if (caption is Map && caption['base_caption'] is String) {
+        return caption['base_caption'] as String;
+      }
+    }
+    final input = json['input'];
+    return input is String ? input : null;
+  }
+
+  static String? _metadataNegativePrompt(Map<String, dynamic> json) {
+    final v4 = json['v4_negative_prompt'];
+    if (v4 is Map) {
+      final caption = v4['caption'];
+      if (caption is Map && caption['base_caption'] is String) {
+        return caption['base_caption'] as String;
+      }
+    }
+    final value = json['negative_prompt'] ?? json['uc'];
+    return value is String ? value : null;
+  }
+
+  static List<CharacterConfig>? _metadataCharacters(Map<String, dynamic> json) {
+    final v4Prompt = json['v4_prompt'];
+    final v4Negative = json['v4_negative_prompt'];
+    List<dynamic>? positives;
+    List<dynamic>? negatives;
+    if (v4Prompt is Map && v4Prompt['caption'] is Map) {
+      positives =
+          (v4Prompt['caption'] as Map)['char_captions'] as List<dynamic>?;
+    }
+    if (v4Negative is Map && v4Negative['caption'] is Map) {
+      negatives =
+          (v4Negative['caption'] as Map)['char_captions'] as List<dynamic>?;
+    }
+    positives ??= json['characterPrompts'] as List<dynamic>?;
+    if (positives == null) return null;
+    final result = <CharacterConfig>[];
+    for (final (index, raw) in positives.indexed) {
+      if (raw is! Map) continue;
+      final positive =
+          raw['char_caption'] ?? raw['prompt'] ?? raw['caption'] ?? '';
+      final negativeRaw = index < (negatives?.length ?? 0)
+          ? negatives![index]
+          : null;
+      final negative = negativeRaw is Map
+          ? negativeRaw['char_caption'] ??
+                negativeRaw['uc'] ??
+                negativeRaw['caption'] ??
+                ''
+          : raw['uc'] ?? '';
+      final centerRaw =
+          raw['centers'] is List && (raw['centers'] as List).isNotEmpty
+          ? (raw['centers'] as List).first
+          : raw['center'];
+      result.add(
+        CharacterConfig(
+          positions: [_positionFromMetadata(centerRaw)],
+          positivePromptConfig: fixedPromptConfig(positive.toString()),
+          negativePromptConfig: fixedPromptConfig(
+            negative.toString(),
+            negative: true,
+          ),
+          gender: CharacterConfig.genderUnset,
+          enabled: true,
+        ),
+      );
+    }
+    return result;
+  }
+
+  static Point<int> _positionFromMetadata(dynamic raw) {
+    if (raw is! Map) return CharacterConfig.defaultPosition;
+    int nearest(dynamic value) {
+      final number = value is num ? value.toDouble() : 0.5;
+      var best = 3;
+      var distance = double.infinity;
+      for (final entry in doubleMapping.entries) {
+        final candidate = (entry.value - number).abs();
+        if (candidate < distance) {
+          best = entry.key;
+          distance = candidate;
+        }
+      }
+      return best;
+    }
+
+    return Point<int>(nearest(raw['x']), nearest(raw['y']));
   }
 
   static PromptConfig _negativePromptConfigFromLegacy(String value) {
@@ -221,9 +517,7 @@ class PayloadConfig {
     );
   }
 
-  static PromptConfig _negativePromptConfigFromJson(
-    Map<String, dynamic> json,
-  ) {
+  static PromptConfig _negativePromptConfigFromJson(Map<String, dynamic> json) {
     final config = PromptConfig.fromJson(json);
     if (config.comment == '反向提示词') {
       config.comment = '负面内容';

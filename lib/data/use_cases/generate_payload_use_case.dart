@@ -1,5 +1,4 @@
 import 'package:easy_localization/easy_localization.dart';
-import 'package:nai_casrand/core/constants/feature_flags.dart';
 import 'package:nai_casrand/core/constants/parameters.dart';
 import 'package:nai_casrand/data/models/character_config.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
@@ -82,19 +81,8 @@ class GeneratePayloadUseCase {
     );
 
     // Get prompt
-    final useOverridePrompt =
-        FeatureFlags.overridePrompt && payloadConfig.useOverridePrompt;
-    final NestedPrompt basePromptResult;
-    if (useOverridePrompt) {
-      basePromptResult = NestedPromptString(
-        title: tr('override_prompt'),
-        content: payloadConfig.overridePrompt,
-      );
-    } else {
-      basePromptResult = rootPromptConfig
-          .getPrmpts()
-          .replaceVariables(pattern, savedConfigList);
-    }
+    final basePromptResult =
+        rootPromptConfig.getPrmpts().replaceVariables(pattern, savedConfigList);
     final basePair = PromptCommentPair(
       prompt: basePromptResult.toPrompt(),
       comment: basePromptResult.toComment(),
@@ -112,11 +100,9 @@ class GeneratePayloadUseCase {
 
     // Get character prompt
     final List<CharacterPromptResult> characterPromptResultList = [];
-    if (!useOverridePrompt || payloadConfig.useCharacterPromptWithOverride) {
-      for (final config in characterConfigList) {
-        if (!config.enabled) continue;
-        characterPromptResultList.add(config.getPrompt());
-      }
+    for (final config in characterConfigList) {
+      if (!config.enabled) continue;
+      characterPromptResultList.add(config.getPrompt());
     }
 
     // Character prompts

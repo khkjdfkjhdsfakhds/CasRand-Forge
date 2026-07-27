@@ -1,19 +1,15 @@
-import 'dart:math';
-
 import 'package:flutter/foundation.dart';
 import 'package:get_it/get_it.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:nai_casrand/data/models/director_tool_config.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/models/i2i_config.dart';
-import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/use_cases/autocrop_planner.dart';
+import 'package:nai_casrand/data/use_cases/i2i_request_size.dart';
 
 class I2iPageViewmodel extends ChangeNotifier {
   PayloadConfig get payloadConfig => GetIt.I<PayloadConfig>();
   I2IConfig get config => payloadConfig.i2iConfig;
-  ParamConfig get paramConfig => payloadConfig.paramConfig;
 
   Future<bool> pickAndSetImage() async {
     final picker = ImagePicker();
@@ -58,11 +54,16 @@ class I2iPageViewmodel extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setMask(Uint8List? maskBytes, List<MaskStroke> strokes) {
+  void setMask(
+    Uint8List? maskBytes,
+    List<MaskStroke> strokes, {
+    CropRect? focusFrame,
+  }) {
     if (maskBytes == null) {
       config.removeMask();
     } else {
       config.setMask(maskBytes, strokes);
+      config.setManualFocusFrame(focusFrame);
     }
     notifyListeners();
   }
@@ -72,142 +73,49 @@ class I2iPageViewmodel extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// The image size snapped to the 64-px grid (and NovelAI's limits), used by
-  /// the "use image size" shortcut for plain img2img.
-  GenerationSize get snappedImageSize {
-    final width = _snapDimension(config.width);
-    final height = _snapDimension(config.height);
-    return GenerationSize(width: width, height: height);
-  }
-
-  int _snapDimension(int value) {
-    final snapped = (value / 64).round() * 64;
-    return max(64, min(maxRequestSide, snapped));
-  }
-
-  bool get paramSizeMatchesImage {
-    if (!config.hasImage) return true;
-    final sizes = paramConfig.sizes;
-    final target = snappedImageSize;
-    return sizes.length == 1 && sizes.first == target;
-  }
-
-  void applyImageSizeToParams() {
-    if (!config.hasImage) return;
-    paramConfig.sizes = [snappedImageSize];
+  void clearManualFocusFrame() {
+    config.setManualFocusFrame(null);
     notifyListeners();
   }
 
-  String get paramSizeText {
-    return paramConfig.sizes
-        .map((size) => '${size.width} × ${size.height}')
-        .join(', ');
-  }
+  GenerationSize get automaticSize =>
+      automaticI2iRequestSize(config.width, config.height);
 
-  // --- Enhance -------------------------------------------------------------
+  GenerationSize get originalSize =>
+      originalI2iRequestSize(config.width, config.height);
 
-  /// Magnifications whose 64-aligned target still fits NovelAI's maximum
-  /// request area. The official panel offers 1x and 1.5x only.
-  List<double> get availableEnhanceScales {
-    if (!config.hasImage) return const [];
-    const maxPixels = maxRequestSide * maxRequestSide;
-    return enhanceScaleOptions.where((scale) {
-      final size = enhanceTargetSizeFor(scale);
-      return size.width * size.height <= maxPixels;
-    }).toList(growable: false);
-  }
-
-  /// Target size for a magnification: the scaled side rounded to the nearest
-  /// multiple of 64, with a 64 floor.
-  GenerationSize enhanceTargetSizeFor(double scale) {
-    int snap(int value) => max(64, (value / 64).round() * 64);
-    return GenerationSize(
-      width: snap((scale * config.width).round()),
-      height: snap((scale * config.height).round()),
-    );
-  }
-
-  GenerationSize get enhanceTargetSize =>
-      enhanceTargetSizeFor(config.enhanceScale);
-
-  EnhancePreset get enhancePreset =>
-      enhancePresets[config.enhancePresetIndex.clamp(
-        0,
-        enhancePresets.length - 1,
-      )];
-
-  void setEnhanceScale(double value) {
-    config.setEnhanceScale(value);
-    notifyListeners();
-  }
-
-  void setEnhancePresetIndex(int value) {
-    config.setEnhancePresetIndex(value);
-    notifyListeners();
-  }
-
-  // --- Director Tools ------------------------------------------------------
-
-  DirectorToolConfig get directorToolConfig => payloadConfig.directorToolConfig;
-
-  Future<bool> pickAndSetDirectorImage() async {
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(source: ImageSource.gallery);
-    if (picked == null) return false;
-    directorToolConfig.setImage(await picked.readAsBytes());
+  bool applyAutomaticSize() {
+    if (!config.hasImage) return false;
+    config.setRequestSize(automaticSize, mode: I2iSizeMode.automatic);
     notifyListeners();
     return true;
   }
 
-  /// Reuses the Img2Img base image as the Director Tools source.
-  void useBaseImageForDirector() {
-    final bytes = config.imageBytes;
-    if (bytes == null) return;
-    directorToolConfig.setImage(bytes);
+  bool applyImageSizeToParams() {
+    if (!config.hasImage) return false;
+    config.setRequestSize(originalSize, mode: I2iSizeMode.original);
     notifyListeners();
+    return true;
   }
 
-  void setDirectorTool(String type) {
-    directorToolConfig.setType(type);
+  /// Sets the request size from hand-typed values, snapped to the 64-px grid
+  /// within NovelAI's limits. Returns the size actually applied, or null for
+  /// unparsable input.
+  GenerationSize? applyManualRequestSize(String width, String height) {
+    final parsedWidth = int.tryParse(width.trim());
+    final parsedHeight = int.tryParse(height.trim());
+    if (parsedWidth == null || parsedHeight == null) return null;
+    if (parsedWidth <= 0 || parsedHeight <= 0) return null;
+    final size = manualI2iRequestSize(parsedWidth, parsedHeight);
+    config.setRequestSize(size, mode: I2iSizeMode.manual);
     notifyListeners();
+    return size;
   }
 
-  void toggleDirectorEmotion(String emotion, bool selected) {
-    directorToolConfig.toggleEmotion(emotion, selected);
-    notifyListeners();
+  String get paramSizeText {
+    final size = config.requestSize;
+    return '${size.width} × ${size.height}';
   }
 
-  void setDirectorDefry(int value) {
-    directorToolConfig.setDefry(value);
-    notifyListeners();
-  }
-
-  void setDirectorOverrideEnabled(bool value) {
-    directorToolConfig.setOverrideEnabled(value);
-    notifyListeners();
-  }
-
-  void setDirectorOverridePrompt(String value) {
-    directorToolConfig.setOverridePrompt(value);
-    notifyListeners();
-  }
-
-  void removeDirectorImage() {
-    directorToolConfig.removeImage();
-    notifyListeners();
-  }
-
-  /// Applies the Enhance settings to the generation parameters: the target
-  /// size comes from the magnification, and the strength/noise from the
-  /// preset. Enhance re-renders the whole image, so any mask is dropped.
-  void applyEnhance() {
-    if (!config.hasImage) return;
-    paramConfig.sizes = [enhanceTargetSize];
-    final preset = enhancePreset;
-    config
-      ..removeMask()
-      ..setStrength(preset.strength)
-      ..setNoise(preset.noise);
-    notifyListeners();
-  }
+  I2iSizeMode get sizeMode => config.sizeMode;
 }

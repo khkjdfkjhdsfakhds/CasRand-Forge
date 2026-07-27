@@ -122,7 +122,7 @@ class _MetadataDropAreaState extends State<MetadataDropArea> {
             ? ListTile(
                 title: Text(tr('generation_model')),
                 subtitle: Text(model),
-                onTap: () => widget.viewmodel.setModel(model),
+                onTap: () => widget.viewmodel.setModel(context, model),
               )
             : const SizedBox.shrink();
         final sizeTile = ListTile(

@@ -3,8 +3,8 @@ import 'dart:convert';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:nai_casrand/data/models/precise_reference_config.dart';
-import 'package:nai_casrand/ui/core/utils/flushbar.dart';
 import 'package:nai_casrand/ui/core/utils/platform_support.dart';
+import 'package:nai_casrand/ui/core/widgets/slider_list_tile.dart';
 import 'package:nai_casrand/ui/precise_reference/view_models/precise_reference_list_viewmodel.dart';
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 
@@ -298,43 +298,15 @@ class _PreciseReferenceCard extends StatelessWidget {
     double value,
     ValueChanged<double> onChanged,
   ) {
-    final controller = TextEditingController(text: value.toStringAsFixed(2));
-    showDialog(
+    showSliderValueInputDialog(
       context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: Text(title),
-          content: TextField(
-            controller: controller,
-            keyboardType: const TextInputType.numberWithOptions(
-              decimal: true,
-            ),
-            decoration: const InputDecoration(labelText: 'Value (0.0 to 1.0)'),
-            autofocus: true,
-          ),
-          actions: [
-            TextButton(
-              child: Text(context.tr('cancel')),
-              onPressed: () => Navigator.of(dialogContext).pop(),
-            ),
-            TextButton(
-              child: const Text('OK'),
-              onPressed: () {
-                final newValue = double.tryParse(controller.text);
-                if (newValue != null && newValue >= 0.0 && newValue <= 1.0) {
-                  onChanged(newValue);
-                  Navigator.of(dialogContext).pop();
-                } else {
-                  showErrorBar(
-                    context,
-                    context.tr('precise_reference_invalid_value'),
-                  );
-                }
-              },
-            ),
-          ],
-        );
-      },
+      title: title,
+      value: value,
+      min: 0,
+      max: 1,
+      divisions: 100,
+      decimalPlaces: 2,
+      onChanged: onChanged,
     );
   }
 }

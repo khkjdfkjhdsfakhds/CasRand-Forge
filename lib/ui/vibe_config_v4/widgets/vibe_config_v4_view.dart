@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:nai_casrand/ui/core/widgets/slider_list_tile.dart';
 
 import '../viewmodels/vibe_config_v4_viewmodel.dart';
 
@@ -99,46 +100,15 @@ class VibeConfigV4View extends StatelessWidget {
 
   void _showEditReferenceStrengthDialog(
       BuildContext context, VibeConfigV4Viewmodel vm) {
-    final TextEditingController controller =
-        TextEditingController(text: vm.referenceStrength.toStringAsFixed(2));
-    showDialog(
+    showSliderValueInputDialog(
       context: context,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          title: const Text('Edit Reference Strength'),
-          content: TextField(
-            controller: controller,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(labelText: 'Value (0.0 to 1.0)'),
-            autofocus: true,
-          ),
-          actions: <Widget>[
-            TextButton(
-              child: const Text('Cancel'),
-              onPressed: () {
-                Navigator.of(dialogContext).pop();
-              },
-            ),
-            TextButton(
-              child: const Text('OK'),
-              onPressed: () {
-                final double? newValue = double.tryParse(controller.text);
-                if (newValue != null && newValue >= 0.0 && newValue <= 1.0) {
-                  vm.setReferenceStrength(newValue);
-                  Navigator.of(dialogContext).pop();
-                } else {
-                  // Optional: Show an error message within the dialog
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                        content: Text(
-                            'Invalid value. Please enter a number between 0.0 and 1.0.')),
-                  );
-                }
-              },
-            ),
-          ],
-        );
-      },
+      title: 'Strength',
+      value: vm.referenceStrength,
+      min: 0,
+      max: 1,
+      divisions: 100,
+      decimalPlaces: 2,
+      onChanged: vm.setReferenceStrength,
     );
   }
 }

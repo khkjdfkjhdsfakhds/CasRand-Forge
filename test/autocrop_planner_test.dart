@@ -160,7 +160,8 @@ void main() {
       cells: cells,
       maxArea: areaCapNormal,
     )!;
-    expectValidPlan(plan, imageWidth: 512, imageHeight: 512, cap: areaCapNormal);
+    expectValidPlan(plan,
+        imageWidth: 512, imageHeight: 512, cap: areaCapNormal);
     expect(plan.scale, greaterThan(1.0), reason: 'small frame is magnified');
     // The canvas should be close to the budget rather than a tiny 512 request.
     expect(plan.requestWidth * plan.requestHeight,
@@ -180,7 +181,8 @@ void main() {
       cells: cells,
       maxArea: areaCapNormal,
     )!;
-    expectValidPlan(plan, imageWidth: 300, imageHeight: 500, cap: areaCapNormal);
+    expectValidPlan(plan,
+        imageWidth: 300, imageHeight: 500, cap: areaCapNormal);
     expect(plan.scale, greaterThan(1.0));
     // Padding is split between both sides, so the offset never exceeds the
     // total slack.
@@ -497,8 +499,8 @@ void main() {
     });
 
     test('tiny regions are not split', () {
-      expect(splitAlongLongAxis(const CropRect(x: 0, y: 0, w: 8, h: 8)).length,
-          1);
+      expect(
+          splitAlongLongAxis(const CropRect(x: 0, y: 0, w: 8, h: 8)).length, 1);
     });
 
     test('grid split tiles the region without gaps or overlaps', () {
@@ -555,5 +557,105 @@ void main() {
     expect(size.x % 64, 0);
     expect(size.y % 64, 0);
     expect(size.x * size.y, lessThanOrEqualTo(areaCapNormal));
+  });
+
+  group('planManualFocusInpaint', () {
+    test('a small frame is enlarged to fill the budget, like Autocrop', () {
+      final cells = gridWithMaskRect(
+        imageWidth: 2000,
+        imageHeight: 2000,
+        maskRect: const Rectangle(600, 600, 100, 100),
+      );
+      final plan = planManualFocusInpaint(
+        imageWidth: 2000,
+        imageHeight: 2000,
+        cells: cells,
+        frame: const CropRect(x: 512, y: 512, w: 512, h: 512),
+        maxArea: areaCapNormal,
+      );
+      expect(plan, isNotNull);
+      expect(plan!.outer, const CropRect(x: 512, y: 512, w: 512, h: 512));
+      expect(plan.scale, 2.0);
+      expect(plan.requestWidth, 1024);
+      expect(plan.requestHeight, 1024);
+    });
+
+    test('an oversized frame is scaled down to fit, unlike Autocrop', () {
+      final cells = gridWithMaskRect(
+        imageWidth: 2400,
+        imageHeight: 2400,
+        maskRect: const Rectangle(1000, 1000, 200, 200),
+      );
+      final plan = planManualFocusInpaint(
+        imageWidth: 2400,
+        imageHeight: 2400,
+        cells: cells,
+        frame: const CropRect(x: 200, y: 200, w: 2048, h: 2048),
+        maxArea: areaCapNormal,
+      );
+      expect(plan, isNotNull);
+      expect(plan!.scale, lessThan(1.0));
+      expect(plan.requestWidth * plan.requestHeight,
+          lessThanOrEqualTo(areaCapNormal));
+      expect(plan.requestWidth % sizeStep, 0);
+      expect(plan.requestHeight % sizeStep, 0);
+      expect(plan.contentWidth % latentGrid, 0);
+      expect(plan.contentHeight % latentGrid, 0);
+    });
+
+    test('the frame is snapped to the latent grid and clipped to the image',
+        () {
+      final cells = gridWithMaskRect(
+        imageWidth: 1000,
+        imageHeight: 1000,
+        maskRect: const Rectangle(100, 100, 200, 200),
+      );
+      final plan = planManualFocusInpaint(
+        imageWidth: 1000,
+        imageHeight: 1000,
+        cells: cells,
+        frame: const CropRect(x: 93, y: 91, w: 333, h: 333),
+        maxArea: areaCapNormal,
+      );
+      expect(plan, isNotNull);
+      expect(plan!.outer.x % latentGrid, 0);
+      expect(plan.outer.y % latentGrid, 0);
+      expect(plan.outer.w % latentGrid, 0);
+      expect(plan.outer.h % latentGrid, 0);
+      expect(plan.outer.x, greaterThanOrEqualTo(0));
+      expect(plan.outer.right, lessThanOrEqualTo(1000));
+    });
+
+    test('a frame that misses the mask entirely is rejected', () {
+      final cells = gridWithMaskRect(
+        imageWidth: 1000,
+        imageHeight: 1000,
+        maskRect: const Rectangle(700, 700, 100, 100),
+      );
+      final plan = planManualFocusInpaint(
+        imageWidth: 1000,
+        imageHeight: 1000,
+        cells: cells,
+        frame: const CropRect(x: 0, y: 0, w: 256, h: 256),
+        maxArea: areaCapNormal,
+      );
+      expect(plan, isNull);
+    });
+
+    test('a degenerate frame is rejected', () {
+      final cells = gridWithMaskRect(
+        imageWidth: 1000,
+        imageHeight: 1000,
+        maskRect: const Rectangle(100, 100, 100, 100),
+      );
+      final plan = planManualFocusInpaint(
+        imageWidth: 1000,
+        imageHeight: 1000,
+        cells: cells,
+        frame: const CropRect(x: 100, y: 100, w: 0, h: 0),
+        maxArea: areaCapNormal,
+      );
+      expect(plan, isNull);
+    });
   });
 }

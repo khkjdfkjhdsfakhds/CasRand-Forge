@@ -17,11 +17,24 @@ void main() {
       height: 1216,
       steps: 28,
       tier: opusTier,
+      subscriptionActive: true,
     );
     expect(cost.anlas, 0);
     expect(cost.isFreeUnderOpus, isTrue);
     // The per-image price is still known even when it is waived.
     expect(cost.perImageAnlas, greaterThan(0));
+  });
+
+  test('an expired or unverified Opus tier is never treated as free', () {
+    final cost = estimateAnlasCost(
+      width: 832,
+      height: 1216,
+      steps: 28,
+      tier: opusTier,
+      subscriptionActive: false,
+    );
+    expect(cost.anlas, cost.perImageAnlas);
+    expect(cost.isFreeUnderOpus, isFalse);
   });
 
   test('opus only waives one image per request', () {
@@ -31,12 +44,14 @@ void main() {
       steps: 28,
       nSamples: 4,
       tier: opusTier,
+      subscriptionActive: true,
     );
     final single = estimateAnlasCost(
       width: 832,
       height: 1216,
       steps: 28,
       tier: opusTier,
+      subscriptionActive: true,
     );
     expect(cost.anlas, single.perImageAnlas * 3);
     expect(cost.isFreeUnderOpus, isFalse);
@@ -54,12 +69,14 @@ void main() {
       height: 1536,
       steps: 28,
       tier: opusTier,
+      subscriptionActive: true,
     );
     expect(large.anlas, greaterThan(0));
     expect(large.isFreeUnderOpus, isFalse);
   });
 
-  test('img2img and infill scale the cost by strength', () {
+  test('img2img and infill scale the cost and never use Opus free allowance',
+      () {
     final full = estimateAnlasCost(
       width: 1024,
       height: 1024,
@@ -85,6 +102,18 @@ void main() {
       strength: 0.5,
     );
     expect(infill.anlas, half.anlas);
+
+    final opusImg2img = estimateAnlasCost(
+      width: 1024,
+      height: 1024,
+      steps: 28,
+      action: 'img2img',
+      strength: 0.5,
+      tier: opusTier,
+      subscriptionActive: true,
+    );
+    expect(opusImg2img.anlas, half.anlas);
+    expect(opusImg2img.isFreeUnderOpus, isFalse);
   });
 
   test('a plain generate ignores strength', () {
@@ -137,16 +166,16 @@ void main() {
     expect(freeVibes.anlas, base.anlas);
   });
 
-  test('a split batch on Opus stays free when every tile fits', () {
+  test('a split inpaint batch is paid even on active Opus', () {
     final cost = estimateBatchAnlasCost(
       tiles: List.filled(4, (width: 768, height: 1344)),
       steps: 28,
       strength: 0.8,
       tier: opusTier,
+      subscriptionActive: true,
     );
-    expect(cost.anlas, 0);
-    expect(cost.isFreeUnderOpus, isTrue,
-        reason: 'each tile is its own single-image request');
+    expect(cost.anlas, greaterThan(0));
+    expect(cost.isFreeUnderOpus, isFalse);
   });
 
   test('a split batch without Opus costs every tile', () {
@@ -174,6 +203,7 @@ void main() {
       ],
       steps: 28,
       tier: opusTier,
+      subscriptionActive: true,
     );
     expect(cost.anlas, greaterThan(0));
     expect(cost.isFreeUnderOpus, isFalse);

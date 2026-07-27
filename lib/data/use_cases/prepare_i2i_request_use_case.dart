@@ -230,8 +230,7 @@ class PrepareI2iRequestUseCase {
       imageB64 = base64Encode(_pngBytesForOriginal(base));
     } else {
       // Cover-fit: scale to fill the target, then center-crop.
-      final scale =
-          max(targetWidth / base.width, targetHeight / base.height);
+      final scale = max(targetWidth / base.width, targetHeight / base.height);
       final scaledW = max(targetWidth, (base.width * scale).round());
       final scaledH = max(targetHeight, (base.height * scale).round());
       var resized = img.copyResize(
@@ -333,9 +332,37 @@ class PrepareI2iRequestUseCase {
       maskPixelAt: (x, y) => _maskPixelSet(mask, base.width, base.height, x, y),
     );
     if (cells.isEmpty) {
-      throw Exception('Inpainting mask is empty; paint the repaint area first.');
+      throw Exception(
+          'Inpainting mask is empty; paint the repaint area first.');
     }
     final cap = areaCapForSize(targetWidth, targetHeight);
+
+    // A hand-drawn focus frame overrides the automatic search. Only the mask
+    // inside the frame is repainted; when the frame misses the mask or cannot
+    // be planned, fall through to the automatic path.
+    final manualFrame = config.manualFocusFrame;
+    if (manualFrame != null) {
+      final plan = planManualFocusInpaint(
+        imageWidth: base.width,
+        imageHeight: base.height,
+        cells: cells,
+        frame: manualFrame,
+        maxArea: cap,
+      );
+      if (plan != null) {
+        final tile = _buildFocusTile(
+          base: base,
+          mask: mask,
+          plan: plan,
+          label: ' manual',
+        );
+        return I2iRequestBatch(
+          plans: [tile],
+          serial: true,
+          summary: tile.summary,
+        );
+      }
+    }
 
     if (config.autocropEnabled) {
       final batch = planFocusInpaintBatch(

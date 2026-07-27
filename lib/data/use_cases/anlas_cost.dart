@@ -2,17 +2,15 @@ import 'dart:math';
 
 /// Anlas cost model, mirroring NovelAI's own calculation.
 ///
-/// Opus (tier 3+) covers one image per request for free, but only while the
-/// request stays within the free window: at most 1024x1024 worth of pixels and
-/// at most 28 steps. A split inpaint therefore costs nothing extra on Opus as
-/// long as every tile stays inside that window, since each tile is its own
-/// single-image request.
+/// Opus (tier 3+) covers one text-to-image sample per request for free while
+/// the request stays within the 1 MP / 28-step window. Requests carrying a base
+/// image (img2img, inpaint and Enhance) are explicitly excluded.
 const int opusTier = 3;
 const int opusFreeMaxArea = 1024 * 1024;
 const int opusFreeMaxSteps = 28;
 
-const double _stepCoefficient = 2951823e-12;
-const double _stepPerStepCoefficient = 5753298e-13;
+const double _stepCoefficient = 2951823174884865e-21;
+const double _stepPerStepCoefficient = 5753298233447344e-22;
 const double _smMultiplier = 1.2;
 const double _smDynMultiplier = 1.4;
 
@@ -65,6 +63,7 @@ AnlasCost estimateAnlasCost({
   bool sm = false,
   bool smDyn = false,
   int? tier,
+  bool subscriptionActive = false,
   int preciseReferenceCount = 0,
   int vibeCount = 0,
 }) {
@@ -72,17 +71,21 @@ AnlasCost estimateAnlasCost({
   final smMultiplier = smDyn
       ? _smDynMultiplier
       : sm
-          ? _smMultiplier
-          : 1.0;
+      ? _smMultiplier
+      : 1.0;
   final baseSteps =
       (_stepCoefficient * area + _stepPerStepCoefficient * area * steps)
-              .ceil() *
-          smMultiplier;
-  final strengthMultiplier =
-      (action == 'infill' || action == 'img2img') ? strength : 1.0;
+          .ceil() *
+      smMultiplier;
+  final strengthMultiplier = (action == 'infill' || action == 'img2img')
+      ? strength
+      : 1.0;
   final perImage = max((baseSteps * strengthMultiplier).ceil(), 2);
 
-  final free = (tier ?? 0) >= opusTier &&
+  final free =
+      action == 'generate' &&
+      subscriptionActive &&
+      (tier ?? 0) >= opusTier &&
       fitsOpusFreeWindow(width: width, height: height, steps: steps);
   final freeImages = free ? 1 : 0;
   final int imageCost = perImage * max(nSamples - freeImages, 0);
@@ -108,6 +111,8 @@ AnlasCost estimateBatchAnlasCost({
   bool sm = false,
   bool smDyn = false,
   int? tier,
+  bool subscriptionActive = false,
+  int nSamples = 1,
 }) {
   var total = 0;
   var allFree = tiles.isNotEmpty;
@@ -122,6 +127,8 @@ AnlasCost estimateBatchAnlasCost({
       sm: sm,
       smDyn: smDyn,
       tier: tier,
+      subscriptionActive: subscriptionActive,
+      nSamples: nSamples,
     );
     total += cost.anlas;
     perImage = max(perImage, cost.perImageAnlas);

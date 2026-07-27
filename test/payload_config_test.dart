@@ -2,10 +2,12 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
+import 'package:nai_casrand/data/use_cases/i2i_request_size.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -42,6 +44,29 @@ void main() {
       config.toJson()['negative_prompt_config'],
       config.negativePromptConfig.toJson(),
     );
+  });
+
+  test('I2I request size persists separately from text-to-image sizes', () {
+    final config = PayloadConfig.fromJson(legacyConfigJson('legacy'));
+    config.i2iConfig.setRequestSize(
+      const GenerationSize(width: 896, height: 1280),
+      mode: I2iSizeMode.manual,
+    );
+    config.randomProfile.paramConfig.sizes = const [
+      GenerationSize(width: 1024, height: 1024),
+    ];
+
+    final restored = PayloadConfig.fromJson(config.toJson());
+
+    expect(
+      restored.i2iConfig.requestSize,
+      const GenerationSize(width: 896, height: 1280),
+    );
+    expect(
+      restored.randomProfile.paramConfig.sizes,
+      const [GenerationSize(width: 1024, height: 1024)],
+    );
+    expect(restored.i2iConfig.sizeMode, I2iSizeMode.manual);
   });
 
   test('saved string negative config keeps its roll settings without wrapping',
@@ -130,8 +155,7 @@ void main() {
     expect(restored.negativePromptConfig.prompts.single.type, 'str');
   });
 
-  test('metadata negative prompt replaces the roll config with a fixed value',
-      () {
+  test('metadata negative prompt only updates the isolated fixed profile', () {
     final config = PayloadConfig.fromJson(legacyConfigJson('legacy'));
     config.negativePromptConfig = PromptConfig(
       selectionMethod: 'single',
@@ -142,6 +166,7 @@ void main() {
     final loadedCount = config.loadParamJson({'uc': 'metadata negative'});
 
     expect(loadedCount, 1);
+    expect(config.promptMode, PromptMode.fixed);
     expect(config.paramConfig.negativePrompt, 'metadata negative');
     expect(config.negativePromptConfig.type, 'str');
     expect(config.negativePromptConfig.selectionMethod, 'all');
@@ -149,6 +174,122 @@ void main() {
     expect(config.negativePromptConfig.comment, '负面内容');
     expect(config.negativePromptConfig.prompts, isEmpty);
     expect(config.negativePromptConfig.strs, ['metadata negative']);
+    expect(config.randomProfile.negativePromptConfig.strs, [
+      'old one',
+      'old two',
+    ]);
+    expect(config.randomProfile.paramConfig.negativePrompt, 'legacy');
+  });
+
+  test('random and fixed profiles keep every generation parameter separate',
+      () {
+    final config = PayloadConfig.fromJson(legacyConfigJson('legacy'));
+    config.randomProfile.paramConfig
+      ..steps = 17
+      ..randomSeed = true
+      ..seed = 99;
+    config.fixedProfile.paramConfig
+      ..steps = 31
+      ..randomSeed = false
+      ..seed = 4242;
+
+    config.promptMode = PromptMode.fixed;
+    expect(config.paramConfig.steps, 31);
+    expect(config.paramConfig.randomSeed, isFalse);
+    expect(config.paramConfig.seed, 4242);
+
+    config.promptMode = PromptMode.random;
+    expect(config.paramConfig.steps, 17);
+    expect(config.paramConfig.randomSeed, isTrue);
+    expect(config.paramConfig.seed, 99);
+  });
+
+  test('both complete profiles survive save and restore independently', () {
+    final config = PayloadConfig.fromJson(legacyConfigJson('legacy'));
+    config.randomProfile.rootPromptConfig =
+        PayloadConfig.fixedPromptConfig('random profile prompt');
+    config.randomProfile.paramConfig
+      ..model = 'nai-diffusion-4-5-curated'
+      ..steps = 19
+      ..scale = 4.5
+      ..randomSeed = true
+      ..seed = 11;
+    config.fixedProfile.rootPromptConfig =
+        PayloadConfig.fixedPromptConfig('fixed profile prompt');
+    config.fixedProfile.negativePromptConfig =
+        PayloadConfig.fixedPromptConfig('fixed negative', negative: true);
+    config.fixedProfile.paramConfig
+      ..model = 'nai-diffusion-4-5-full'
+      ..steps = 37
+      ..scale = 6.0
+      ..randomSeed = false
+      ..seed = 987654;
+    config.promptMode = PromptMode.fixed;
+
+    final restored = PayloadConfig.fromJson(config.toJson());
+
+    expect(restored.promptMode, PromptMode.fixed);
+    expect(
+      restored.randomProfile.rootPromptConfig.strs,
+      ['random profile prompt'],
+    );
+    expect(
+        restored.randomProfile.paramConfig.model, 'nai-diffusion-4-5-curated');
+    expect(restored.randomProfile.paramConfig.steps, 19);
+    expect(restored.randomProfile.paramConfig.scale, 4.5);
+    expect(restored.randomProfile.paramConfig.randomSeed, isTrue);
+    expect(
+        restored.fixedProfile.rootPromptConfig.strs, ['fixed profile prompt']);
+    expect(restored.fixedProfile.negativePromptConfig.strs, ['fixed negative']);
+    expect(restored.fixedProfile.paramConfig.model, 'nai-diffusion-4-5-full');
+    expect(restored.fixedProfile.paramConfig.steps, 37);
+    expect(restored.fixedProfile.paramConfig.scale, 6.0);
+    expect(restored.fixedProfile.paramConfig.randomSeed, isFalse);
+    expect(restored.fixedProfile.paramConfig.seed, 987654);
+  });
+
+  test('V4 metadata imports fixed base, negative and character prompts only',
+      () {
+    final config = PayloadConfig.fromJson(legacyConfigJson('legacy'));
+
+    config.importMetadataToFixedProfile({
+      'v4_prompt': {
+        'use_coords': true,
+        'caption': {
+          'base_caption': 'fixed base',
+          'char_captions': [
+            {
+              'char_caption': 'red hair',
+              'centers': [
+                {'x': 0.1, 'y': 0.9},
+              ],
+            },
+          ],
+        },
+      },
+      'v4_negative_prompt': {
+        'caption': {
+          'base_caption': 'fixed global negative',
+          'char_captions': [
+            {'char_caption': 'bad anatomy'},
+          ],
+        },
+      },
+    });
+
+    expect(config.promptMode, PromptMode.fixed);
+    expect(config.fixedProfile.rootPromptConfig.strs, ['fixed base']);
+    expect(config.fixedProfile.negativePromptConfig.strs,
+        ['fixed global negative']);
+    expect(config.fixedProfile.characterConfigList, hasLength(1));
+    final character = config.fixedProfile.characterConfigList.single;
+    expect(character.positivePromptConfig.strs, ['red hair']);
+    expect(character.negativePromptConfig.strs, ['bad anatomy']);
+    expect(character.positions.single.x, 1);
+    expect(character.positions.single.y, 5);
+    expect(config.randomProfile.rootPromptConfig.strs, ['positive']);
+    expect(config.randomProfile.characterConfigList, isEmpty);
+    expect(config.randomProfile.paramConfig.negativePrompt, 'legacy');
   });
 
   test('metadata use_coords is inverted into AI choice state', () {

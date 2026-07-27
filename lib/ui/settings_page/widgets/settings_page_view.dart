@@ -9,6 +9,7 @@ import 'package:nai_casrand/ui/core/widgets/editable_list_tile.dart';
 import 'package:nai_casrand/ui/settings_page/widgets/config_selection_page_view.dart';
 import 'package:nai_casrand/ui/settings_page/widgets/token_manager_page_view.dart';
 import 'package:provider/provider.dart';
+import 'package:nai_casrand/data/models/navigation_request.dart';
 
 import '../../../core/constants/defaults.dart';
 
@@ -32,12 +33,14 @@ class SettingsPageView extends StatelessWidget {
             _buildApiKeyTile(),
             _buildTokenManagerTile(context),
             _buildRememberSequentialProgressTile(),
+            _buildPromptModeConfirmationTile(),
             _buildEraseMetadataTile(context),
             if (!kIsWeb && (Platform.isWindows || Platform.isMacOS))
               _buildOutputSelectionTile(),
             _buildPrefixKeyTile(),
             if (!kIsWeb) _buildProxyTile(),
             const Divider(),
+            _buildNavigationVisibilityCard(),
             _buildSavedConfigTile(context),
             _buildRestoreInitialSettingsTile(context),
             _buildThemeModeTile(context),
@@ -75,12 +78,77 @@ class SettingsPageView extends StatelessWidget {
     );
   }
 
+  Widget _buildNavigationVisibilityCard() {
+    final settings = viewmodel.settings;
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      child: Column(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.view_sidebar_outlined),
+            title: Text(tr('navigation_visibility')),
+            subtitle: Text(tr('navigation_visibility_hint')),
+          ),
+          SwitchListTile(
+            key: const Key('show-image-to-image-page'),
+            secondary: const Icon(Icons.brush),
+            title: Text(tr('i2i_inpaint')),
+            value: settings.showImageToImagePage,
+            onChanged: (value) => viewmodel.setNavigationPageVisible(
+              AppDestination.imageToImage,
+              value,
+            ),
+          ),
+          SwitchListTile(
+            key: const Key('show-vibe-reference-page'),
+            secondary: const Icon(Icons.auto_awesome_motion_outlined),
+            title: Text(tr('vibe_transfer')),
+            value: settings.showVibeReferencePage,
+            onChanged: (value) => viewmodel.setNavigationPageVisible(
+              AppDestination.vibeReference,
+              value,
+            ),
+          ),
+          SwitchListTile(
+            key: const Key('show-enhance-page'),
+            secondary: const Icon(Icons.auto_awesome),
+            title: Text(tr('enhance_section')),
+            value: settings.showEnhancePage,
+            onChanged: (value) => viewmodel.setNavigationPageVisible(
+              AppDestination.enhance,
+              value,
+            ),
+          ),
+          SwitchListTile(
+            key: const Key('show-director-tools-page'),
+            secondary: const Icon(Icons.auto_fix_high),
+            title: Text(tr('director_tool')),
+            value: settings.showDirectorToolsPage,
+            onChanged: (value) => viewmodel.setNavigationPageVisible(
+              AppDestination.directorTools,
+              value,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Masked like the multi-token manager rows, so the token never sits in
+  /// plain sight (or in screenshots); editing still shows the full value.
+  String _maskedApiKey(String token) {
+    if (token.isEmpty) return '';
+    if (token.length <= 10) return '${token.substring(0, 2)}···';
+    return '${token.substring(0, 6)}···${token.substring(token.length - 4)}';
+  }
+
   Widget _buildApiKeyTile() {
     return EditableListTile(
         leading: const Icon(Icons.token_outlined),
         title: tr('NAI_API_key'),
         notice: tr('NAI_API_key_hint'),
-        currentValue: viewmodel.settings.apiKey,
+        currentValue: _maskedApiKey(viewmodel.settings.apiKey),
+        editValue: viewmodel.settings.apiKey,
         confirmOnSubmit: true,
         onEditComplete: (value) => viewmodel.setApiKey(value));
   }
@@ -118,6 +186,17 @@ class SettingsPageView extends StatelessWidget {
       subtitle: Text(tr('remember_sequential_progress_hint')),
       value: viewmodel.settings.rememberSequentialProgress,
       onChanged: viewmodel.setRememberSequentialProgress,
+    );
+  }
+
+  Widget _buildPromptModeConfirmationTile() {
+    return SwitchListTile(
+      key: const Key('confirm-prompt-mode-switch'),
+      secondary: const Icon(Icons.swap_horiz),
+      title: Text(tr('confirm_prompt_mode_switch')),
+      subtitle: Text(tr('confirm_prompt_mode_switch_hint')),
+      value: viewmodel.settings.confirmPromptModeSwitch,
+      onChanged: viewmodel.setConfirmPromptModeSwitch,
     );
   }
 

@@ -1,10 +1,12 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
-import 'package:nai_casrand/core/constants/feature_flags.dart';
-import 'package:nai_casrand/ui/core/widgets/editable_list_tile.dart';
+import 'package:nai_casrand/ui/core/widgets/hover_expandable_fab.dart';
+import 'package:nai_casrand/ui/core/widgets/prompt_mode_switch_button.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/classic_info_card.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/generation_settings_view.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/info_card.dart';
+import 'package:nai_casrand/ui/generation_page/widgets/result_actions.dart'
+    show formatAnlasBadge, formatAnlasTooltip;
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
 import 'package:waterfall_flow/waterfall_flow.dart';
 
@@ -26,8 +28,7 @@ class GenerationPageView extends StatelessWidget {
               Expanded(
                 child: useClassicMode
                     ? GridView.builder(
-                        gridDelegate:
-                            SliverGridDelegateWithFixedCrossAxisCount(
+                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                           crossAxisCount: viewmodel.colNum,
                           childAspectRatio: 1.6,
                           mainAxisSpacing: 8.0,
@@ -36,8 +37,7 @@ class GenerationPageView extends StatelessWidget {
                         padding: const EdgeInsets.all(8.0),
                         itemCount: itemCount,
                         itemBuilder: (context, index) => ClassicInfoCard(
-                          command:
-                              viewmodel.commandList[itemCount - 1 - index],
+                          command: viewmodel.commandList[itemCount - 1 - index],
                         ),
                       )
                     : WaterfallFlow.builder(
@@ -47,71 +47,104 @@ class GenerationPageView extends StatelessWidget {
                         padding: const EdgeInsets.all(8.0),
                         itemCount: itemCount,
                         itemBuilder: (context, index) => InfoCard(
-                          command:
-                              viewmodel.commandList[itemCount - 1 - index],
+                          command: viewmodel.commandList[itemCount - 1 - index],
                         ),
                       ),
               ),
-              if (FeatureFlags.overridePrompt &&
-                  viewmodel.payloadConfig.useOverridePrompt)
-                EditableListTile(
-                  title: tr('override_prompt'),
-                  leading: const Icon(Icons.edit_note),
-                  maxLines: 2,
-                  keyboardType: TextInputType.multiline,
-                  currentValue: viewmodel.payloadConfig.overridePrompt,
-                  onEditComplete: (value) => viewmodel.setOverridePrompt(value),
-                  confirmOnSubmit: true,
-                ),
-              if (FeatureFlags.overridePrompt &&
-                  viewmodel.payloadConfig.useOverridePrompt)
-                EditableListTile(
-                  title: tr('uc'),
-                  leading: const Icon(Icons.do_not_disturb),
-                  maxLines: 1,
-                  keyboardType: TextInputType.multiline,
-                  currentValue:
-                      viewmodel.payloadConfig.paramConfig.negativePrompt,
-                  onEditComplete: (value) => viewmodel.setUC(value),
-                  confirmOnSubmit: true,
-                )
             ],
           );
         });
-    final buttons = Column(
-      mainAxisAlignment: MainAxisAlignment.end,
-      children: [
-        FloatingActionButton(
-          heroTag: 'gpfab1',
-          onPressed: () => _showDisplaySettingsDialog(context),
-          tooltip: tr('generation_settings'),
-          child: const Icon(Icons.handyman_outlined),
-        ),
-        const SizedBox(height: 20.0),
-        FloatingActionButton(
-          heroTag: 'gpfab2',
-          onPressed: () => viewmodel.addTestPromptInfoCardContent(),
-          tooltip: tr('generate_one_prompt'),
-          child: const Icon(Icons.add),
-        ),
-        const SizedBox(height: 20.0),
-        FloatingActionButton(
-          heroTag: 'gpfab3',
-          onPressed: () => viewmodel.toggleGeneration(),
-          tooltip: tr('toggle_generation'),
-          child: ListenableBuilder(
-            listenable: viewmodel.commandStatus.isGenerationActive,
-            builder: (context, child) => Icon(
-                viewmodel.commandStatus.isGenerationActive.value
-                    ? Icons.stop
-                    : Icons.play_arrow),
+    final buttons = ListenableBuilder(
+      listenable: viewmodel,
+      builder: (context, _) => Column(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          HoverExpandableFab(
+            heroTag: 'gpfab1',
+            buttonKey: const Key('generation-settings-fab'),
+            onPressed: () => _showDisplaySettingsDialog(context),
+            tooltip: tr('generation_settings'),
+            icon: const Icon(Icons.handyman_outlined),
+            label: Text(tr('generation_settings')),
           ),
-        ),
-      ],
+          const SizedBox(height: 12.0),
+          PromptModeSwitchButton(
+            payloadConfig: viewmodel.payloadConfig,
+            onChanged: viewmodel.promptModeChanged,
+            heroTag: 'gpfab-mode',
+            expandOnHover: true,
+          ),
+          const SizedBox(height: 12.0),
+          HoverExpandableFab(
+            heroTag: 'gpfab2',
+            buttonKey: const Key('generate-prompt-fab'),
+            onPressed: () => viewmodel.addTestPromptInfoCardContent(),
+            tooltip: tr('generate_one_prompt'),
+            icon: const Icon(Icons.add),
+            label: Text(tr('generate_one_prompt')),
+          ),
+          const SizedBox(height: 12.0),
+          _buildGenerationFab(context),
+        ],
+      ),
     );
     return Scaffold(
       body: content,
       floatingActionButton: buttons,
+    );
+  }
+
+  /// Start/stop button. While idle it shows the estimated Anlas of the next
+  /// generation ("免费" under Opus); while generating it is a stop button.
+  Widget _buildGenerationFab(BuildContext context) {
+    viewmodel.refreshCostEstimate();
+    return ListenableBuilder(
+      listenable: Listenable.merge([
+        viewmodel.commandStatus.isGenerationActive,
+        viewmodel.nextCostEstimate,
+      ]),
+      builder: (context, _) {
+        final active = viewmodel.commandStatus.isGenerationActive.value;
+        if (active) {
+          return HoverExpandableFab(
+            heroTag: 'gpfab3',
+            buttonKey: const Key('generation-toggle-fab'),
+            onPressed: () => viewmodel.toggleGeneration(),
+            tooltip: tr('stop_generation'),
+            icon: const Icon(Icons.stop),
+            label: Text(tr('stop_generation')),
+          );
+        }
+        final cost = viewmodel.nextCostEstimate.value;
+        final badge = formatAnlasBadge(cost);
+        if (badge.isEmpty) {
+          return HoverExpandableFab(
+            heroTag: 'gpfab3',
+            buttonKey: const Key('generation-toggle-fab'),
+            onPressed: () => viewmodel.toggleGeneration(),
+            tooltip: tr('start_generation'),
+            icon: const Icon(Icons.play_arrow),
+            label: Text(tr('start_generation')),
+          );
+        }
+        final bound = viewmodel.nextCostIsUpperBound &&
+                cost != null &&
+                !cost.isFreeUnderOpus
+            ? '≤ '
+            : '';
+        return HoverExpandableFab(
+          heroTag: 'gpfab3',
+          buttonKey: const Key('generation-toggle-fab'),
+          onPressed: () => viewmodel.toggleGeneration(),
+          tooltip: formatAnlasTooltip(
+            cost,
+            isUpperBound: viewmodel.nextCostIsUpperBound,
+          ),
+          icon: const Icon(Icons.play_arrow),
+          label: Text('${tr('start_generation')} · $bound$badge'),
+        );
+      },
     );
   }
 

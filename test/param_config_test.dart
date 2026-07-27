@@ -131,6 +131,40 @@ void main() {
     expect(payload.containsKey('prefer_brownian'), isFalse);
   });
 
+  test('metadata import carries every supported generation setting', () {
+    final config = ParamConfig();
+
+    final loaded = config.loadJson({
+      'model': 'nai-diffusion-4-5-curated',
+      'width': 1024,
+      'height': 1024,
+      'scale': 6,
+      'sampler': 'k_dpmpp_2m',
+      'steps': 41,
+      'n_samples': 2,
+      'noise_schedule': 'exponential',
+      'cfg_rescale': 0.35,
+      'variety_plus': true,
+      'legacy_uc': true,
+      'seed': 123456,
+    });
+
+    expect(loaded, greaterThan(0));
+    expect(config.model, 'nai-diffusion-4-5-curated');
+    expect(config.sizes.single.width, 1024);
+    expect(config.sizes.single.height, 1024);
+    expect(config.scale, 6.0);
+    expect(config.sampler, 'k_dpmpp_2m');
+    expect(config.steps, 41);
+    expect(config.nSamples, 2);
+    expect(config.noiseSchedule, 'exponential');
+    expect(config.cfgRescale, 0.35);
+    expect(config.varietyPlus, isTrue);
+    expect(config.legacyUc, isTrue);
+    expect(config.randomSeed, isFalse);
+    expect(config.seed, 123456);
+  });
+
   test('NovelAI V4.5 metadata sources map to the correct models', () {
     expect(
       sourceToModel['NovelAI Diffusion V4.5 4BDE2A90'],

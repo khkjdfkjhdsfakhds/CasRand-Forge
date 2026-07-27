@@ -4,6 +4,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:nai_casrand/data/models/director_tool_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/use_cases/anlas_cost.dart';
+import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
 
 class DirectorPageViewmodel extends ChangeNotifier {
   PayloadConfig get payloadConfig => GetIt.I<PayloadConfig>();
@@ -14,6 +15,7 @@ class DirectorPageViewmodel extends ChangeNotifier {
     final picked = await picker.pickImage(source: ImageSource.gallery);
     if (picked == null) return false;
     config.setImage(await picked.readAsBytes());
+    _clearResult();
     notifyListeners();
     return true;
   }
@@ -21,6 +23,7 @@ class DirectorPageViewmodel extends ChangeNotifier {
   bool loadImageBytes(Uint8List bytes) {
     try {
       config.setImage(bytes);
+      _clearResult();
       notifyListeners();
       return true;
     } catch (_) {
@@ -35,11 +38,13 @@ class DirectorPageViewmodel extends ChangeNotifier {
     final bytes = payloadConfig.i2iConfig.imageBytes;
     if (bytes == null) return;
     config.setImage(bytes);
+    _clearResult();
     notifyListeners();
   }
 
   void removeImage() {
     config.removeImage();
+    _clearResult();
     notifyListeners();
   }
 
@@ -79,5 +84,11 @@ class DirectorPageViewmodel extends ChangeNotifier {
       width: config.width,
       height: config.height,
     );
+  }
+
+  void _clearResult() {
+    if (GetIt.I.isRegistered<GenerationPageViewmodel>()) {
+      GetIt.I<GenerationPageViewmodel>().clearDirectorResult();
+    }
   }
 }

@@ -100,9 +100,9 @@ class DirectorToolConfig with ChangeNotifier {
 
   bool get withPrompt => toolsWithPrompt.contains(type);
 
-  String get displayName =>
-      toolTypes.firstWhere((t) => t.type == type, orElse: () => toolTypes.first)
-          .name;
+  String get displayName => toolTypes
+      .firstWhere((t) => t.type == type, orElse: () => toolTypes.first)
+      .name;
 
   void setImage(Uint8List bytes) {
     final size = ImageSizeGetter.getSize(MemoryInput(bytes));

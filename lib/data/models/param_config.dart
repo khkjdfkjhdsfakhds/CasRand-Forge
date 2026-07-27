@@ -183,28 +183,28 @@ class ParamConfig {
               .toList() ??
           const [GenerationSize(height: 1216, width: 832)],
       scale: (json['scale'] as num?)?.toDouble() ?? defaultScale,
-      sampler: json['sampler'],
-      steps: json['steps'],
-      nSamples: json['n_samples'],
+      sampler: json['sampler'] ?? 'k_euler_ancestral',
+      steps: json['steps'] ?? 28,
+      nSamples: json['n_samples'] ?? 1,
       randomSeed: json['random_seed'] ?? true,
       seed: json['seed'] ?? 0,
       ucPreset: json['ucPreset'] ?? 0,
       qualityToggle: json['qualityToggle'] ?? false,
-      sm: json['sm'],
-      smDyn: json['sm_dyn'],
-      dynamicThresholding: json['dynamic_thresholding'],
+      sm: json['sm'] ?? true,
+      smDyn: json['sm_dyn'] ?? true,
+      dynamicThresholding: json['dynamic_thresholding'] ?? false,
       varietyPlus: json['variety_plus'] ?? false,
       controlNetStrength: json['controlnet_strength'] is int
           ? (json['controlnet_strength'] as int).toDouble()
-          : json['controlnet_strength'],
-      legacy: json['legacy'],
-      addOriginalImage: json['add_original_image'],
+          : json['controlnet_strength'] ?? 1.0,
+      legacy: json['legacy'] ?? false,
+      addOriginalImage: json['add_original_image'] ?? false,
       uncondScale: json['uncond_scale'] is int
           ? (json['uncond_scale'] as int).toDouble()
-          : json['uncond_scale'],
+          : json['uncond_scale'] ?? 1.0,
       cfgRescale:
           (json['cfg_rescale'] as num?)?.toDouble() ?? defaultCfgRescale,
-      noiseSchedule: json['noise_schedule'],
+      noiseSchedule: json['noise_schedule'] ?? 'native',
       negativePrompt: json['negative_prompt'] ?? defaultUC,
       autoPosition: json['auto_position'] ?? true,
       legacyUc: json['legacy_uc'] ?? false,
@@ -219,27 +219,54 @@ class ParamConfig {
     if (json.containsKey('sampler') || json.containsKey('noise_schedule')) {
       clearImportedSamplerOverrides();
     }
+    if (json['model'] is String && (json['model'] as String).isNotEmpty) {
+      model = json['model'] as String;
+      loadCount++;
+    }
+    if (json['sizes'] is List) {
+      final importedSizes = (json['sizes'] as List)
+          .whereType<Map<String, dynamic>>()
+          .map(GenerationSize.fromJson)
+          .toList();
+      if (importedSizes.isNotEmpty) {
+        sizes = importedSizes;
+        loadCount++;
+      }
+    }
     if (json.containsKey('width') && json.containsKey('height')) {
       final width = json['width'];
       final height = json['height'];
-      sizes = [GenerationSize(width: width, height: height)];
-      loadCount += 2;
+      if (width is num && height is num) {
+        sizes = [
+          GenerationSize(width: width.toInt(), height: height.toInt()),
+        ];
+        loadCount += 2;
+      }
     }
     if (json.containsKey('scale')) {
-      scale = json['scale'];
-      loadCount++;
+      final value = json['scale'];
+      if (value is num) {
+        scale = value.toDouble();
+        loadCount++;
+      }
     }
     if (json.containsKey('sampler')) {
       sampler = json['sampler'];
       loadCount++;
     }
     if (json.containsKey('steps')) {
-      steps = json['steps'];
-      loadCount++;
+      final value = json['steps'];
+      if (value is num) {
+        steps = value.toInt();
+        loadCount++;
+      }
     }
     if (json.containsKey('n_samples')) {
-      nSamples = json['n_samples'];
-      loadCount++;
+      final value = json['n_samples'];
+      if (value is num) {
+        nSamples = value.toInt();
+        loadCount++;
+      }
     }
     if (json.containsKey('ucPreset')) {
       ucPreset = json['ucPreset'];
@@ -282,10 +309,11 @@ class ParamConfig {
       loadCount++;
     }
     if (json.containsKey('cfg_rescale')) {
-      cfgRescale = json['cfg_rescale'] is int
-          ? (json['cfg_rescale'] as int).toDouble()
-          : json['cfg_rescale'];
-      loadCount++;
+      final value = json['cfg_rescale'];
+      if (value is num) {
+        cfgRescale = value.toDouble();
+        loadCount++;
+      }
     }
     if (json.containsKey('noise_schedule')) {
       noiseSchedule = json['noise_schedule'];
@@ -305,8 +333,14 @@ class ParamConfig {
       loadCount++;
     }
     if (json.containsKey('seed')) {
-      seed = json['seed'];
-      randomSeed = false;
+      final importedSeed = json['seed'];
+      if (importedSeed is num) {
+        seed = importedSeed.toInt();
+        randomSeed = false;
+        loadCount++;
+      }
+    } else if (json['random_seed'] is bool) {
+      randomSeed = json['random_seed'] as bool;
       loadCount++;
     }
     if (json.containsKey('use_coords')) {
@@ -315,6 +349,18 @@ class ParamConfig {
     }
     if (json.containsKey('uc')) {
       negativePrompt = json['uc'];
+      loadCount++;
+    }
+    if (json['variety_plus'] is bool) {
+      varietyPlus = json['variety_plus'] as bool;
+      loadCount++;
+    }
+    if (json['legacy_uc'] is bool) {
+      legacyUc = json['legacy_uc'] as bool;
+      loadCount++;
+    }
+    if (json['auto_position'] is bool) {
+      autoPosition = json['auto_position'] as bool;
       loadCount++;
     }
     return loadCount;

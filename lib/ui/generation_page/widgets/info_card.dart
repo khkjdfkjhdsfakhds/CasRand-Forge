@@ -154,6 +154,19 @@ class InfoCard extends StatelessWidget {
 /// beside prompt, matching the navigation shell's own breakpoint.
 const double detailWideLayoutBreakpoint = 640;
 
+/// additionalInfo keys surfaced as compact parameter chips, in display order.
+/// Everything else stays available under the "all parameters" expander.
+const List<(String, String)> _detailParamKeys = [
+  ('seed', 'seed'),
+  ('steps', 'steps'),
+  ('sampler', 'sampler'),
+  ('scale', 'scale'),
+  ('cfg_rescale', 'cfg_rescale'),
+  ('noise_schedule', 'noise_schedule'),
+  ('model', 'model'),
+  ('action', 'action'),
+];
+
 class InfoDetailPage extends StatefulWidget {
   final InfoCardContent content;
 
@@ -191,110 +204,272 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(content.title)),
+      appBar: AppBar(
+        title:
+            Text(content.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+        actions: [
+          if (content.imageBytes != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: Center(
+                child: Text(
+                  tr('detail_shortcut_hint'),
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: Theme.of(context).colorScheme.outline,
+                      ),
+                ),
+              ),
+            ),
+        ],
+      ),
       body: Focus(
         focusNode: _focusNode,
         autofocus: true,
         onKeyEvent: _handleKey,
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final wide =
-                constraints.maxWidth >= detailWideLayoutBreakpoint &&
-                    content.imageBytes != null;
-            return wide ? _buildWideLayout(context) : _buildStackedLayout(context);
+            final wide = constraints.maxWidth >= detailWideLayoutBreakpoint &&
+                content.imageBytes != null;
+            return wide
+                ? _buildWideLayout(context)
+                : _buildStackedLayout(context);
           },
         ),
       ),
     );
   }
 
-  /// Image on the left, prompt and parameters on the right — the layout the
-  /// result cards use, so a tall image no longer pushes the prompt off-screen.
+  /// Image on the left, prompt and parameters on the right, so a tall image
+  /// never pushes the prompt off-screen.
   Widget _buildWideLayout(BuildContext context) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Expanded(
           flex: 5,
-          child: Column(
-            children: [
-              ResultActionBar(content: content),
-              Expanded(child: _buildImage(context, fit: BoxFit.contain)),
-            ],
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              children: [
+                Expanded(child: _buildImagePane(context)),
+                const SizedBox(height: 12),
+                ResultActionBar(content: content),
+              ],
+            ),
           ),
         ),
-        const VerticalDivider(width: 1),
         Expanded(
           flex: 4,
-          child: SingleChildScrollView(
-            child: Column(children: _buildInfoTiles(context)),
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(0, 12, 12, 12),
+            children: _buildInfoPanel(context),
           ),
         ),
       ],
     );
   }
 
-  /// The original single-column layout, kept for narrow windows and phones.
+  /// Single-column layout for narrow windows and phones.
   Widget _buildStackedLayout(BuildContext context) {
-    return SingleChildScrollView(
-      child: Column(
-        children: [
-          if (content.imageBytes != null) ...[
-            ResultActionBar(content: content),
-            _buildImage(context, fit: BoxFit.contain),
-          ],
-          ..._buildInfoTiles(context),
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        if (content.imageBytes != null) ...[
+          // Fixed-height stage so the layout does not jump while the image
+          // decodes; the dark surface absorbs the letterboxing.
+          SizedBox(height: 420, child: _buildImagePane(context)),
+          const SizedBox(height: 12),
+          ResultActionBar(content: content),
+          const SizedBox(height: 4),
         ],
-      ),
+        ..._buildInfoPanel(context),
+      ],
     );
   }
 
-  Widget _buildImage(BuildContext context, {required BoxFit fit}) {
+  /// The image on a dark rounded stage, like the official result viewer.
+  Widget _buildImagePane(BuildContext context) {
     if (content.imageBytes == null) return const SizedBox.shrink();
-    return GeneratedImageView(
-      content: content,
-      child: GestureDetector(
-        key: const Key('detail-image-zoom-target'),
-        onTap: () => _openFullscreenImage(context, content),
-        child: Image.memory(content.imageBytes!, fit: fit),
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: GeneratedImageView(
+        content: content,
+        child: GestureDetector(
+          key: const Key('detail-image-zoom-target'),
+          onTap: () => _openFullscreenImage(context, content),
+          child: Image.memory(
+            content.imageBytes!,
+            fit: BoxFit.contain,
+            filterQuality: FilterQuality.medium,
+          ),
+        ),
       ),
     );
   }
 
-  List<Widget> _buildInfoTiles(BuildContext context) {
-    final tiles = <Widget>[
-      buildInfoTile(tr('title'), content.title, context),
-      buildInfoTile(tr('info'), content.info, context),
-      if (content.tokenLabel != null)
-        buildInfoTile(tr('api_token'), content.tokenLabel!, context),
-      if (content.anlasCost != null)
-        buildInfoTile(tr('anlas_cost'), content.anlasCost.toString(), context),
-      if (content.anlasRemaining != null)
-        buildInfoTile(
-          tr('anlas_remaining'),
-          content.anlasRemaining.toString(),
-          context,
+  List<Widget> _buildInfoPanel(BuildContext context) {
+    final additional = content.additionalInfo;
+    final knownKeys = <String>{
+      for (final (key, _) in _detailParamKeys) key,
+      'input',
+      'negative_prompt',
+      'width',
+      'height',
+    };
+    final remaining = [
+      for (final entry in additional.entries)
+        if (!knownKeys.contains(entry.key)) entry,
+    ];
+    final input = additional['input'];
+    final negative = additional['negative_prompt'];
+
+    return [
+      if (content.info.isNotEmpty)
+        _buildTextCard(context, tr('detail_prompt_blocks'), content.info),
+      if (input is String && input.isNotEmpty)
+        _buildTextCard(context, tr('detail_prompt_final'), input),
+      if (negative is String && negative.isNotEmpty)
+        _buildTextCard(context, tr('detail_negative'), negative),
+      _buildParamsCard(context),
+      if (remaining.isNotEmpty)
+        Card(
+          clipBehavior: Clip.antiAlias,
+          child: ExpansionTile(
+            key: const Key('detail-all-params'),
+            leading: const Icon(Icons.data_object),
+            title: Text(tr('detail_all_params')),
+            children: [
+              for (final entry in remaining)
+                ListTile(
+                  dense: true,
+                  titleAlignment: ListTileTitleAlignment.top,
+                  title: Text(entry.key),
+                  subtitle: SelectableText(entry.value.toString()),
+                  trailing: IconButton(
+                    onPressed: () =>
+                        _copyContent(entry.value.toString(), context),
+                    tooltip: tr('copy_to_clipboard'),
+                    icon: const Icon(Icons.copy, size: 18),
+                  ),
+                ),
+            ],
+          ),
         ),
     ];
-    for (final item in content.additionalInfo.entries) {
-      tiles.add(buildInfoTile(item.key, item.value.toString(), context));
-    }
-    return tiles;
   }
 
-  Widget buildInfoTile(String title, String body, BuildContext context) {
-    return Column(children: [
-      ListTile(
-        titleAlignment: ListTileTitleAlignment.top,
-        title: Text(title),
-        subtitle: SelectableText(body),
-        trailing: IconButton(
-            onPressed: () => _copyContent(body, context),
-            tooltip: tr('copy_to_clipboard'),
-            icon: const Icon(Icons.copy)),
+  /// A prompt-style card: selectable body text with a copy affordance.
+  Widget _buildTextCard(BuildContext context, String title, String body) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 8, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => _copyContent(body, context),
+                  tooltip: tr('copy_to_clipboard'),
+                  icon: const Icon(Icons.copy, size: 18),
+                ),
+              ],
+            ),
+            SelectableText(
+              body,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ],
+        ),
       ),
-      const Divider(),
-    ]);
+    );
+  }
+
+  /// Key parameters as label/value chips, with size and Anlas merged in.
+  Widget _buildParamsCard(BuildContext context) {
+    final additional = content.additionalInfo;
+    final chips = <Widget>[];
+
+    final width = additional['width'];
+    final height = additional['height'];
+    if (width != null && height != null) {
+      chips.add(_paramChip(context, tr('detail_size'), '$width × $height'));
+    }
+    for (final (key, label) in _detailParamKeys) {
+      final value = additional[key];
+      if (value == null) continue;
+      final text = value.toString();
+      if (text.isEmpty) continue;
+      chips.add(_paramChip(context, label, text));
+    }
+    if (content.tokenLabel != null) {
+      chips.add(_paramChip(context, tr('api_token'), content.tokenLabel!));
+    }
+    if (content.anlasCost != null) {
+      chips.add(
+          _paramChip(context, tr('anlas_cost'), content.anlasCost.toString()));
+    }
+    if (content.anlasRemaining != null) {
+      chips.add(_paramChip(
+          context, tr('anlas_remaining'), content.anlasRemaining.toString()));
+    }
+    if (chips.isEmpty) return const SizedBox.shrink();
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              tr('detail_parameters'),
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, runSpacing: 8, children: chips),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _paramChip(BuildContext context, String label, String value) {
+    final colors = Theme.of(context).colorScheme;
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: () => _copyContent(value, context),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: colors.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: colors.outline,
+                  ),
+            ),
+            Text(value, style: Theme.of(context).textTheme.bodySmall),
+          ],
+        ),
+      ),
+    );
   }
 
   void _copyContent(String body, BuildContext context) async {

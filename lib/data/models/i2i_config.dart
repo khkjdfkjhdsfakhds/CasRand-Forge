@@ -3,6 +3,9 @@ import 'dart:ui' show Offset;
 
 import 'package:flutter/foundation.dart';
 import 'package:image_size_getter/image_size_getter.dart';
+import 'package:nai_casrand/data/models/generation_size.dart';
+import 'package:nai_casrand/data/use_cases/autocrop_planner.dart' show CropRect;
+import 'package:nai_casrand/data/use_cases/i2i_request_size.dart';
 
 /// A single freehand stroke in the inpainting mask editor.
 /// Points are stored in image-pixel coordinates.
@@ -27,6 +30,8 @@ class I2IConfig with ChangeNotifier {
 
   double strength;
   double noise;
+  GenerationSize requestSize;
+  I2iSizeMode sizeMode;
 
   // Inpainting mask: PNG (white = repaint, black = keep), same size as image.
   Uint8List? _maskBytes;
@@ -38,11 +43,9 @@ class I2IConfig with ChangeNotifier {
   bool addOriginalImage;
   bool autocropEnabled;
 
-  /// Enhance magnification applied to the base image size.
-  double enhanceScale;
-
-  /// Index into [enhancePresets] for the strength/noise pair.
-  int enhancePresetIndex;
+  /// Hand-drawn focus-inpainting frame in image pixels. When set, it replaces
+  /// Autocrop's automatically chosen outer frame.
+  CropRect? manualFocusFrame;
 
   /// Increment on every image/mask change so cached request plans invalidate.
   int revision = 0;
@@ -51,10 +54,10 @@ class I2IConfig with ChangeNotifier {
     String? imageB64,
     this.strength = 0.7,
     this.noise = 0,
+    this.requestSize = const GenerationSize(width: 832, height: 1216),
+    this.sizeMode = I2iSizeMode.automatic,
     this.addOriginalImage = true,
     this.autocropEnabled = true,
-    this.enhanceScale = 1.5,
-    this.enhancePresetIndex = 2,
   }) {
     if (imageB64 != null) {
       setImage(base64Decode(imageB64));
@@ -93,10 +96,13 @@ class I2IConfig with ChangeNotifier {
     height = size.height;
     _imageBytes = bytes;
     _imageB64Cache = null;
-    // Mask coordinates are bound to the previous image; drop them.
+    // Mask and focus frame coordinates are bound to the previous image.
     _maskBytes = null;
     _maskB64Cache = null;
     maskStrokes = [];
+    manualFocusFrame = null;
+    sizeMode = I2iSizeMode.automatic;
+    requestSize = automaticI2iRequestSize(width, height);
     revision++;
     notifyListeners();
   }
@@ -107,6 +113,7 @@ class I2IConfig with ChangeNotifier {
     _maskBytes = null;
     _maskB64Cache = null;
     maskStrokes = [];
+    manualFocusFrame = null;
     width = 0;
     height = 0;
     revision++;
@@ -125,6 +132,7 @@ class I2IConfig with ChangeNotifier {
     _maskBytes = null;
     _maskB64Cache = null;
     maskStrokes = [];
+    manualFocusFrame = null;
     revision++;
     notifyListeners();
   }
@@ -141,6 +149,15 @@ class I2IConfig with ChangeNotifier {
     notifyListeners();
   }
 
+  void setRequestSize(GenerationSize value, {I2iSizeMode? mode}) {
+    final nextMode = mode ?? sizeMode;
+    if (requestSize == value && sizeMode == nextMode) return;
+    requestSize = value;
+    sizeMode = nextMode;
+    revision++;
+    notifyListeners();
+  }
+
   void setAddOriginalImage(bool value) {
     addOriginalImage = value;
     revision++;
@@ -153,38 +170,9 @@ class I2IConfig with ChangeNotifier {
     notifyListeners();
   }
 
-  void setEnhanceScale(double value) {
-    enhanceScale = value;
-    notifyListeners();
-  }
-
-  void setEnhancePresetIndex(int value) {
-    enhancePresetIndex = value.clamp(0, enhancePresets.length - 1);
+  void setManualFocusFrame(CropRect? value) {
+    manualFocusFrame = value;
+    revision++;
     notifyListeners();
   }
 }
-
-/// Enhance magnitude presets (1-5), matching the official Enhance panel.
-class EnhancePreset {
-  final String labelKey;
-  final double strength;
-  final double noise;
-
-  const EnhancePreset({
-    required this.labelKey,
-    required this.strength,
-    required this.noise,
-  });
-}
-
-const List<EnhancePreset> enhancePresets = [
-  EnhancePreset(labelKey: 'enhance_preset_1', strength: 0.2, noise: 0),
-  EnhancePreset(labelKey: 'enhance_preset_2', strength: 0.4, noise: 0),
-  EnhancePreset(labelKey: 'enhance_preset_3', strength: 0.5, noise: 0),
-  EnhancePreset(labelKey: 'enhance_preset_4', strength: 0.6, noise: 0),
-  EnhancePreset(labelKey: 'enhance_preset_5', strength: 0.7, noise: 0.1),
-];
-
-/// Magnifications the official Enhance panel offers. 1.5x is only available
-/// while the resulting size stays within the maximum request area.
-const List<double> enhanceScaleOptions = [1.0, 1.5];

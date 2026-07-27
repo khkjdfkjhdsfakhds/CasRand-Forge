@@ -10,9 +10,13 @@ import 'package:nai_casrand/ui/generation_page/widgets/generation_page_view.dart
 import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/ui/director_page/view_models/director_page_viewmodel.dart';
 import 'package:nai_casrand/ui/director_page/widgets/director_page_view.dart';
+import 'package:nai_casrand/ui/enhance_page/view_models/enhance_page_viewmodel.dart';
+import 'package:nai_casrand/ui/enhance_page/widgets/enhance_page_view.dart';
 import 'package:nai_casrand/ui/i2i_page/view_models/i2i_page_viewmodel.dart';
 import 'package:nai_casrand/ui/i2i_page/widgets/i2i_page_view.dart';
+import 'package:nai_casrand/ui/i2i_tab/widgets/vibe_reference_page_view.dart';
 import 'package:nai_casrand/ui/navigation/view_models/navigation_view_model.dart';
+import 'package:nai_casrand/ui/navigation/widgets/compact_navigation_rail_label.dart';
 import 'package:nai_casrand/ui/navigation/widgets/metadata_drop_area.dart';
 import 'package:nai_casrand/ui/navigation/widgets/navigation_appbar.dart';
 import 'package:nai_casrand/ui/settings_page/widgets/settings_page_view.dart';
@@ -31,25 +35,107 @@ class NavigationView extends StatefulWidget {
 }
 
 class NavigationViewState extends State<NavigationView> {
-  int _currentIndex = 0;
+  AppDestination _currentDestination = AppDestination.generation;
 
   DateTime? _lastBackButtonPressTime;
 
+  /// Pages are created once and reused across rebuilds, so their viewmodels
+  /// stay alive: async work (image imports, cost estimates) must notify the
+  /// same instance the page is listening to.
+  late final Map<AppDestination, Widget> _pages = {
+    AppDestination.generation: GenerationPageView(viewmodel: GetIt.I()),
+    AppDestination.config: ConfigPageView(
+      viewmodel: ConfigPageViewmodel(),
+    ),
+    AppDestination.imageToImage: I2iPageView(viewmodel: I2iPageViewmodel()),
+    AppDestination.vibeReference: const VibeReferencePageView(),
+    AppDestination.enhance: EnhancePageView(viewmodel: EnhancePageViewmodel()),
+    AppDestination.directorTools:
+        DirectorPageView(viewmodel: DirectorPageViewmodel()),
+    AppDestination.settings: SettingsPageView(),
+  };
+
   NavigationRequest get _navigationRequest => GetIt.I<NavigationRequest>();
 
-  void _changeIndex(int value) {
-    widget.viewModel.changeIndex(value);
+  List<AppDestination> get _visibleDestinations {
+    final settings = GetIt.I<PayloadConfig>().settings;
+    return [
+      AppDestination.generation,
+      AppDestination.config,
+      if (settings.showImageToImagePage) AppDestination.imageToImage,
+      if (settings.showVibeReferencePage) AppDestination.vibeReference,
+      if (settings.showEnhancePage) AppDestination.enhance,
+      if (settings.showDirectorToolsPage) AppDestination.directorTools,
+      AppDestination.settings,
+    ];
+  }
+
+  void _changeDestination(AppDestination destination) {
+    widget.viewModel.changeIndex(destination.index);
     setState(() {
-      _currentIndex = value;
+      _currentDestination = destination;
     });
+  }
+
+  void _changeIndex(int visibleIndex) {
+    final visible = _visibleDestinations;
+    if (visibleIndex < 0 || visibleIndex >= visible.length) return;
+    _changeDestination(visible[visibleIndex]);
+  }
+
+  bool _isDestinationVisible(AppDestination destination) =>
+      _visibleDestinations.contains(destination);
+
+  /// A direct result action is an explicit request to use a workspace. If the
+  /// user previously hid that destination from navigation, reveal it again
+  /// instead of making the action appear broken.
+  void _ensureDestinationVisible(AppDestination destination) {
+    final settings = GetIt.I<PayloadConfig>().settings;
+    var changed = false;
+    switch (destination) {
+      case AppDestination.imageToImage:
+        changed = !settings.showImageToImagePage;
+        settings.showImageToImagePage = true;
+        break;
+      case AppDestination.vibeReference:
+        changed = !settings.showVibeReferencePage;
+        settings.showVibeReferencePage = true;
+        break;
+      case AppDestination.enhance:
+        changed = !settings.showEnhancePage;
+        settings.showEnhancePage = true;
+        break;
+      case AppDestination.directorTools:
+        changed = !settings.showDirectorToolsPage;
+        settings.showDirectorToolsPage = true;
+        break;
+      case AppDestination.generation:
+      case AppDestination.config:
+      case AppDestination.settings:
+        return;
+    }
+    if (!changed) return;
+    GetIt.I<ConfigService>().saveConfig(GetIt.I<PayloadConfig>().toJson());
   }
 
   /// Handles a jump asked for by another page (e.g. "use as base image").
   void _handleNavigationRequest() {
     final destination = _navigationRequest.requestedDestination.value;
     if (destination == null) return;
-    _changeIndex(destination.destinationIndex);
+    if (!_isDestinationVisible(destination)) {
+      _ensureDestinationVisible(destination);
+    }
+    _changeDestination(destination);
     _navigationRequest.consume();
+  }
+
+  void _handleVisibilityChange() {
+    if (!mounted) return;
+    setState(() {
+      if (!_visibleDestinations.contains(_currentDestination)) {
+        _currentDestination = AppDestination.generation;
+      }
+    });
   }
 
   @override
@@ -57,6 +143,7 @@ class NavigationViewState extends State<NavigationView> {
     super.initState();
     _navigationRequest.requestedDestination
         .addListener(_handleNavigationRequest);
+    _navigationRequest.visibilityRevision.addListener(_handleVisibilityChange);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _showWelcomeDialog();
     });
@@ -66,6 +153,8 @@ class NavigationViewState extends State<NavigationView> {
   void dispose() {
     _navigationRequest.requestedDestination
         .removeListener(_handleNavigationRequest);
+    _navigationRequest.visibilityRevision
+        .removeListener(_handleVisibilityChange);
     super.dispose();
   }
 
@@ -98,15 +187,10 @@ class NavigationViewState extends State<NavigationView> {
   }
 
   Widget getBody() {
-    final pages = [
-      GenerationPageView(viewmodel: GetIt.I()),
-      I2iPageView(viewmodel: I2iPageViewmodel()),
-      DirectorPageView(viewmodel: DirectorPageViewmodel()),
-      ConfigPageView(
-        viewmodel: ConfigPageViewmodel(),
-      ),
-      SettingsPageView(),
-    ];
+    final destinations = _visibleDestinations;
+    final selectedIndex = destinations.indexOf(_currentDestination);
+    final selectedDestination =
+        selectedIndex < 0 ? AppDestination.generation : _currentDestination;
     final content = LayoutBuilder(
       builder: (context, constraints) {
         // 使用 LayoutBuilder 来监听父容器的宽度变化
@@ -116,57 +200,50 @@ class NavigationViewState extends State<NavigationView> {
           return Row(
             children: [
               NavigationRail(
-                selectedIndex: _currentIndex,
+                selectedIndex: destinations.indexOf(selectedDestination),
                 onDestinationSelected: _changeIndex,
                 labelType: NavigationRailLabelType.all,
                 groupAlignment: -1.0,
-                destinations: [
-                  NavigationRailDestination(
-                      icon: const Icon(Icons.create),
-                      label: Text(context.tr('generation'))),
-                  NavigationRailDestination(
-                      icon: const Icon(Icons.brush),
-                      label: Text(context.tr('i2i_inpaint'))),
-                  NavigationRailDestination(
-                      icon: const Icon(Icons.auto_fix_high),
-                      label: Text(context.tr('director_tool'))),
-                  NavigationRailDestination(
-                      icon: const Icon(Icons.visibility),
-                      label: Text(context.tr('prompt_config'))),
-                  NavigationRailDestination(
-                      icon: const Icon(Icons.settings),
-                      label: Text(context.tr('settings'))),
-                ],
+                destinations: destinations
+                    .map(
+                      (destination) => NavigationRailDestination(
+                        icon: Icon(_iconFor(destination)),
+                        label: CompactNavigationRailLabel(
+                          label: context.tr(_labelKeyFor(destination)),
+                        ),
+                      ),
+                    )
+                    .toList(),
               ),
-              Expanded(child: pages[_currentIndex]), // 内容区域
+              Expanded(child: _pages[selectedDestination]!), // 内容区域
             ],
           );
         } else {
           // 纵向布局 (Column - BottomNavigationBar)
           return Column(
             children: [
-              Expanded(child: pages[_currentIndex]), // 内容区域
-              BottomNavigationBar(
-                currentIndex: _currentIndex,
-                type: BottomNavigationBarType.fixed,
-                items: [
-                  BottomNavigationBarItem(
-                      icon: const Icon(Icons.create),
-                      label: context.tr('generation')),
-                  BottomNavigationBarItem(
-                      icon: const Icon(Icons.brush),
-                      label: context.tr('i2i_inpaint')),
-                  BottomNavigationBarItem(
-                      icon: const Icon(Icons.auto_fix_high),
-                      label: context.tr('director_tool')),
-                  BottomNavigationBarItem(
-                      icon: const Icon(Icons.visibility),
-                      label: context.tr('prompt_config')),
-                  BottomNavigationBarItem(
-                      icon: const Icon(Icons.settings),
-                      label: context.tr('settings')),
-                ],
-                onTap: _changeIndex,
+              Expanded(child: _pages[selectedDestination]!), // 内容区域
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: SizedBox(
+                  width: constraints.maxWidth > destinations.length * 88.0
+                      ? constraints.maxWidth
+                      : destinations.length * 88.0,
+                  child: NavigationBar(
+                    selectedIndex: destinations.indexOf(selectedDestination),
+                    labelBehavior:
+                        NavigationDestinationLabelBehavior.onlyShowSelected,
+                    destinations: destinations
+                        .map(
+                          (destination) => NavigationDestination(
+                            icon: Icon(_iconFor(destination)),
+                            label: context.tr(_labelKeyFor(destination)),
+                          ),
+                        )
+                        .toList(),
+                    onDestinationSelected: _changeIndex,
+                  ),
+                ),
               )
             ],
           );
@@ -174,6 +251,30 @@ class NavigationViewState extends State<NavigationView> {
       },
     );
     return Center(child: content);
+  }
+
+  String _labelKeyFor(AppDestination destination) {
+    return switch (destination) {
+      AppDestination.generation => 'generation',
+      AppDestination.config => 'prompt_config',
+      AppDestination.imageToImage => 'i2i_inpaint',
+      AppDestination.vibeReference => 'vibe_transfer',
+      AppDestination.enhance => 'enhance_section',
+      AppDestination.directorTools => 'director_tool',
+      AppDestination.settings => 'settings',
+    };
+  }
+
+  IconData _iconFor(AppDestination destination) {
+    return switch (destination) {
+      AppDestination.generation => Icons.create,
+      AppDestination.config => Icons.visibility,
+      AppDestination.imageToImage => Icons.brush,
+      AppDestination.vibeReference => Icons.auto_awesome_motion_outlined,
+      AppDestination.enhance => Icons.auto_awesome,
+      AppDestination.directorTools => Icons.auto_fix_high,
+      AppDestination.settings => Icons.settings,
+    };
   }
 
   void _showWelcomeDialog() {
@@ -194,7 +295,7 @@ class NavigationViewState extends State<NavigationView> {
               onTapLink: (text, href, title) {
                 if (href == null) return;
                 if (href == '#jump_to_settings') {
-                  _changeIndex(AppDestination.settings.destinationIndex);
+                  _changeDestination(AppDestination.settings);
                   Navigator.of(dialogContext).pop();
                 } else {
                   // Launch link

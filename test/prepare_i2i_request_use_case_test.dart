@@ -69,8 +69,7 @@ void main() {
     expect(sent.height, 1216);
   });
 
-  test('img2img plan sends original bytes when size already matches',
-      () async {
+  test('img2img plan sends original bytes when size already matches', () async {
     final original = solidPng(832, 1216, 10, 200, 10);
     final config = I2IConfig()..setImage(original);
     final plan = await PrepareI2iRequestUseCase(config: config)(
@@ -122,8 +121,7 @@ void main() {
     expect(composite.isNativeScale, isFalse);
     // A 512x512 source must not be sent as a 512x512 request.
     expect(plan.width, greaterThan(512));
-    expect(plan.width * plan.height,
-        greaterThan((1024 * 1024 * 0.8).round()));
+    expect(plan.width * plan.height, greaterThan((1024 * 1024 * 0.8).round()));
     final sent = img.decodePng(base64Decode(plan.imageB64))!;
     expect(sent.width, plan.width);
     expect(sent.height, plan.height);
@@ -359,6 +357,7 @@ void main() {
       targetHeight: 1536,
     );
     expect(large!.width * large.height, lessThanOrEqualTo(areaCapLarge));
-    expect(large.width * large.height, greaterThan(normal.width * normal.height));
+    expect(
+        large.width * large.height, greaterThan(normal.width * normal.height));
   });
 }

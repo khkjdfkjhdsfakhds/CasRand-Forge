@@ -1,7 +1,6 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:nai_casrand/core/constants/defaults.dart';
-import 'package:nai_casrand/core/constants/feature_flags.dart';
 import 'package:nai_casrand/ui/core/widgets/editable_list_tile.dart';
 import 'package:nai_casrand/ui/core/widgets/slider_list_tile.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
@@ -117,22 +116,6 @@ class GenerationSettingsView extends StatelessWidget {
                 divisions: 4,
                 onChanged: (value) => viewmodel.setCardsPerCol(value.toInt()),
               ),
-              if (FeatureFlags.overridePrompt) ...[
-                CheckboxListTile(
-                  secondary: const Icon(Icons.edit),
-                  title: Text(context.tr('override_random_prompts')),
-                  value: viewmodel.payloadConfig.useOverridePrompt,
-                  onChanged: viewmodel.setOverride,
-                ),
-                if (viewmodel.payloadConfig.useOverridePrompt)
-                  CheckboxListTile(
-                    secondary: const Icon(Icons.people_outline),
-                    title: Text(context.tr('use_character_prompt')),
-                    value:
-                        viewmodel.payloadConfig.useCharacterPromptWithOverride,
-                    onChanged: viewmodel.setCharacterOverride,
-                  ),
-              ],
             ],
           ),
         );

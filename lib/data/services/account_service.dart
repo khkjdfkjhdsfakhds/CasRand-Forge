@@ -8,8 +8,13 @@ import 'package:nai_casrand/data/services/api_service.dart';
 class SubscriptionInfo {
   final int? anlas;
   final int tier;
+  final bool active;
 
-  const SubscriptionInfo({required this.anlas, required this.tier});
+  const SubscriptionInfo({
+    required this.anlas,
+    required this.tier,
+    required this.active,
+  });
 }
 
 /// Read-only NovelAI account queries (Anlas balance).
@@ -41,28 +46,33 @@ class AccountService {
         'accept': 'application/json',
       };
       final client = ApiService().createHttpClient(proxy);
-      final response = await (client == null
-              ? http.get(url, headers: headers)
-              : client.get(url, headers: headers))
-          .timeout(const Duration(seconds: 10));
+      final response =
+          await (client == null
+                  ? http.get(url, headers: headers)
+                  : client.get(url, headers: headers))
+              .timeout(const Duration(seconds: 10));
       if (response.statusCode != 200) return null;
       final data = json.decode(response.body);
       if (data is! Map<String, dynamic>) return null;
 
       final tierValue = data['tier'];
       final tier = tierValue is num ? tierValue.toInt() : 0;
+      // Be conservative if the field is absent: an old or expired Opus tier
+      // must never be treated as an active free allowance.
+      final active = data['active'] == true;
 
       int? anlas;
       final steps = data['trainingStepsLeft'];
       if (steps is Map) {
         final fixed = steps['fixedTrainingStepsLeft'];
         final purchased = steps['purchasedTrainingSteps'];
-        anlas = (fixed is num ? fixed.toInt() : 0) +
+        anlas =
+            (fixed is num ? fixed.toInt() : 0) +
             (purchased is num ? purchased.toInt() : 0);
       } else if (steps is num) {
         anlas = steps.toInt();
       }
-      return SubscriptionInfo(anlas: anlas, tier: tier);
+      return SubscriptionInfo(anlas: anlas, tier: tier, active: active);
     } catch (_) {
       return null;
     }

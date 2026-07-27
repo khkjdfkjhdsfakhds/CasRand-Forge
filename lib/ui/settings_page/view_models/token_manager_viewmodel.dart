@@ -20,11 +20,9 @@ class TokenManagerViewmodel extends ChangeNotifier {
     if (trimmedToken.isEmpty) return;
     final effectiveLabel =
         label.trim().isEmpty ? 'Token ${tokens.length + 1}' : label.trim();
-    tokens.add(ApiTokenConfig(
-      label: effectiveLabel,
-      token: trimmedToken,
-      enabled: true,
-    ));
+    tokens.add(
+      ApiTokenConfig(label: effectiveLabel, token: trimmedToken, enabled: true),
+    );
     _persist();
     refreshBalance(trimmedToken);
   }
@@ -53,11 +51,13 @@ class TokenManagerViewmodel extends ChangeNotifier {
     final legacy = payloadConfig.settings.apiKey;
     if (legacy.isEmpty) return;
     if (tokens.any((entry) => entry.token == legacy)) return;
-    tokens.add(ApiTokenConfig(
-      label: 'Token ${tokens.length + 1}',
-      token: legacy,
-      enabled: true,
-    ));
+    tokens.add(
+      ApiTokenConfig(
+        label: 'Token ${tokens.length + 1}',
+        token: legacy,
+        enabled: true,
+      ),
+    );
     _persist();
     refreshBalance(legacy);
   }
@@ -66,12 +66,22 @@ class TokenManagerViewmodel extends ChangeNotifier {
     if (token.isEmpty || _loadingTokens.contains(token)) return;
     _loadingTokens.add(token);
     notifyListeners();
-    final balance = await AccountService().fetchAnlasBalance(
+    final info = await AccountService().fetchSubscription(
       token: token,
       proxy: payloadConfig.settings.proxy,
     );
     _loadingTokens.remove(token);
-    balances[token] = balance;
+    balances[token] = info?.anlas;
+    final effectiveTokens = payloadConfig.settings.effectiveApiTokens;
+    final primaryToken =
+        effectiveTokens.isEmpty ? null : effectiveTokens.first.token;
+    if (token == primaryToken) {
+      payloadConfig.settings.subscriptionStatusKnown = info != null;
+      if (info != null) {
+        payloadConfig.settings.subscriptionTier = info.tier;
+        payloadConfig.settings.subscriptionActive = info.active;
+      }
+    }
     notifyListeners();
   }
 

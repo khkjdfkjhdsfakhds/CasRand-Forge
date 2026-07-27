@@ -13,10 +13,12 @@ import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:lorem_ipsum/lorem_ipsum.dart';
+import 'package:nai_casrand/data/models/i2i_config.dart';
 import 'package:nai_casrand/data/services/account_service.dart';
 import 'package:nai_casrand/data/services/api_service.dart';
 import 'package:nai_casrand/data/services/file_service.dart';
 import 'package:nai_casrand/data/services/image_service.dart';
+import 'package:nai_casrand/data/use_cases/anlas_cost.dart';
 import 'package:nai_casrand/data/use_cases/generate_payload_use_case.dart';
 import 'package:nai_casrand/data/use_cases/prepare_i2i_request_use_case.dart';
 
@@ -40,6 +42,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
   int get colNum => payloadConfig.settings.generationPageColumnCount;
 
   Command<void, InfoCardContent>? currentCommand;
+  Command<void, InfoCardContent>? lastEnhanceCommand;
+  Command<void, InfoCardContent>? lastDirectorCommand;
 
   PayloadGenerationResult? _cachedPayloadResult;
   I2iRequestBatch? _cachedI2iBatch;
@@ -55,6 +59,182 @@ class GenerationPageViewmodel extends ChangeNotifier {
   final Map<String, int> _lastAnlasBalances = {};
   Map<String, int> get lastAnlasBalances => Map.of(_lastAnlasBalances);
 
+  /// Estimated Anlas for the next generation, shown on the start buttons
+  /// before anything is sent. Null while unknown or still computing.
+  final ValueNotifier<AnlasCost?> nextCostEstimate = ValueNotifier(null);
+  String? _costEstimateKey;
+  int _costEstimateEpoch = 0;
+  bool _subscriptionRefreshInFlight = false;
+  DateTime? _lastSubscriptionRefreshAttempt;
+
+  /// True when the estimate is an upper bound (several sizes configured, one
+  /// picked at random per request — the estimate uses the most expensive).
+  bool get nextCostIsUpperBound =>
+      payloadConfig.paramConfig.sizes.length > 1 &&
+      !payloadConfig.i2iConfig.hasImage;
+
+  /// Whether SMEA multipliers apply to the current model (V4 models drop the
+  /// sm flags from the payload entirely).
+  bool get _smActive =>
+      !payloadConfig.paramConfig.model.contains('diffusion-4');
+
+  /// Recomputes [nextCostEstimate] when any relevant input changed. Cheap to
+  /// call from build methods: a fingerprint short-circuits repeats, and the
+  /// img2img planning that needs image decoding runs asynchronously.
+  void refreshCostEstimate() {
+    refreshSubscriptionSnapshot();
+    final paramConfig = payloadConfig.paramConfig;
+    final i2i = payloadConfig.i2iConfig;
+    final sizes = i2i.hasImage ? [i2i.requestSize] : paramConfig.sizes;
+    if (sizes.isEmpty) return;
+    if (!payloadConfig.settings.subscriptionStatusKnown) {
+      nextCostEstimate.value = null;
+      return;
+    }
+    final sm = _smActive && paramConfig.sm;
+    final smDyn = _smActive && paramConfig.smDyn;
+    final key = [
+      i2i.hasImage,
+      i2i.revision,
+      sizes.map((size) => '${size.width}x${size.height}').join(','),
+      paramConfig.steps,
+      sm,
+      smDyn,
+      payloadConfig.settings.subscriptionTier,
+      payloadConfig.settings.subscriptionActive,
+      payloadConfig.preciseReferenceConfigList
+          .where((reference) => reference.enabled)
+          .length,
+      payloadConfig.vibeConfigListV4.length,
+      paramConfig.nSamples,
+    ].join('|');
+    if (key == _costEstimateKey) return;
+    _costEstimateKey = key;
+    final epoch = ++_costEstimateEpoch;
+    _computeCostEstimate(epoch);
+  }
+
+  Future<void> _computeCostEstimate(int epoch) async {
+    final paramConfig = payloadConfig.paramConfig;
+    final i2i = payloadConfig.i2iConfig;
+    final tier = payloadConfig.settings.subscriptionTier;
+    final subscriptionActive = payloadConfig.settings.subscriptionActive;
+    final sm = _smActive && paramConfig.sm;
+    final smDyn = _smActive && paramConfig.smDyn;
+    final preciseCount = payloadConfig.preciseReferenceConfigList
+        .where((reference) => reference.enabled)
+        .length;
+    final vibeCount = payloadConfig.vibeConfigListV4.length;
+    // With several sizes one is picked at random per request; estimate the
+    // most expensive so the display is an honest upper bound.
+    final sizes = i2i.hasImage ? [i2i.requestSize] : paramConfig.sizes;
+    var largest = sizes.first;
+    for (final size in sizes) {
+      if (size.width * size.height > largest.width * largest.height) {
+        largest = size;
+      }
+    }
+
+    AnlasCost? estimate;
+    try {
+      if (!i2i.hasImage) {
+        estimate = estimateAnlasCost(
+          width: largest.width,
+          height: largest.height,
+          steps: paramConfig.steps,
+          sm: sm,
+          smDyn: smDyn,
+          tier: tier,
+          subscriptionActive: subscriptionActive,
+          nSamples: paramConfig.nSamples,
+          preciseReferenceCount: preciseCount,
+          vibeCount: vibeCount,
+        );
+      } else {
+        final batch = await PrepareI2iRequestUseCase(
+          config: i2i,
+        ).planBatch(targetWidth: largest.width, targetHeight: largest.height);
+        if (batch != null) {
+          final base = estimateBatchAnlasCost(
+            tiles: batch.plans
+                .map((plan) => (width: plan.width, height: plan.height))
+                .toList(),
+            steps: paramConfig.steps,
+            action: batch.plans.first.isInpaint ? 'infill' : 'img2img',
+            strength: i2i.strength,
+            sm: sm,
+            smDyn: smDyn,
+            tier: tier,
+            subscriptionActive: subscriptionActive,
+            nSamples: paramConfig.nSamples,
+          );
+          // Precise references and extra vibes are billed per request, so a
+          // split mask pays them once per tile.
+          final extraPerRequest = (preciseCount * preciseReferenceAnlas +
+                  max(0, vibeCount - freeVibeCount) * extraVibeAnlas) *
+              paramConfig.nSamples;
+          estimate = AnlasCost(
+            anlas: base.anlas + extraPerRequest * batch.plans.length,
+            isFreeUnderOpus: base.isFreeUnderOpus && extraPerRequest == 0,
+            perImageAnlas: base.perImageAnlas,
+          );
+        }
+      }
+    } catch (_) {
+      estimate = null;
+    }
+    if (epoch != _costEstimateEpoch) return;
+    nextCostEstimate.value = estimate;
+  }
+
+  /// Refreshes the active account used for the pre-generation price display.
+  /// Calls within one minute are coalesced; the actual generation path still
+  /// refreshes again immediately before sending.
+  Future<void> refreshSubscriptionSnapshot() async {
+    if (_subscriptionRefreshInFlight) return;
+    final settings = payloadConfig.settings;
+    if (settings.debugApiEnabled) {
+      settings.subscriptionTier = 0;
+      settings.subscriptionActive = false;
+      settings.subscriptionStatusKnown = true;
+      return;
+    }
+    final now = DateTime.now();
+    final lastAttempt = _lastSubscriptionRefreshAttempt;
+    if (lastAttempt != null &&
+        now.difference(lastAttempt) < const Duration(minutes: 1)) {
+      return;
+    }
+    final tokens = settings.effectiveApiTokens;
+    if (tokens.isEmpty ||
+        tokens.first.token.isEmpty ||
+        tokens.first.token == 'pst-abcd') {
+      settings.subscriptionTier = 0;
+      settings.subscriptionActive = false;
+      settings.subscriptionStatusKnown = true;
+      return;
+    }
+    _subscriptionRefreshInFlight = true;
+    _lastSubscriptionRefreshAttempt = now;
+    final info = await AccountService().fetchSubscription(
+      token: tokens.first.token,
+      proxy: settings.proxy,
+    );
+    _subscriptionRefreshInFlight = false;
+    if (info == null) {
+      settings.subscriptionStatusKnown = false;
+    } else {
+      settings.subscriptionTier = info.tier;
+      settings.subscriptionActive = info.active;
+      settings.subscriptionStatusKnown = true;
+      if (info.anlas != null) {
+        _lastAnlasBalances[tokens.first.token] = info.anlas!;
+      }
+    }
+    _costEstimateKey = null;
+    notifyListeners();
+  }
+
   void setCardsPerCol(int value) {
     payloadConfig.settings.generationPageColumnCount = value;
     notifyListeners();
@@ -62,6 +242,11 @@ class GenerationPageViewmodel extends ChangeNotifier {
 
   void setResultDisplayMode(String value) {
     payloadConfig.settings.resultDisplayMode = value;
+    notifyListeners();
+  }
+
+  void promptModeChanged() {
+    _costEstimateKey = null;
     notifyListeners();
   }
 
@@ -137,17 +322,13 @@ class GenerationPageViewmodel extends ChangeNotifier {
     commandFunc() async {
       await Future.delayed(const Duration(milliseconds: 500));
       final random = Random();
-      final bytes =
-          Uint8List.sublistView(await rootBundle.load('assets/appicon.png'));
+      final bytes = Uint8List.sublistView(
+        await rootBundle.load('assets/appicon.png'),
+      );
       return InfoCardContent(
-        title: '#${commandList.length}: ${loremIpsum(
-          words: random.nextInt(3) + 3,
-          initWithLorem: true,
-        )}',
-        info: loremIpsum(
-          words: random.nextInt(300),
-          initWithLorem: true,
-        ),
+        title:
+            '#${commandList.length}: ${loremIpsum(words: random.nextInt(3) + 3, initWithLorem: true)}',
+        info: loremIpsum(words: random.nextInt(300), initWithLorem: true),
         additionalInfo: {"Random Seed": random.nextInt(1 << 31)},
         imageBytes: random.nextInt(2) == 1 ? null : bytes,
       );
@@ -166,13 +347,15 @@ class GenerationPageViewmodel extends ChangeNotifier {
   void addTestPromptInfoCardContent() {
     // Sync command but wrapped as async
     commandFunc() async {
-      final payloadResult =
-          GeneratePayloadUseCase(payloadConfig: payloadConfig)();
+      final payloadResult = GeneratePayloadUseCase(
+        payloadConfig: payloadConfig,
+      )();
       final additionalInfo = digestPayloadResult(payloadResult);
       return InfoCardContent(
-          title: tr('test_prompt'),
-          info: payloadResult.comment,
-          additionalInfo: additionalInfo);
+        title: tr('test_prompt'),
+        info: payloadResult.comment,
+        additionalInfo: additionalInfo,
+      );
     }
 
     // Skip the check of active command (because command is sync)
@@ -206,7 +389,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
       return GeneratePayloadUseCase(
         payloadConfig: payloadConfig,
         i2iPlan: plan,
-      )().payload;
+      )()
+          .payload;
     }
 
     if (batch.serial) {
@@ -256,9 +440,14 @@ class GenerationPageViewmodel extends ChangeNotifier {
 
   /// Builds the actual generation command for one attempt. Overridable in
   /// tests to avoid network access.
+  ///
+  /// [presetBatch] bypasses the Img2Img config entirely and sends the given
+  /// request batch instead — used by Enhance, whose source image lives in its
+  /// own config.
   @visibleForTesting
   Command<void, InfoCardContent> createGenerationCommand({
     required int workerIndex,
+    I2iRequestBatch? presetBatch,
   }) {
     commandFunc() async {
       final settings = payloadConfig.settings;
@@ -271,7 +460,13 @@ class GenerationPageViewmodel extends ChangeNotifier {
       try {
         // Check whether cached payload exists, use cache if exists
         I2iRequestBatch? i2iBatch;
-        if (_getCachedPayload(workerIndex) != null &&
+        if (presetBatch != null) {
+          i2iBatch = presetBatch;
+          payloadResult = GeneratePayloadUseCase(
+            payloadConfig: payloadConfig,
+            i2iPlan: i2iBatch.plans.first,
+          )();
+        } else if (_getCachedPayload(workerIndex) != null &&
             _getCacheRetries(workerIndex) < 3) {
           payloadResult = _getCachedPayload(workerIndex)!;
           i2iBatch = _getCachedBatch(workerIndex);
@@ -279,12 +474,10 @@ class GenerationPageViewmodel extends ChangeNotifier {
         } else {
           final i2iConfig = payloadConfig.i2iConfig;
           if (i2iConfig.hasImage) {
-            final target = payloadConfig.paramConfig.pickSize();
-            i2iBatch = await PrepareI2iRequestUseCase(config: i2iConfig)
-                .planBatch(
-              targetWidth: target.width,
-              targetHeight: target.height,
-            );
+            final target = i2iConfig.requestSize;
+            i2iBatch = await PrepareI2iRequestUseCase(
+              config: i2iConfig,
+            ).planBatch(targetWidth: target.width, targetHeight: target.height);
           }
           payloadResult = GeneratePayloadUseCase(
             payloadConfig: payloadConfig,
@@ -296,24 +489,31 @@ class GenerationPageViewmodel extends ChangeNotifier {
 
         // Fetch the starting balance once per token so cost can be derived,
         // and record the tier so cost estimates know about Opus.
-        if (!settings.debugApiEnabled &&
-            !_lastAnlasBalances.containsKey(token)) {
+        if (!settings.debugApiEnabled) {
           final info = await AccountService().fetchSubscription(
             token: token,
             proxy: settings.proxy,
           );
-          if (info?.anlas != null) _lastAnlasBalances[token] = info!.anlas!;
-          if (info != null) settings.subscriptionTier = info.tier;
+          if (info == null) {
+            settings.subscriptionStatusKnown = false;
+          } else {
+            if (info.anlas != null) _lastAnlasBalances[token] = info.anlas!;
+            settings.subscriptionTier = info.tier;
+            settings.subscriptionActive = info.active;
+            settings.subscriptionStatusKnown = true;
+          }
         }
 
         final headers = payloadConfig.getHeadersForToken(token);
         Future<Uint8List> sendPlan(Map<String, dynamic> payload) async {
-          final response = await ApiService().fetchData(ApiRequest(
-            endpoint: endpoint,
-            proxy: settings.proxy,
-            headers: headers,
-            payload: payload,
-          ));
+          final response = await ApiService().fetchData(
+            ApiRequest(
+              endpoint: endpoint,
+              proxy: settings.proxy,
+              headers: headers,
+              payload: payload,
+            ),
+          );
           // Even if response status is not 2xx, postprocess could throw
           // the correct exception.
           return ImageService().processResponse(response.data);
@@ -344,16 +544,19 @@ class GenerationPageViewmodel extends ChangeNotifier {
           final metadataString = settings.customMetadataEnabled
               ? settings.customMetadataContent
               : '';
-          imageBytes =
-              await ImageService().embedMetadata(imageBytes, metadataString);
+          imageBytes = await ImageService().embedMetadata(
+            imageBytes,
+            metadataString,
+          );
         }
         // Save image
         final filePrefix = payloadResult.suggestedFileName.isNotEmpty
             ? _getSafeFileName(payloadResult.suggestedFileName)
             : '';
         final fileName = [
-          FileService()
-              .generateTimestampString(commandStatus.generationTimestamp),
+          FileService().generateTimestampString(
+            commandStatus.generationTimestamp,
+          ),
           commandStatus.currentGenerationCount.toString().padLeft(6, '0'),
           filePrefix,
           '${FileService().generateRandomString()}.png',
@@ -473,7 +676,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
   }
 
   /// Runs one Director Tool against its source image. These go to the
-  /// augment-image endpoint and consume no Anlas.
+  /// augment-image endpoint; they are billed by pixel count, and the Opus
+  /// free allowance does not apply.
   void runDirectorTool() {
     if (commandStatus.isGenerationActive.value) return;
     if (currentCommand != null && currentCommand!.isExecuting.value) return;
@@ -486,23 +690,28 @@ class GenerationPageViewmodel extends ChangeNotifier {
       final payload = config.getPayload();
       final toolName = config.displayName;
       try {
-        final response = await ApiService().fetchData(ApiRequest(
-          endpoint: augmentImageEndpoint,
-          proxy: settings.proxy,
-          headers: payloadConfig.getHeadersForToken(settings.apiKey),
-          payload: payload,
-        ));
+        final response = await ApiService().fetchData(
+          ApiRequest(
+            endpoint: augmentImageEndpoint,
+            proxy: settings.proxy,
+            headers: payloadConfig.getHeadersForToken(settings.apiKey),
+            payload: payload,
+          ),
+        );
         var imageBytes = ImageService().processResponse(response.data);
         if (settings.metadataEraseEnabled) {
           final metadataString = settings.customMetadataEnabled
               ? settings.customMetadataContent
               : '';
-          imageBytes =
-              await ImageService().embedMetadata(imageBytes, metadataString);
+          imageBytes = await ImageService().embedMetadata(
+            imageBytes,
+            metadataString,
+          );
         }
         final fileName = [
-          FileService()
-              .generateTimestampString(commandStatus.generationTimestamp),
+          FileService().generateTimestampString(
+            commandStatus.generationTimestamp,
+          ),
           commandStatus.currentGenerationCount.toString().padLeft(6, '0'),
           config.type,
           '${FileService().generateRandomString()}.png',
@@ -517,8 +726,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
         final info = Map<String, dynamic>.from(payload)..remove('image');
         return InfoCardContent(
           title: fileName,
-          info: '$toolName\n${info.entries.map((e) => '${e.key}: ${e.value}')
-              .join('\n')}',
+          info:
+              '$toolName\n${info.entries.map((e) => '${e.key}: ${e.value}').join('\n')}',
           additionalInfo: info,
           imageBytes: imageBytes,
           imageFilePath: imageFilePath,
@@ -537,8 +746,14 @@ class GenerationPageViewmodel extends ChangeNotifier {
       initialValue: InfoCardContent.fromEmpty(),
     );
     command.isExecuting.addListener(notifyListeners);
+    lastDirectorCommand = command;
     currentCommand = command;
     addAndRunCommand(command);
+  }
+
+  void clearDirectorResult() {
+    lastDirectorCommand = null;
+    notifyListeners();
   }
 
   /// Runs one generation outside the start/stop loop (used by the
@@ -555,6 +770,56 @@ class GenerationPageViewmodel extends ChangeNotifier {
     command.isExecuting.addListener(notifyListeners);
     currentCommand = command;
     addAndRunCommand(command);
+  }
+
+  /// Runs one Enhance pass: a plain img2img request built from the Enhance
+  /// destination's own source image, at the preset strength/noise and the
+  /// magnified size. Returns false when busy or without a source image.
+  Future<bool> runEnhanceGeneration() async {
+    if (commandStatus.isGenerationActive.value) return false;
+    if (currentCommand != null && currentCommand!.isExecuting.value) {
+      return false;
+    }
+    final enhance = payloadConfig.enhanceConfig;
+    final bytes = enhance.imageBytes;
+    if (bytes == null) return false;
+    final target = enhance.targetSize;
+    final paramConfig = payloadConfig.paramConfig;
+    if (!paramConfig.randomSeed && paramConfig.seed == null) {
+      paramConfig.seed = 0;
+    }
+
+    // A throwaway I2IConfig reuses the img2img plan builder (cover-fit resize
+    // and PNG encoding) without touching the real Img2Img base image.
+    final requestConfig = I2IConfig(
+      strength: enhance.strength,
+      noise: enhance.noise,
+    );
+    requestConfig.setImage(bytes);
+    final plan = await PrepareI2iRequestUseCase(
+      config: requestConfig,
+    ).call(targetWidth: target.width, targetHeight: target.height);
+    if (plan == null) return false;
+
+    commandStatus.generationTimestamp = DateTime.now();
+    final command = createGenerationCommand(
+      workerIndex: 0,
+      presetBatch: I2iRequestBatch(
+        plans: [plan],
+        serial: true,
+        summary: plan.summary,
+      ),
+    );
+    command.isExecuting.addListener(notifyListeners);
+    lastEnhanceCommand = command;
+    currentCommand = command;
+    addAndRunCommand(command);
+    return true;
+  }
+
+  void clearEnhanceResult() {
+    lastEnhanceCommand = null;
+    notifyListeners();
   }
 
   void _nextCommandForExtraWorker(int workerIndex) {
@@ -591,13 +856,10 @@ class GenerationPageViewmodel extends ChangeNotifier {
       _nextCommandForExtraWorker(workerIndex);
       return;
     }
-    state.intervalTimer = Timer(
-      Duration(seconds: interval),
-      () {
-        state.intervalTimer = null;
-        _nextCommandForExtraWorker(workerIndex);
-      },
-    );
+    state.intervalTimer = Timer(Duration(seconds: interval), () {
+      state.intervalTimer = null;
+      _nextCommandForExtraWorker(workerIndex);
+    });
   }
 
   void _startExtraWorkers() {
@@ -665,14 +927,11 @@ class GenerationPageViewmodel extends ChangeNotifier {
     }
 
     commandStatus.isWaitingForNextGeneration.value = true;
-    _generationIntervalTimer = Timer(
-      Duration(seconds: interval),
-      () {
-        _generationIntervalTimer = null;
-        commandStatus.isWaitingForNextGeneration.value = false;
-        nextCommand();
-      },
-    );
+    _generationIntervalTimer = Timer(Duration(seconds: interval), () {
+      _generationIntervalTimer = null;
+      commandStatus.isWaitingForNextGeneration.value = false;
+      nextCommand();
+    });
   }
 
   @visibleForTesting
@@ -705,7 +964,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
 
   /// Make PayloadResult into readable Map<String, dynamic> for better visualization
   Map<String, dynamic> digestPayloadResult(
-      PayloadGenerationResult payloadResult) {
+    PayloadGenerationResult payloadResult,
+  ) {
     // 明确将 payload 转换为可空动态类型
     final additionalInfo = Map<String, dynamic>.from(payloadResult.payload);
 
@@ -742,23 +1002,6 @@ class GenerationPageViewmodel extends ChangeNotifier {
     String safeName = fileName.replaceAll(RegExp(r'[<>"/\\|?*{}\[\]]'), '');
     safeName = safeName.replaceAll(RegExp(r'[:]'), '_');
     return safeName.substring(0, min(200, safeName.length));
-  }
-
-  void setOverride(bool? value) {
-    if (value == null) return;
-    payloadConfig.useOverridePrompt = value;
-    notifyListeners();
-  }
-
-  void setCharacterOverride(bool? value) {
-    if (value == null) return;
-    payloadConfig.useCharacterPromptWithOverride = value;
-    notifyListeners();
-  }
-
-  void setOverridePrompt(String value) {
-    payloadConfig.overridePrompt = value;
-    notifyListeners();
   }
 
   void setUC(String value) {

@@ -3,7 +3,6 @@ import 'dart:typed_data';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
-import 'package:nai_casrand/data/models/i2i_config.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
@@ -12,6 +11,8 @@ import 'package:nai_casrand/ui/core/utils/flushbar.dart';
 
 /// The actions offered on a finished image, mirroring the official result
 /// toolbar. Generate Variations and Upscale are deliberately not included.
+/// Every action hands the image off to its own destination and switches the
+/// main navigation there.
 class ResultActions {
   final InfoCardContent content;
 
@@ -41,51 +42,51 @@ class ResultActions {
     return steps is int ? steps : null;
   }
 
+  /// Imports the complete generation snapshot into the independent fixed
+  /// profile. The random profile is not touched.
+  void _carryGenerationProfile() {
+    final rawModel = content.additionalInfo['model'];
+    _payloadConfig.importMetadataToFixedProfile(
+      content.additionalInfo,
+      prompt: sourcePrompt,
+      model: rawModel is String ? rawModel : null,
+    );
+  }
+
   /// Loads the image into the Img2Img config and jumps to that page.
-  ///
-  /// [carryPromptAndSeed] reproduces the official behaviour of Enhance, which
-  /// continues from the same prompt and seed rather than rolling new ones.
-  void _sendToI2i(
-    BuildContext context, {
-    required I2iEntryMode mode,
-    required bool carryPromptAndSeed,
-  }) {
+  void _sendToI2i(BuildContext context, {required I2iEntryMode mode}) {
     final bytes = content.imageBytes;
     if (bytes == null) return;
-    final config = _payloadConfig.i2iConfig;
-    config.setImage(Uint8List.fromList(bytes));
-
-    if (carryPromptAndSeed) {
-      final prompt = sourcePrompt;
-      if (prompt != null) {
-        _payloadConfig
-          ..overridePrompt = prompt
-          ..useOverridePrompt = true;
-      }
-      final seed = sourceSeed;
-      if (seed != null) {
-        _payloadConfig.paramConfig
-          ..seed = seed
-          ..randomSeed = false;
-      }
-    }
+    _payloadConfig.i2iConfig.setImage(Uint8List.fromList(bytes));
     _navigation.goToI2i(mode);
   }
 
+  /// Closes the detail page (and any viewer above it) so the navigation
+  /// shell, already switched to the target destination, becomes visible.
+  void _returnToShell(BuildContext context) {
+    Navigator.of(context).popUntil((route) => route.isFirst);
+  }
+
   void useAsBaseImage(BuildContext context) {
-    _sendToI2i(context, mode: I2iEntryMode.baseImage, carryPromptAndSeed: false);
+    _sendToI2i(context, mode: I2iEntryMode.baseImage);
     showInfoBar(context, tr('action_use_as_base_done'));
+    _returnToShell(context);
   }
 
   void sendToInpaint(BuildContext context) {
-    _sendToI2i(context, mode: I2iEntryMode.inpaint, carryPromptAndSeed: false);
+    _sendToI2i(context, mode: I2iEntryMode.inpaint);
     showInfoBar(context, tr('action_inpaint_done'));
+    _returnToShell(context);
   }
 
   void sendToEnhance(BuildContext context) {
-    // Enhance continues from the same prompt and seed, like the official one.
-    _sendToI2i(context, mode: I2iEntryMode.enhance, carryPromptAndSeed: true);
-    showInfoBar(context, tr('action_enhance_done'));
+    final bytes = content.imageBytes;
+    if (bytes == null) return;
+    _payloadConfig.enhanceConfig.setImage(Uint8List.fromList(bytes));
+    _carryGenerationProfile();
+    _navigation.goTo(AppDestination.enhance);
+    showInfoBar(context, tr('action_enhance_fixed_mode_done'));
+    _returnToShell(context);
   }
 
   void sendToDirectorTools(BuildContext context) {
@@ -94,26 +95,32 @@ class ResultActions {
     _payloadConfig.directorToolConfig.setImage(Uint8List.fromList(bytes));
     _navigation.goTo(AppDestination.directorTools);
     showInfoBar(context, tr('action_director_done'));
+    _returnToShell(context);
   }
 
-  /// Estimated Anlas for an Enhance run at the given magnification, or null
-  /// when the image size is unknown.
-  AnlasCost? estimateEnhanceCost(double scale) {
+  /// Estimated Anlas for an Enhance run of this image at the Enhance page's
+  /// current magnification and preset, or null when the size is unknown.
+  AnlasCost? estimateEnhanceCost() {
     final width = content.additionalInfo['width'];
     final height = content.additionalInfo['height'];
     if (width is! int || height is! int) return null;
+    if (!_payloadConfig.settings.subscriptionStatusKnown) return null;
+    final enhance = _payloadConfig.enhanceConfig;
     int snap(int value) => value < 64 ? 64 : (value / 64).round() * 64;
-    final targetW = snap((width * scale).round());
-    final targetH = snap((height * scale).round());
-    final preset = enhancePresets[_payloadConfig.i2iConfig.enhancePresetIndex
-        .clamp(0, enhancePresets.length - 1)];
+    final targetW = snap((width * enhance.scale).round());
+    final targetH = snap((height * enhance.scale).round());
+    final paramConfig = _payloadConfig.paramConfig;
+    final smActive = !paramConfig.model.contains('diffusion-4');
     return estimateAnlasCost(
       width: targetW,
       height: targetH,
-      steps: sourceSteps ?? _payloadConfig.paramConfig.steps,
+      steps: sourceSteps ?? paramConfig.steps,
       action: 'img2img',
-      strength: preset.strength,
+      strength: enhance.preset.strength,
+      sm: smActive && paramConfig.sm,
+      smDyn: smActive && paramConfig.smDyn,
       tier: _payloadConfig.settings.subscriptionTier,
+      subscriptionActive: _payloadConfig.settings.subscriptionActive,
     );
   }
 }
@@ -125,8 +132,21 @@ String formatAnlasBadge(AnlasCost? cost) {
   return cost.anlas.toString();
 }
 
-/// Action bar shown above a finished image, mirroring the official result
-/// toolbar. Generate Variations and Upscale are intentionally absent.
+/// Reader-facing hover text for any generation action.
+String formatAnlasTooltip(AnlasCost? cost, {bool isUpperBound = false}) {
+  if (cost == null) return tr('generation_cost_pending');
+  if (cost.isFreeUnderOpus) return tr('generation_cost_tooltip_free');
+  return tr(
+    isUpperBound
+        ? 'generation_cost_tooltip_upper_bound'
+        : 'generation_cost_tooltip',
+    namedArgs: {'anlas': cost.anlas.toString()},
+  );
+}
+
+/// Action bar shown under a finished image: four evenly weighted tonal
+/// buttons that hand the image off to Enhance / Img2Img / Inpaint / Director
+/// Tools and switch the navigation there.
 class ResultActionBar extends StatelessWidget {
   final InfoCardContent content;
 
@@ -136,47 +156,52 @@ class ResultActionBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final actions = ResultActions(content: content);
     if (!actions.hasImage) return const SizedBox.shrink();
-    final enhanceCost = actions.estimateEnhanceCost(1.5);
-    final badge = formatAnlasBadge(enhanceCost);
+    final badge = formatAnlasBadge(actions.estimateEnhanceCost());
 
-    return Material(
-      color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _ActionButton(
-                actionKey: const Key('result-action-enhance'),
-                icon: Icons.auto_awesome_outlined,
-                label: tr('enhance_section'),
-                badge: badge,
-                onPressed: () => actions.sendToEnhance(context),
-              ),
-              _ActionButton(
-                actionKey: const Key('result-action-base-image'),
-                icon: Icons.image_outlined,
-                label: tr('action_use_as_base'),
-                onPressed: () => actions.useAsBaseImage(context),
-              ),
-              _ActionButton(
-                actionKey: const Key('result-action-inpaint'),
-                icon: Icons.brush_outlined,
-                label: tr('inpaint_section'),
-                onPressed: () => actions.sendToInpaint(context),
-              ),
-              _ActionButton(
-                actionKey: const Key('result-action-director'),
-                icon: Icons.auto_fix_high_outlined,
-                label: tr('director_tool'),
-                onPressed: () => actions.sendToDirectorTools(context),
-              ),
-            ],
-          ),
-        ),
+    final buttons = [
+      _ActionButton(
+        actionKey: const Key('result-action-enhance'),
+        icon: Icons.auto_awesome_outlined,
+        label: tr('enhance_section'),
+        badge: badge,
+        onPressed: () => actions.sendToEnhance(context),
       ),
+      _ActionButton(
+        actionKey: const Key('result-action-base-image'),
+        icon: Icons.image_outlined,
+        label: tr('action_use_as_base'),
+        onPressed: () => actions.useAsBaseImage(context),
+      ),
+      _ActionButton(
+        actionKey: const Key('result-action-inpaint'),
+        icon: Icons.brush_outlined,
+        label: tr('inpaint_section'),
+        onPressed: () => actions.sendToInpaint(context),
+      ),
+      _ActionButton(
+        actionKey: const Key('result-action-director'),
+        icon: Icons.auto_fix_high_outlined,
+        label: tr('director_tool'),
+        onPressed: () => actions.sendToDirectorTools(context),
+      ),
+    ];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Evenly weighted row when there is room; wrap on narrow layouts.
+        final wide = constraints.maxWidth >= 560;
+        if (wide) {
+          return Row(
+            children: [
+              for (final (index, button) in buttons.indexed) ...[
+                if (index > 0) const SizedBox(width: 8),
+                Expanded(child: button),
+              ],
+            ],
+          );
+        }
+        return Wrap(spacing: 8, runSpacing: 8, children: buttons);
+      },
     );
   }
 }
@@ -198,33 +223,31 @@ class _ActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 2),
-      child: TextButton.icon(
-        key: actionKey,
-        onPressed: onPressed,
-        icon: Icon(icon, size: 18),
-        label: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(label),
-            if (badge.isNotEmpty) ...[
-              const SizedBox(width: 6),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.secondaryContainer,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  badge,
-                  style: Theme.of(context).textTheme.labelSmall,
-                ),
+    return FilledButton.tonalIcon(
+      key: actionKey,
+      onPressed: onPressed,
+      icon: Icon(icon, size: 18),
+      style: FilledButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      ),
+      label: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(
+            child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
+          if (badge.isNotEmpty) ...[
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.secondaryContainer,
+                borderRadius: BorderRadius.circular(8),
               ),
-            ],
+              child: Text(badge, style: Theme.of(context).textTheme.labelSmall),
+            ),
           ],
-        ),
+        ],
       ),
     );
   }

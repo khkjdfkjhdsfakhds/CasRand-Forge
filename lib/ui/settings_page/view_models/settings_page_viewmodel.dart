@@ -11,6 +11,7 @@ import 'package:nai_casrand/data/models/settings.dart';
 import 'package:nai_casrand/data/services/config_service.dart';
 import 'package:nai_casrand/data/services/file_service.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
+import 'package:nai_casrand/data/models/navigation_request.dart';
 
 class SettingsPageViewmodel extends ChangeNotifier {
   PayloadConfig get payloadConfig => GetIt.I();
@@ -35,6 +36,37 @@ class SettingsPageViewmodel extends ChangeNotifier {
   void setRememberSequentialProgress(bool? value) {
     if (value == null) return;
     payloadConfig.settings.rememberSequentialProgress = value;
+    notifyListeners();
+  }
+
+  void setConfirmPromptModeSwitch(bool value) {
+    payloadConfig.settings.confirmPromptModeSwitch = value;
+    configService.saveConfig(payloadConfig.toJson());
+    notifyListeners();
+  }
+
+  void setNavigationPageVisible(AppDestination destination, bool? value) {
+    if (value == null) return;
+    switch (destination) {
+      case AppDestination.imageToImage:
+        settings.showImageToImagePage = value;
+        break;
+      case AppDestination.vibeReference:
+        settings.showVibeReferencePage = value;
+        break;
+      case AppDestination.enhance:
+        settings.showEnhancePage = value;
+        break;
+      case AppDestination.directorTools:
+        settings.showDirectorToolsPage = value;
+        break;
+      case AppDestination.generation:
+      case AppDestination.config:
+      case AppDestination.settings:
+        return;
+    }
+    configService.saveConfig(payloadConfig.toJson());
+    GetIt.I<NavigationRequest>().notifyVisibilityChanged();
     notifyListeners();
   }
 
@@ -83,6 +115,8 @@ class SettingsPageViewmodel extends ChangeNotifier {
       var fileContent = utf8.decode(result.files.single.bytes!);
       Map<String, dynamic> jsonData = json.decode(fileContent);
       payloadConfig.loadJson(jsonData);
+      GetIt.I<NavigationRequest>().notifyVisibilityChanged();
+      notifyListeners();
       if (!context.mounted) return;
       showInfoBar(context, '${tr('info_import_file')}${tr('succeed')}');
     } catch (error) {
@@ -113,7 +147,10 @@ class SettingsPageViewmodel extends ChangeNotifier {
     notifyListeners();
   }
 
-  void notify() => notifyListeners();
+  void notify() {
+    GetIt.I<NavigationRequest>().notifyVisibilityChanged();
+    notifyListeners();
+  }
 
   void saveCurrentConfig() {
     configService.saveConfig(payloadConfig.toJson());
@@ -142,6 +179,7 @@ class SettingsPageViewmodel extends ChangeNotifier {
 
       payloadConfig.loadJson(initialConfig.toJson());
       payloadConfig.resetTransientConfigs();
+      GetIt.I<NavigationRequest>().notifyVisibilityChanged();
       if (!context.mounted) return true;
       AdaptiveTheme.maybeOf(context)?.setThemeMode(settings.theme);
       await context.deleteSaveLocale();
