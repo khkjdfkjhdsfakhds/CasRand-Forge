@@ -17,7 +17,15 @@ class PreciseReferenceListViewmodel extends ChangeNotifier {
   int get activeReferenceCount =>
       referenceList.where((config) => config.enabled).length;
   int get activeVibeCount => payloadConfig.vibeConfigListV4.length;
-  int get estimatedExtraAnlas => activeReferenceCount * nSamples * 5;
+  int get estimatedExtraAnlas => payloadConfig.preciseReferenceEnabled
+      ? activeReferenceCount * nSamples * 5
+      : 0;
+  bool get featureEnabled => payloadConfig.preciseReferenceEnabled;
+
+  void setFeatureEnabled(bool value) {
+    payloadConfig.setPreciseReferenceEnabled(value);
+    notifyListeners();
+  }
 
   Future<void> pickAndAddNewReference(BuildContext context) async {
     if (!isSupported) return;
@@ -39,7 +47,9 @@ class PreciseReferenceListViewmodel extends ChangeNotifier {
   }
 
   Future<void> addReferenceBytes(Uint8List bytes, String fileName) async {
+    final wasEmpty = referenceList.isEmpty;
     referenceList.add(await PreciseReferenceConfig.fromBytes(bytes, fileName));
+    payloadConfig.notePreciseReferenceImported(wasEmpty: wasEmpty);
     notifyListeners();
   }
 
@@ -67,6 +77,9 @@ class PreciseReferenceListViewmodel extends ChangeNotifier {
   void removeConfigAtIndex(int index) {
     if (index < 0 || index >= referenceList.length) return;
     referenceList.removeAt(index);
+    if (referenceList.isEmpty) {
+      payloadConfig.clearPreciseReferenceResourceState();
+    }
     notifyListeners();
   }
 

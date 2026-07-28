@@ -66,7 +66,7 @@ class TokenManagerViewmodel extends ChangeNotifier {
     if (token.isEmpty || _loadingTokens.contains(token)) return;
     _loadingTokens.add(token);
     notifyListeners();
-    final info = await AccountService().fetchSubscription(
+    final info = await AccountService.shared.fetchSubscription(
       token: token,
       proxy: payloadConfig.settings.proxy,
     );

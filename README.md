@@ -6,13 +6,13 @@ CasRand Forge 是 [NAI CasRand](https://github.com/Exception0x0194/NAI-Generator
 
 | 平台 | 状态 | 获取方式 |
 | --- | --- | --- |
-| macOS | 0.9.3 正式版，支持 Apple Silicon 与 Intel | 从 [GitHub Releases](https://github.com/khkjdfkjhdsfakhds/CasRand-Forge/releases) 下载 DMG |
-| Windows | 0.9.3 正式版 | 从 0.9.3 Release 下载 Windows ZIP |
-| Android | 0.9.3 正式版 | 从 0.9.3 Release 下载 APK |
+| macOS | 0.9.4 正式版，支持 Apple Silicon 与 Intel | 从 [GitHub Releases](https://github.com/khkjdfkjhdsfakhds/CasRand-Forge/releases) 下载 DMG |
+| Windows | 0.9.4 正式版 | 从 0.9.4 Release 下载 Windows ZIP |
+| Android | 0.9.4 正式版 | 从 0.9.4 Release 下载 APK |
 
 macOS 用户推荐下载 DMG，将 App 拖入“应用程序”。本项目的公开 macOS 构建使用临时签名且尚未经过 Apple 公证；首次打开时若 macOS 提示无法验证开发者，请在 Finder 中右键应用并选择“打开”。Windows 用户解压完整 ZIP 后运行 `CasRandForgeBeta.exe`。Android Beta 使用测试签名，后续若签名变化，可能需要先卸载旧 Beta 再安装新版。
 
-0.9.3 在 GitHub 上作为正式版发布，但三个平台继续沿用当前 Beta 应用名称和应用标识，以保留现有配置身份与安装兼容性。
+0.9.4 在 GitHub 上作为正式版发布，但三个平台继续沿用当前 Beta 应用名称和应用标识，以保留现有配置身份与安装兼容性。
 
 本 Fork 使用独立的应用标识；macOS Beta 也能与稳定版及原版并存。GitHub Release 标签同时提供自动生成的源码 ZIP 和 TAR。
 
@@ -182,3 +182,13 @@ CasRand Forge 是一个按照指定模式生成随机提示词（prompt），并
 ## 开源许可与致谢
 
 CasRand Forge 继承原项目的 [GNU GPL-3.0](LICENSE) 许可。原项目由 [Exception0x0194](https://github.com/Exception0x0194) 开发；本 Fork 保留原许可证、版权与权利说明。NovelAI 是 Anlatan 的商标，本项目与 NovelAI/Anlatan 没有官方隶属关系。
+
+## 支持作者
+
+☕ 请作者喝杯咖。。。<br>
+不，还是接济点 token 钱吧，实在太烧了。。
+
+<p align="center">
+  <img src="assets/donation/wechat-pay.png" alt="微信支付收款码" width="320">
+  <img src="assets/donation/alipay.jpg" alt="支付宝收款码" width="320">
+</p>

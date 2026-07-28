@@ -31,6 +31,12 @@ class NavigationRequest {
   /// rebuild its dynamic rail/bar without coupling it to the settings page.
   final ValueNotifier<int> visibilityRevision = ValueNotifier(0);
 
+  /// Incremented when the welcome notice asks the Settings page to open the
+  /// combined API and proxy editor immediately after navigation.
+  final ValueNotifier<int> apiProxySettingsRevision = ValueNotifier(0);
+
+  bool _openApiProxySettingsOnArrival = false;
+
   /// How the Img2Img page should present itself on arrival.
   I2iEntryMode i2iEntryMode = I2iEntryMode.baseImage;
 
@@ -43,6 +49,12 @@ class NavigationRequest {
     requestedDestination.value = AppDestination.imageToImage;
   }
 
+  void goToApiProxySettings() {
+    _openApiProxySettingsOnArrival = true;
+    requestedDestination.value = AppDestination.settings;
+    apiProxySettingsRevision.value++;
+  }
+
   void notifyVisibilityChanged() {
     visibilityRevision.value++;
   }
@@ -53,6 +65,12 @@ class NavigationRequest {
     final mode = i2iEntryMode;
     i2iEntryMode = I2iEntryMode.baseImage;
     return mode;
+  }
+
+  bool takeOpenApiProxySettingsRequest() {
+    final requested = _openApiProxySettingsOnArrival;
+    _openApiProxySettingsOnArrival = false;
+    return requested;
   }
 
   /// Called by the shell once it has handled the request.

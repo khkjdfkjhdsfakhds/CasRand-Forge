@@ -104,6 +104,34 @@ void main() {
     expect(settings.generationCount, 5);
   });
 
+  test('generation interval defaults to 2 without replacing saved values', () {
+    expect(Settings.fromJson({}).generationIntervalSec, 2);
+    expect(
+      Settings.fromJson({'generation_interval': 10}).generationIntervalSec,
+      10,
+    );
+  });
+
+  test('generation setting labels describe the recommendation and multi-select',
+      () async {
+    final chinese = jsonDecode(
+      await rootBundle.loadString('assets/l10n/zh-CN.json'),
+    ) as Map<String, dynamic>;
+    final english = jsonDecode(
+      await rootBundle.loadString('assets/l10n/en.json'),
+    ) as Map<String, dynamic>;
+
+    expect(chinese['generation_interval'], '生成间隔（秒，建议至少为2秒）');
+    expect(chinese['generation_image_size'], '图像尺寸（可多选）');
+    expect(chinese['image_size'], '图像尺寸（宽 × 高）');
+    expect(
+      english['generation_interval'],
+      'Generation interval (seconds; at least 2 recommended)',
+    );
+    expect(
+        english['generation_image_size'], 'Image size (multiple selections)');
+  });
+
   test('api tokens and display mode survive a JSON round trip', () {
     final settings = Settings.fromJson({});
     settings.apiTokens.addAll([
@@ -124,6 +152,26 @@ void main() {
     expect(restored.resultDisplayMode, 'classic');
   });
 
+  test('classic grid is the default for new and pre-migration configs', () {
+    expect(Settings.fromJson({}).resultDisplayMode, 'classic');
+    expect(
+      Settings.fromJson({
+        'result_display_mode': 'waterfall',
+      }).resultDisplayMode,
+      'classic',
+    );
+  });
+
+  test('post-migration waterfall choice is preserved', () {
+    final settings = Settings.fromJson({
+      'classic_grid_default_migrated': true,
+      'result_display_mode': 'waterfall',
+    });
+
+    expect(settings.resultDisplayMode, 'waterfall');
+    expect(settings.toJson()['classic_grid_default_migrated'], isTrue);
+  });
+
   test('legacy configs without token list fall back to the api key', () {
     final settings = Settings.fromJson({'api_key': 'pst-legacy'});
 
@@ -131,7 +179,7 @@ void main() {
     final effective = settings.effectiveApiTokens;
     expect(effective, hasLength(1));
     expect(effective.single.token, 'pst-legacy');
-    expect(settings.resultDisplayMode, 'waterfall');
+    expect(settings.resultDisplayMode, 'classic');
   });
 
   test('effective tokens skip disabled and empty entries', () {

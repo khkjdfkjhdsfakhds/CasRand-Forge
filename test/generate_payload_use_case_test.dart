@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nai_casrand/data/models/character_config.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
@@ -318,6 +320,8 @@ void main() {
         enabled: false,
       ),
     ]);
+    config.setVibeEnabled(true);
+    config.setPreciseReferenceEnabled(true);
 
     final parameters =
         GeneratePayloadUseCase(payloadConfig: config)().payload['parameters'];
@@ -367,6 +371,7 @@ void main() {
       imageB64: 'image-a',
       fileName: 'a.png',
     ));
+    config.setPreciseReferenceEnabled(true);
 
     final parameters =
         GeneratePayloadUseCase(payloadConfig: config)().payload['parameters'];
@@ -396,6 +401,168 @@ void main() {
       useCharacterPromptWithOverride: false,
     );
   }
+
+  test('V4 payload uses model-specific encoding and Information Extracted', () {
+    final config = buildPlainConfig();
+    final vibe = VibeConfigV4(
+      fileName: 'reference.png',
+      referenceStrength: 0.42,
+      informationExtracted: 0.73,
+    );
+    vibe.cacheEncoding(
+      model: config.paramConfig.model,
+      informationExtracted: 0.73,
+      encoding: 'model-specific-encoding',
+    );
+    config.vibeConfigListV4.add(vibe);
+    config.setVibeEnabled(true);
+
+    final parameters =
+        GeneratePayloadUseCase(payloadConfig: config)().payload['parameters'];
+
+    expect(parameters['reference_image_multiple'], ['model-specific-encoding']);
+    expect(parameters['reference_strength_multiple'], [0.42]);
+    expect(parameters['reference_information_extracted_multiple'], [0.73]);
+  });
+
+  test('disabled Vibe and Precise Reference resources stay out of payload', () {
+    final config = buildPlainConfig();
+    config.vibeConfigListV4.add(VibeConfigV4(
+      fileName: 'vibe.naiv4vibe',
+      vibeB64: 'vibe-b64',
+      referenceStrength: 0.2,
+    ));
+    config.preciseReferenceConfigList.add(PreciseReferenceConfig(
+      imageB64: 'reference-b64',
+      fileName: 'reference.png',
+    ));
+
+    final parameters =
+        GeneratePayloadUseCase(payloadConfig: config)().payload['parameters'];
+
+    expect(parameters['reference_image_multiple'], isEmpty);
+    expect(parameters.containsKey('director_reference_images'), isFalse);
+  });
+
+  test('Enhance overrides seed and appends its prompt suffix only in payload',
+      () {
+    final config = buildPlainConfig();
+    config.i2iConfig.setUseRandomSeed(true);
+    const plan = I2iRequestPlan(
+      imageB64: 'aW1hZ2U=',
+      maskB64: null,
+      width: 1280,
+      height: 1856,
+      strength: 0.3,
+      noise: 0.0,
+      addOriginalImage: true,
+      composite: null,
+      summary: 'Enhance test',
+    );
+
+    final result = GeneratePayloadUseCase(
+      payloadConfig: config,
+      i2iPlan: plan,
+      seedOverride: 1504662765,
+      promptSuffix: '-2::upscaled, blurry::,',
+    )();
+    final parameters = result.payload['parameters'] as Map<String, dynamic>;
+
+    expect(
+      result.payload['input'],
+      'positive prompt, -2::upscaled, blurry::,',
+    );
+    expect(
+      parameters['v4_prompt']['caption']['base_caption'],
+      'positive prompt, -2::upscaled, blurry::,',
+    );
+    expect(parameters['seed'], 1504662765);
+    expect(parameters['extra_noise_seed'], 1504662764);
+    expect(parameters['strength'], 0.3);
+    expect(parameters['noise'], 0.0);
+    expect(config.paramConfig.seed, 5);
+    expect(config.rootPromptConfig.strs, ['positive prompt']);
+    expect(config.overridePrompt, isEmpty);
+  });
+
+  test('I2I-area random seed overrides only an explicit I2I-area request', () {
+    final config = buildPlainConfig();
+    config.i2iConfig.setUseRandomSeed(true);
+    const plan = I2iRequestPlan(
+      imageB64: 'aW1hZ2U=',
+      maskB64: null,
+      width: 640,
+      height: 960,
+      strength: 0.55,
+      noise: 0.1,
+      addOriginalImage: true,
+      composite: null,
+      summary: 'img2img random seed test',
+    );
+
+    final i2iParameters = GeneratePayloadUseCase(
+      payloadConfig: config,
+      i2iPlan: plan,
+      applyI2iAreaRandomSeed: true,
+      random: Random(12345),
+    )()
+        .payload['parameters'] as Map<String, dynamic>;
+    final generatedSeed = i2iParameters['seed'] as int;
+    final expectedRandom = Random(12345);
+    final expectedSeed = (expectedRandom.nextInt(1 << 16) << 16) |
+        expectedRandom.nextInt(1 << 16);
+
+    expect(generatedSeed, expectedSeed);
+    expect(i2iParameters['extra_noise_seed'], (generatedSeed - 1) & 0xFFFFFFFF);
+
+    final unrelatedImg2ImgParameters = GeneratePayloadUseCase(
+      payloadConfig: config,
+      i2iPlan: plan,
+    )()
+        .payload['parameters'] as Map<String, dynamic>;
+    expect(unrelatedImg2ImgParameters['seed'], 5);
+
+    final textToImageParameters = GeneratePayloadUseCase(
+      payloadConfig: config,
+      applyI2iAreaRandomSeed: true,
+    )()
+        .payload['parameters'] as Map<String, dynamic>;
+    expect(textToImageParameters['seed'], 5);
+    expect(config.paramConfig.randomSeed, isFalse);
+    expect(config.paramConfig.seed, 5);
+  });
+
+  test('Enhance prompt suffix does not duplicate a trailing comma', () {
+    final config = buildPlainConfig();
+    config.rootPromptConfig.strs = ['positive prompt,'];
+    const plan = I2iRequestPlan(
+      imageB64: 'aW1hZ2U=',
+      maskB64: null,
+      width: 1280,
+      height: 1856,
+      strength: 0.5,
+      noise: 0.0,
+      addOriginalImage: true,
+      composite: null,
+      summary: 'Enhance comma test',
+    );
+
+    final result = GeneratePayloadUseCase(
+      payloadConfig: config,
+      i2iPlan: plan,
+      promptSuffix: '-2::upscaled, blurry::,',
+    )();
+    final parameters = result.payload['parameters'] as Map<String, dynamic>;
+
+    expect(
+      result.payload['input'],
+      'positive prompt, -2::upscaled, blurry::,',
+    );
+    expect(
+      parameters['v4_prompt']['caption']['base_caption'],
+      'positive prompt, -2::upscaled, blurry::,',
+    );
+  });
 
   test('img2img plan switches action and adds image parameters', () {
     final config = buildPlainConfig();
@@ -428,11 +595,12 @@ void main() {
     expect(result.comment, contains('img2img test'));
   });
 
-  test('inpaint plan uses infill action and the inpainting model', () {
+  test('inpaint always requests raw pixels for official local compositing', () {
     final config = buildPlainConfig();
     const plan = I2iRequestPlan(
       imageB64: 'aW1hZ2U=',
       maskB64: 'bWFzaw==',
+      blendMaskB64: 'YmxlbmQ=',
       width: 1024,
       height: 1024,
       strength: 0.6,
@@ -450,7 +618,8 @@ void main() {
     expect(result.payload['model'], 'nai-diffusion-4-5-full-inpainting');
     expect(parameters['image'], 'aW1hZ2U=');
     expect(parameters['mask'], 'bWFzaw==');
-    expect(parameters['add_original_image'], isTrue);
+    expect(parameters.values, isNot(contains('YmxlbmQ=')));
+    expect(parameters['add_original_image'], isFalse);
     expect(parameters['strength'], 0.7);
     expect(parameters['noise'], 0.2);
     expect(parameters['inpaintImg2ImgStrength'], 0.6);

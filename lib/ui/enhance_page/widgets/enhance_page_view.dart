@@ -55,7 +55,8 @@ class EnhancePageView extends StatelessWidget {
         : null;
     final cost = viewmodel.estimateCost();
     final badge = formatAnlasBadge(cost);
-    final busy = generationViewmodel.commandStatus.isGenerationActive.value ||
+    final busy = generationViewmodel.isPreparingEnhance ||
+        generationViewmodel.commandStatus.isGenerationActive.value ||
         (generationViewmodel.currentCommand?.isExecuting.value ?? false);
     final enabled =
         config.hasImage && viewmodel.availableScales.isNotEmpty && !busy;
@@ -63,13 +64,13 @@ class EnhancePageView extends StatelessWidget {
         ? tr('enhance_run')
         : badge.isEmpty
             ? '${tr('enhance_run')} → ${target.width}×${target.height}'
-            : '${tr('enhance_run')} → ${target.width}×${target.height} · $badge';
+            : '${tr('enhance_run')} → ${target.width}×${target.height} · ${tr('estimated_cost_prefix')} $badge';
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
       child: Align(
         alignment: Alignment.centerRight,
         child: Tooltip(
-          message: formatAnlasTooltip(cost),
+          message: formatEstimatedAnlasTooltip(cost),
           child: FilledButton.icon(
             key: const Key('enhance-run'),
             onPressed: enabled ? () => _runEnhance(context) : null,
@@ -92,7 +93,8 @@ class EnhancePageView extends StatelessWidget {
     final workspace = ImageTransformWorkspace(
       sourceBytes: config.imageBytes,
       result: command?.value,
-      isExecuting: command?.isExecuting.value ?? false,
+      isExecuting: generationViewmodel.isPreparingEnhance ||
+          (command?.isExecuting.value ?? false),
       onSourceTap: () => _importImage(context),
       sourcePlaceholder: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -289,6 +291,26 @@ class EnhancePageView extends StatelessWidget {
           'size': '${target.width}×${target.height}',
         }),
       );
+      final command = generationViewmodel.currentCommand;
+      if (command != null) {
+        var handled = false;
+        late VoidCallback listener;
+        listener = () {
+          if (handled || command.isExecuting.value) return;
+          handled = true;
+          command.isExecuting.removeListener(listener);
+          if (!context.mounted) return;
+          final cost = command.value.anlasCost;
+          showInfoBar(
+            context,
+            cost == null
+                ? tr('actual_cost_unavailable')
+                : tr('actual_cost_detected', namedArgs: {'anlas': '$cost'}),
+          );
+        };
+        command.isExecuting.addListener(listener);
+        WidgetsBinding.instance.addPostFrameCallback((_) => listener());
+      }
     }
   }
 }

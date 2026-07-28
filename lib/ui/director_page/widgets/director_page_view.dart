@@ -57,9 +57,9 @@ class DirectorPageView extends StatelessWidget {
         alignment: Alignment.centerRight,
         child: Tooltip(
           message: cost == null
-              ? tr('generation_cost_pending')
+              ? tr('estimated_generation_cost_pending')
               : tr(
-                  'generation_cost_tooltip',
+                  'estimated_generation_cost_tooltip',
                   namedArgs: {'anlas': cost.toString()},
                 ),
           child: FilledButton.icon(
@@ -74,7 +74,7 @@ class DirectorPageView extends StatelessWidget {
             label: Text(
               cost == null
                   ? tr('director_tool_run')
-                  : '${tr('director_tool_run')} · $cost',
+                  : '${tr('director_tool_run')} · ${tr('estimated_cost_prefix')} $cost',
             ),
           ),
         ),
@@ -171,7 +171,9 @@ class DirectorPageView extends StatelessWidget {
                     selected: config.type == tool.type,
                     onSelected: (_) => viewmodel.setTool(tool.type),
                     label: Text(
-                      cost == null ? tool.name : '${tool.name} · $cost',
+                      cost == null
+                          ? tool.name
+                          : '${tool.name} · ${tr('estimated_cost_prefix')} $cost',
                     ),
                   );
                 }).toList(),
@@ -264,5 +266,25 @@ class DirectorPageView extends StatelessWidget {
       context,
       tr('director_tool_started', namedArgs: {'tool': config.displayName}),
     );
+    final command = generationViewmodel.lastDirectorCommand;
+    if (command != null) {
+      var handled = false;
+      late VoidCallback listener;
+      listener = () {
+        if (handled || command.isExecuting.value) return;
+        handled = true;
+        command.isExecuting.removeListener(listener);
+        if (!context.mounted) return;
+        final cost = command.value.anlasCost;
+        showInfoBar(
+          context,
+          cost == null
+              ? tr('actual_cost_unavailable')
+              : tr('actual_cost_detected', namedArgs: {'anlas': '$cost'}),
+        );
+      };
+      command.isExecuting.addListener(listener);
+      WidgetsBinding.instance.addPostFrameCallback((_) => listener());
+    }
   }
 }

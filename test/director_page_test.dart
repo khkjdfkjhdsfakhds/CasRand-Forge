@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_command/flutter_command.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get_it/get_it.dart';
@@ -14,6 +15,9 @@ import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
+import 'package:nai_casrand/ui/core/widgets/fullscreen_image_view.dart';
+import 'package:nai_casrand/ui/generation_page/widgets/generated_image_view.dart';
+import 'package:nai_casrand/ui/generation_page/widgets/info_card.dart';
 import 'package:nai_casrand/ui/director_page/view_models/director_page_viewmodel.dart';
 import 'package:nai_casrand/ui/director_page/widgets/director_page_view.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
@@ -142,6 +146,37 @@ void main() {
     );
   });
 
+  testWidgets('Director result opens fullscreen without metadata details', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final content = buildContent(bytes: solidPng(64, 64));
+    final generationViewmodel = GetIt.I<GenerationPageViewmodel>();
+    generationViewmodel.lastDirectorCommand = Command.createAsyncNoParam(
+      () async => content,
+      initialValue: content,
+    );
+
+    await tester.pumpWidget(
+      localizedApp(DirectorPageView(viewmodel: DirectorPageViewmodel())),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(GeneratedImageView), findsOneWidget);
+    await tester.tap(find.byKey(const Key('transform-result-zoom-target')));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(FullscreenImageView), findsOneWidget);
+    expect(find.byKey(const Key('fullscreen-image-viewer')), findsOneWidget);
+    expect(find.byType(InfoDetailPage), findsNothing);
+    expect(find.textContaining('示例提示词'), findsNothing);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.pumpAndSettle();
+    expect(find.byType(FullscreenImageView), findsNothing);
+  });
+
   testWidgets('a source reveals all seven tools with their prices', (
     tester,
   ) async {
@@ -167,9 +202,33 @@ void main() {
           reason: tool);
     }
     // Measured prices at 512x512: bg-removal 20, everything else 5.
-    expect(find.text('Remove BG · 20'), findsOneWidget);
-    expect(find.text('Line Art · 5'), findsOneWidget);
-    expect(find.text('Declutter (keep bubbles) · 5'), findsOneWidget);
+    expect(find.text('Remove BG · Est. 20'), findsOneWidget);
+    expect(find.text('Line Art · Est. 5'), findsOneWidget);
+    expect(find.text('Declutter (keep bubbles) · Est. 5'), findsOneWidget);
+  });
+
+  testWidgets('the current Director source can be deleted without hiding tools',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final config = GetIt.I<PayloadConfig>().directorToolConfig;
+    config.setImage(solidPng(512, 512));
+
+    await tester.pumpWidget(
+      localizedApp(DirectorPageView(viewmodel: DirectorPageViewmodel())),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('director-remove-image')));
+    await tester.pumpAndSettle();
+
+    expect(config.hasImage, isFalse);
+    expect(find.byKey(const Key('director-tool-bg-removal')), findsOneWidget);
+    expect(
+      tester
+          .widget<FilledButton>(find.byKey(const Key('director-run')))
+          .onPressed,
+      isNull,
+    );
   });
 
   testWidgets('the run button and notice state the cost', (tester) async {
@@ -182,7 +241,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('Run tool · 20'), findsOneWidget);
+    expect(find.textContaining('Run tool · Est. 20'), findsOneWidget);
     expect(
       tester.widget<Tooltip>(find.byType(Tooltip).first).message,
       contains('20'),
@@ -199,7 +258,7 @@ void main() {
       localizedApp(DirectorPageView(viewmodel: DirectorPageViewmodel())),
     );
     await tester.pumpAndSettle();
-    expect(find.textContaining('Run tool · 20'), findsOneWidget);
+    expect(find.textContaining('Run tool · Est. 20'), findsOneWidget);
 
     final lineart = find.byKey(const Key('director-tool-lineart'));
     await tester.ensureVisible(lineart);
@@ -207,7 +266,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(config.type, 'lineart');
-    expect(find.textContaining('Run tool · 5'), findsOneWidget);
+    expect(find.textContaining('Run tool · Est. 5'), findsOneWidget);
   });
 
   testWidgets('emotion exposes its emotion picker and defry', (tester) async {
@@ -245,7 +304,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // Measured at 1024x1024: bg-removal 65.
-    expect(find.text('Remove BG · 65'), findsOneWidget);
-    expect(find.textContaining('Run tool · 65'), findsOneWidget);
+    expect(find.text('Remove BG · Est. 65'), findsOneWidget);
+    expect(find.textContaining('Run tool · Est. 65'), findsOneWidget);
   });
 }

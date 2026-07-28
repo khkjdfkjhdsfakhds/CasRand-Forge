@@ -75,8 +75,7 @@ void main() {
     expect(large.isFreeUnderOpus, isFalse);
   });
 
-  test('img2img and infill scale the cost and never use Opus free allowance',
-      () {
+  test('img2img and ordinary infill stay outside the Opus free allowance', () {
     final full = estimateAnlasCost(
       width: 1024,
       height: 1024,
@@ -114,6 +113,22 @@ void main() {
     );
     expect(opusImg2img.anlas, half.anlas);
     expect(opusImg2img.isFreeUnderOpus, isFalse);
+  });
+
+  test('official Focused Inpainting is free for active Opus in the window', () {
+    final focused = estimateAnlasCost(
+      width: 1024,
+      height: 1024,
+      steps: 28,
+      action: 'infill',
+      strength: 0.7,
+      tier: opusTier,
+      subscriptionActive: true,
+      opusFocusedInpaint: true,
+    );
+
+    expect(focused.anlas, 0);
+    expect(focused.isFreeUnderOpus, isTrue);
   });
 
   test('a plain generate ignores strength', () {
@@ -166,16 +181,17 @@ void main() {
     expect(freeVibes.anlas, base.anlas);
   });
 
-  test('a split inpaint batch is paid even on active Opus', () {
+  test('every focused tile inside the window is free on active Opus', () {
     final cost = estimateBatchAnlasCost(
       tiles: List.filled(4, (width: 768, height: 1344)),
       steps: 28,
       strength: 0.8,
       tier: opusTier,
       subscriptionActive: true,
+      opusFocusedInpaint: true,
     );
-    expect(cost.anlas, greaterThan(0));
-    expect(cost.isFreeUnderOpus, isFalse);
+    expect(cost.anlas, 0);
+    expect(cost.isFreeUnderOpus, isTrue);
   });
 
   test('a split batch without Opus costs every tile', () {
@@ -204,6 +220,7 @@ void main() {
       steps: 28,
       tier: opusTier,
       subscriptionActive: true,
+      opusFocusedInpaint: true,
     );
     expect(cost.anlas, greaterThan(0));
     expect(cost.isFreeUnderOpus, isFalse);

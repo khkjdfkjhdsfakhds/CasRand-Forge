@@ -21,7 +21,9 @@ class I2iPageViewmodel extends ChangeNotifier {
 
   bool loadImageBytes(Uint8List bytes) {
     try {
+      final replacing = config.hasImage;
       config.setImage(bytes);
+      payloadConfig.noteI2iImported(replacing: replacing);
       notifyListeners();
       return true;
     } catch (_) {
@@ -31,16 +33,33 @@ class I2iPageViewmodel extends ChangeNotifier {
 
   void removeImage() {
     config.removeImage();
+    payloadConfig.clearI2iResourceState();
+    notifyListeners();
+  }
+
+  bool get enabled => payloadConfig.i2iEnabled;
+
+  void setEnabled(bool value) {
+    payloadConfig.setI2iEnabled(value);
     notifyListeners();
   }
 
   void setStrength(double value) {
-    config.setStrength(double.parse(value.toStringAsFixed(2)));
+    final normalized = double.parse(value.toStringAsFixed(2));
+    if (config.strength == normalized) return;
+    config.setStrength(normalized);
     notifyListeners();
   }
 
   void setNoise(double value) {
-    config.setNoise(double.parse(value.toStringAsFixed(2)));
+    final normalized = double.parse(value.toStringAsFixed(2));
+    if (config.noise == normalized) return;
+    config.setNoise(normalized);
+    notifyListeners();
+  }
+
+  void setUseRandomSeed(bool value) {
+    config.setUseRandomSeed(value);
     notifyListeners();
   }
 
@@ -58,13 +77,27 @@ class I2iPageViewmodel extends ChangeNotifier {
     Uint8List? maskBytes,
     List<MaskStroke> strokes, {
     CropRect? focusFrame,
+    Uint8List? baseMaskBytes,
+    int? contextPx,
   }) {
-    if (maskBytes == null) {
+    if (maskBytes == null && focusFrame == null) {
       config.removeMask();
     } else {
-      config.setMask(maskBytes, strokes);
-      config.setManualFocusFrame(focusFrame);
+      config.setMask(
+        maskBytes,
+        strokes,
+        baseMaskBytes: baseMaskBytes,
+        focusFrame: focusFrame,
+        minimumContextPx: contextPx,
+      );
     }
+    notifyListeners();
+  }
+
+  void setContextPx(double value) {
+    final normalized = normalizeContextPx(value.round());
+    if (config.contextPx == normalized) return;
+    config.setContextPx(normalized);
     notifyListeners();
   }
 

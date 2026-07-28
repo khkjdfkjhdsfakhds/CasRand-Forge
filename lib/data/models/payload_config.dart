@@ -12,6 +12,8 @@ import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
 import 'package:nai_casrand/data/models/vibe_config.dart';
 import 'package:nai_casrand/data/models/vibe_config_v4.dart';
+import 'package:nai_casrand/data/use_cases/autocrop_planner.dart'
+    show defaultContextPx;
 import 'package:nai_casrand/data/use_cases/i2i_request_size.dart';
 
 class PayloadResult {
@@ -81,6 +83,66 @@ class PayloadConfig {
   List<VibeConfig> vibeConfigList = [];
   List<VibeConfigV4> vibeConfigListV4 = [];
   List<PreciseReferenceConfig> preciseReferenceConfigList = [];
+  bool i2iEnabled = false;
+  bool vibeEnabled = false;
+  bool preciseReferenceEnabled = false;
+  bool _i2iManuallyDisabled = false;
+  bool _vibeManuallyDisabled = false;
+  bool _preciseReferenceManuallyDisabled = false;
+
+  bool get hasVibeResources =>
+      vibeConfigList.isNotEmpty || vibeConfigListV4.isNotEmpty;
+
+  void setI2iEnabled(bool value, {bool userAction = true}) {
+    i2iEnabled = value && i2iConfig.hasImage;
+    if (userAction) _i2iManuallyDisabled = !value;
+  }
+
+  void noteI2iImported({required bool replacing, bool explicitUse = false}) {
+    if (explicitUse || !replacing || !_i2iManuallyDisabled) i2iEnabled = true;
+  }
+
+  void clearI2iResourceState() {
+    i2iEnabled = false;
+    _i2iManuallyDisabled = false;
+  }
+
+  void setVibeEnabled(bool value, {bool userAction = true}) {
+    vibeEnabled = value && hasVibeResources;
+    if (userAction) _vibeManuallyDisabled = !value;
+    if (vibeEnabled) preciseReferenceEnabled = false;
+  }
+
+  void noteVibeImported({required bool wasEmpty, bool explicitUse = false}) {
+    if (explicitUse || (wasEmpty && !_vibeManuallyDisabled)) {
+      vibeEnabled = true;
+      preciseReferenceEnabled = false;
+    }
+  }
+
+  void clearVibeResourceState() {
+    vibeEnabled = false;
+    _vibeManuallyDisabled = false;
+  }
+
+  void setPreciseReferenceEnabled(bool value, {bool userAction = true}) {
+    preciseReferenceEnabled = value && preciseReferenceConfigList.isNotEmpty;
+    if (userAction) _preciseReferenceManuallyDisabled = !value;
+    if (preciseReferenceEnabled) vibeEnabled = false;
+  }
+
+  void notePreciseReferenceImported(
+      {required bool wasEmpty, bool explicitUse = false}) {
+    if (explicitUse || (wasEmpty && !_preciseReferenceManuallyDisabled)) {
+      preciseReferenceEnabled = true;
+      vibeEnabled = false;
+    }
+  }
+
+  void clearPreciseReferenceResourceState() {
+    preciseReferenceEnabled = false;
+    _preciseReferenceManuallyDisabled = false;
+  }
 
   /// Compatibility accessors for pre-profile code and old saved files.
   String get overridePrompt => _plainPrompt(fixedProfile.rootPromptConfig);
@@ -111,41 +173,42 @@ class PayloadConfig {
     PromptMode? promptMode,
     GenerationSize? i2iRequestSize,
     I2iSizeMode i2iSizeMode = I2iSizeMode.automatic,
-  }) : randomProfile = GenerationProfile(
-         rootPromptConfig: rootPromptConfig,
-         negativePromptConfig: negativePromptConfig,
-         characterConfigList: characterConfigList,
-         savedPromptConfigList: savedPromptConfigList,
-         paramConfig: paramConfig,
-       ),
-       fixedProfile =
-           fixedProfile ??
-           GenerationProfile(
-             rootPromptConfig: fixedPromptConfig(overridePrompt),
-             negativePromptConfig: fixedPromptConfig(
-               paramConfig.negativePrompt,
-               negative: true,
-             ),
-             characterConfigList: useCharacterPromptWithOverride
-                 ? characterConfigList
-                       .map(
-                         (config) => CharacterConfig.fromJson(config.toJson()),
-                       )
-                       .toList()
-                 : [],
-             savedPromptConfigList: [],
-             paramConfig: ParamConfig.fromJson(paramConfig.toJson()),
-           ),
-       promptMode =
-           promptMode ??
-           (useOverridePrompt ? PromptMode.fixed : PromptMode.random) {
+    int i2iContextPx = defaultContextPx,
+    bool i2iUseRandomSeed = false,
+  })  : randomProfile = GenerationProfile(
+          rootPromptConfig: rootPromptConfig,
+          negativePromptConfig: negativePromptConfig,
+          characterConfigList: characterConfigList,
+          savedPromptConfigList: savedPromptConfigList,
+          paramConfig: paramConfig,
+        ),
+        fixedProfile = fixedProfile ??
+            GenerationProfile(
+              rootPromptConfig: fixedPromptConfig(overridePrompt),
+              negativePromptConfig: fixedPromptConfig(
+                paramConfig.negativePrompt,
+                negative: true,
+              ),
+              characterConfigList: useCharacterPromptWithOverride
+                  ? characterConfigList
+                      .map(
+                        (config) => CharacterConfig.fromJson(config.toJson()),
+                      )
+                      .toList()
+                  : [],
+              savedPromptConfigList: [],
+              paramConfig: ParamConfig.fromJson(paramConfig.toJson()),
+            ),
+        promptMode = promptMode ??
+            (useOverridePrompt ? PromptMode.fixed : PromptMode.random) {
     i2iConfig = I2IConfig(
-      requestSize:
-          i2iRequestSize ??
+      requestSize: i2iRequestSize ??
           (paramConfig.sizes.isNotEmpty
               ? paramConfig.sizes.first
               : const GenerationSize(width: 832, height: 1216)),
       sizeMode: i2iSizeMode,
+      contextPx: i2iContextPx,
+      useRandomSeed: i2iUseRandomSeed,
     );
   }
 
@@ -180,12 +243,20 @@ class PayloadConfig {
     i2iConfig = I2IConfig(
       requestSize: i2iConfig.requestSize,
       sizeMode: i2iConfig.sizeMode,
+      contextPx: i2iConfig.contextPx,
+      useRandomSeed: i2iConfig.useRandomSeed,
     );
     enhanceConfig = EnhanceConfig();
     directorToolConfig = DirectorToolConfig();
     vibeConfigList.clear();
     vibeConfigListV4.clear();
     preciseReferenceConfigList.clear();
+    i2iEnabled = false;
+    vibeEnabled = false;
+    preciseReferenceEnabled = false;
+    _i2iManuallyDisabled = false;
+    _vibeManuallyDisabled = false;
+    _preciseReferenceManuallyDisabled = false;
   }
 
   Map<String, dynamic> toJson() {
@@ -207,6 +278,8 @@ class PayloadConfig {
       'fixed_profile': fixedProfile.toJson(),
       'i2i_request_size': i2iConfig.requestSize.toJson(),
       'i2i_size_mode': i2iConfig.sizeMode.name,
+      'i2i_context_px': i2iConfig.contextPx,
+      'i2i_use_random_seed': i2iConfig.useRandomSeed,
     };
   }
 
@@ -248,6 +321,10 @@ class PayloadConfig {
           ? GenerationSize.fromJson(i2iSizeJson)
           : (paramConfig.sizes.isNotEmpty ? paramConfig.sizes.first : null),
       i2iSizeMode: _i2iSizeModeFromJson(jsonData['i2i_size_mode']),
+      i2iContextPx: jsonData['i2i_context_px'] is num
+          ? (jsonData['i2i_context_px'] as num).round()
+          : defaultContextPx,
+      i2iUseRandomSeed: jsonData['i2i_use_random_seed'] == true,
     );
   }
 
@@ -291,12 +368,12 @@ class PayloadConfig {
             ),
             characterConfigList:
                 jsonData['use_character_prompt_with_override'] == true
-                ? characterList
-                      .map(
-                        (config) => CharacterConfig.fromJson(config.toJson()),
-                      )
-                      .toList()
-                : [],
+                    ? characterList
+                        .map(
+                          (config) => CharacterConfig.fromJson(config.toJson()),
+                        )
+                        .toList()
+                    : [],
             savedPromptConfigList: [],
             paramConfig: ParamConfig.fromJson(randomParamConfig.toJson()),
           );
@@ -306,10 +383,16 @@ class PayloadConfig {
       i2iSizeJson is Map<String, dynamic>
           ? GenerationSize.fromJson(i2iSizeJson)
           : (randomParamConfig.sizes.isNotEmpty
-                ? randomParamConfig.sizes.first
-                : const GenerationSize(width: 832, height: 1216)),
+              ? randomParamConfig.sizes.first
+              : const GenerationSize(width: 832, height: 1216)),
       mode: _i2iSizeModeFromJson(jsonData['i2i_size_mode']),
     );
+    i2iConfig.setContextPx(
+      jsonData['i2i_context_px'] is num
+          ? (jsonData['i2i_context_px'] as num).round()
+          : defaultContextPx,
+    );
+    i2iConfig.setUseRandomSeed(jsonData['i2i_use_random_seed'] == true);
   }
 
   /// Metadata always targets the fixed profile. It must never alter the
@@ -387,9 +470,8 @@ class PayloadConfig {
   }
 
   void switchPromptMode() {
-    promptMode = promptMode == PromptMode.random
-        ? PromptMode.fixed
-        : PromptMode.random;
+    promptMode =
+        promptMode == PromptMode.random ? PromptMode.fixed : PromptMode.random;
   }
 
   static PromptMode _promptModeFromJson(Map<String, dynamic> json) {
@@ -459,19 +541,18 @@ class PayloadConfig {
       if (raw is! Map) continue;
       final positive =
           raw['char_caption'] ?? raw['prompt'] ?? raw['caption'] ?? '';
-      final negativeRaw = index < (negatives?.length ?? 0)
-          ? negatives![index]
-          : null;
+      final negativeRaw =
+          index < (negatives?.length ?? 0) ? negatives![index] : null;
       final negative = negativeRaw is Map
           ? negativeRaw['char_caption'] ??
-                negativeRaw['uc'] ??
-                negativeRaw['caption'] ??
-                ''
+              negativeRaw['uc'] ??
+              negativeRaw['caption'] ??
+              ''
           : raw['uc'] ?? '';
       final centerRaw =
           raw['centers'] is List && (raw['centers'] as List).isNotEmpty
-          ? (raw['centers'] as List).first
-          : raw['center'];
+              ? (raw['centers'] as List).first
+              : raw['center'];
       result.add(
         CharacterConfig(
           positions: [_positionFromMetadata(centerRaw)],

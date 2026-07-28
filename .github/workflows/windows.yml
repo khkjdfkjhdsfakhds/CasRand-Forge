@@ -49,8 +49,16 @@ jobs:
       - name: Validate Windows package
         shell: powershell
         run: |
-          if (-not (Test-Path "build\windows\x64\runner\Release\CasRandForgeBeta.exe")) {
+          $exePath = "build\windows\x64\runner\Release\CasRandForgeBeta.exe"
+          if (-not (Test-Path $exePath)) {
             throw "CasRandForgeBeta.exe is missing from the release directory"
+          }
+          $version = (Get-Item $exePath).VersionInfo
+          if ($version.FileVersion -ne "0.9.4.50") {
+            throw "Unexpected Windows file version: $($version.FileVersion)"
+          }
+          if (-not $version.ProductVersion.StartsWith("0.9.4")) {
+            throw "Unexpected Windows product version: $($version.ProductVersion)"
           }
           tar.exe -t -f "$env:ASSET_NAME" | Out-Null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -122,18 +122,33 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Image Size (W × H)'), findsOneWidget);
+    expect(find.text('Image size (multiple selections)'), findsOneWidget);
     expect(find.text('Use Random Seed'), findsOneWidget);
     expect(find.text('Generation count'), findsOneWidget);
-    expect(find.text('Generation interval (seconds)'), findsOneWidget);
+    expect(
+      find.text('Generation interval (seconds; at least 2 recommended)'),
+      findsOneWidget,
+    );
     expect(find.text('Batch settings'), findsNothing);
     expect(find.text('Fixed Seed'), findsNothing);
     expect(find.text('Override random prompts'), findsNothing);
 
+    final displayMode = tester.widget<SegmentedButton<String>>(
+      find.descendant(
+        of: find.byKey(const Key('generation-settings-display-mode')),
+        matching: find.byType(SegmentedButton<String>),
+      ),
+    );
+    expect(displayMode.segments.map((segment) => segment.value), [
+      'classic',
+      'waterfall',
+    ]);
+    expect(displayMode.selected, {'classic'});
+
     final orderedSettings = [
       find.text('Generation count'),
-      find.text('Generation interval (seconds)'),
-      find.text('Image Size (W × H)'),
+      find.text('Generation interval (seconds; at least 2 recommended)'),
+      find.text('Image size (multiple selections)'),
       find.text('Use Random Seed'),
       // Display style comes first, and the column count belongs under it
       // because it now applies to both result layouts.
@@ -225,6 +240,7 @@ void main() {
     final config = GetIt.I<PayloadConfig>();
     config.promptMode = PromptMode.fixed;
     config.overridePrompt = 'preserved prompt';
+    config.fixedProfile.characterConfigList = [CharacterConfig.fromEmpty()];
 
     await tester.pumpWidget(
       localizedApp(
@@ -238,10 +254,15 @@ void main() {
     expect(find.text('Fixed-prompt profile is active'), findsOneWidget);
     expect(find.byKey(const Key('fixed-positive-prompt')), findsOneWidget);
     expect(find.byKey(const Key('fixed-negative-prompt')), findsOneWidget);
+    expect(find.byKey(const Key('character-gender-tile')), findsOneWidget);
+    expect(find.byKey(const Key('character-positive-prompt')), findsOneWidget);
+    expect(find.byKey(const Key('character-negative-prompt')), findsOneWidget);
     expect(config.overridePrompt, 'preserved prompt');
   });
 
-  testWidgets('prompt settings mode button expands on hover', (tester) async {
+  testWidgets('prompt settings mode button shows a tooltip without expanding', (
+    tester,
+  ) async {
     final config = GetIt.I<PayloadConfig>();
     await tester.pumpWidget(
       localizedApp(
@@ -257,9 +278,9 @@ void main() {
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: Offset.zero);
     await mouse.moveTo(tester.getCenter(button));
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 1));
 
-    expect(tester.getSize(button).width, greaterThan(collapsedWidth));
+    expect(tester.getSize(button).width, collapsedWidth);
     expect(find.text('Random prompts'), findsOneWidget);
     await mouse.removePointer();
   });
@@ -280,6 +301,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(
+      find.text('Edit : Image size (multiple selections)'),
+      findsOneWidget,
+    );
     expect(find.text('Selected sizes'), findsOneWidget);
     expect(find.text('Preset sizes'), findsOneWidget);
     expect(find.text('Enter a custom size'), findsOneWidget);
@@ -325,7 +350,10 @@ void main() {
       find.byKey(const Key('manual-size-height')),
       '1217',
     );
-    await tester.tap(find.byKey(const Key('manual-size-add')));
+    final addButton = find.byKey(const Key('manual-size-add'));
+    await tester.ensureVisible(addButton);
+    await tester.pumpAndSettle();
+    await tester.tap(addButton);
     await tester.pump();
 
     expect(find.text('896 × 1280'), findsOneWidget);

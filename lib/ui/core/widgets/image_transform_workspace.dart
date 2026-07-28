@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
+import 'package:nai_casrand/ui/core/widgets/fullscreen_image_view.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/generated_image_view.dart';
 
 /// Original/result workspace used by image transforms. It stays side by side
@@ -44,11 +45,16 @@ class ImageTransformWorkspace extends StatelessWidget {
           onTap: onSourceTap,
           footer: sourceActions,
         );
+        final content = result;
         final output = _ImageStage(
           key: const Key('transform-result-stage'),
           title: tr('transform_result'),
           image: _resultImage(),
           placeholder: _resultPlaceholder(context),
+          onTap: content?.imageBytes == null
+              ? null
+              : () => openFullscreenImage(context, content!),
+          tapKey: const Key('transform-result-zoom-target'),
         );
         if (constraints.maxWidth >= 760) {
           return Row(
@@ -148,6 +154,7 @@ class _ImageStage extends StatelessWidget {
   final Widget? image;
   final Widget placeholder;
   final VoidCallback? onTap;
+  final Key? tapKey;
   final Widget? footer;
 
   const _ImageStage({
@@ -156,6 +163,7 @@ class _ImageStage extends StatelessWidget {
     required this.image,
     required this.placeholder,
     this.onTap,
+    this.tapKey,
     this.footer,
   });
 
@@ -188,7 +196,10 @@ class _ImageStage extends StatelessWidget {
                 style: Theme.of(context).textTheme.titleMedium,
               ),
             ),
-            if (onTap == null) stage else InkWell(onTap: onTap, child: stage),
+            if (onTap == null)
+              stage
+            else
+              InkWell(key: tapKey, onTap: onTap, child: stage),
             if (footer != null) ...[
               const SizedBox(height: 8),
               footer!,

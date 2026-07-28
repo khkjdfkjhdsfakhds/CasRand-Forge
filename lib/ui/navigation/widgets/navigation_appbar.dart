@@ -6,7 +6,6 @@ import 'package:get_it/get_it.dart';
 import 'package:blinking_text/blinking_text.dart';
 import 'package:nai_casrand/data/models/command_status.dart';
 import 'package:nai_casrand/data/services/config_service.dart';
-import 'package:nai_casrand/data/services/file_service.dart';
 import 'package:nai_casrand/ui/navigation/widgets/debug_settings_view.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -14,8 +13,12 @@ enum AppState { idle, generating, waitingForNextGeneration }
 
 class NavigationAppBar extends StatefulWidget implements PreferredSizeWidget {
   final CommandStatus commandStatus = GetIt.instance();
+  final VoidCallback onRestoreWelcomeMessage;
 
-  NavigationAppBar({super.key});
+  NavigationAppBar({
+    super.key,
+    required this.onRestoreWelcomeMessage,
+  });
 
   @override
   NavigationAppBarState createState() => NavigationAppBarState();
@@ -66,6 +69,8 @@ class NavigationAppBarState extends State<NavigationAppBar>
       case AppState.idle:
         title = Text(
           context.tr('appbar_idle'),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         );
         _iconAnimationController.stop();
         break;
@@ -73,6 +78,8 @@ class NavigationAppBarState extends State<NavigationAppBar>
         title = BlinkText(
           context.tr('appbar_regular'),
           beginColor: Theme.of(context).textTheme.titleMedium?.color,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         );
         _iconAnimationController.repeat();
         break;
@@ -80,6 +87,8 @@ class NavigationAppBarState extends State<NavigationAppBar>
         title = BlinkText(
           context.tr('appbar_generation_interval'),
           beginColor: Theme.of(context).textTheme.titleMedium?.color,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         );
         _iconAnimationController.stop();
         break;
@@ -100,12 +109,14 @@ class NavigationAppBarState extends State<NavigationAppBar>
               .whenComplete(refreshDisplay),
         ),
         const SizedBox(width: 8.0),
-        InkWell(
-          child: title,
-          onTap: () => _showDebugDialog(context),
+        Expanded(
+          child: InkWell(
+            onTap: () => _showDebugDialog(context),
+            child: Align(alignment: Alignment.centerLeft, child: title),
+          ),
         ),
-        const Spacer(),
         IconButton(
+          key: const Key('app-help-button'),
           onPressed: () => _showAppInfoDialog(context),
           icon: const Icon(Icons.help_outline),
         ),
@@ -142,21 +153,34 @@ class NavigationAppBarState extends State<NavigationAppBar>
         applicationVersion: appVersion,
         applicationIcon: iconImage,
         children: [
-          // Github link
           _buildLinkTile(),
-          // Donation link
-          _buildDonationLink(context)
+          _buildDonationLink(context),
+          _buildRestoreWelcomeMessageTile(context),
         ]);
   }
 
+  Widget _buildRestoreWelcomeMessageTile(BuildContext context) {
+    return ListTile(
+      key: const Key('restore-welcome-message'),
+      title: Text(tr('restore_welcome_message')),
+      subtitle: Text(tr('restore_welcome_message_hint')),
+      leading: const Icon(Icons.refresh),
+      onTap: () {
+        Navigator.of(context).pop();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          widget.onRestoreWelcomeMessage();
+        });
+      },
+    );
+  }
+
   Widget _buildLinkTile() {
+    const repositoryUrl = 'https://github.com/khkjdfkjhdsfakhds/CasRand-Forge';
     return ListTile(
       title: Text(tr('github_repo')),
       leading: const Icon(Icons.link),
-      subtitle: const Text(String.fromEnvironment("GITHUB_REPO_LINK")),
-      onTap: () => {
-        launchUrl(Uri.parse(const String.fromEnvironment("GITHUB_REPO_LINK")))
-      },
+      subtitle: const Text(repositoryUrl),
+      onTap: () => launchUrl(Uri.parse(repositoryUrl)),
     );
   }
 
@@ -164,47 +188,136 @@ class NavigationAppBarState extends State<NavigationAppBar>
     return ListTile(
       title: Text(tr('donation_link')),
       subtitle: Text(tr('donation_link_subtitle')),
-      leading: const Icon(Icons.favorite_border),
+      leading: const Icon(Icons.coffee_outlined),
       onTap: () => _showDonationQRCode(context),
     );
   }
 
-  void _showDonationQRCode(BuildContext context) async {
-    final qrCode1Bytes = await FileService().decryptAsset('assets/qrcode1.jpg');
-    final qrCode2Bytes = await FileService().decryptAsset('assets/qrcode2.jpg');
-    if (qrCode1Bytes == null || qrCode2Bytes == null || !context.mounted) {
-      return;
-    }
+  void _showDonationQRCode(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return LayoutBuilder(
+          builder: (dialogContext, viewportConstraints) {
+            final mediaSize = MediaQuery.sizeOf(dialogContext);
+            final viewportWidth = viewportConstraints.maxWidth.isFinite
+                ? viewportConstraints.maxWidth
+                : mediaSize.width;
+            final viewportHeight = viewportConstraints.maxHeight.isFinite
+                ? viewportConstraints.maxHeight
+                : mediaSize.height;
+            // 24 px dialog inset + 16 px content padding on each side.
+            final availableWidth = max(0.0, viewportWidth - 80);
+            final contentWidth = min(640.0, availableWidth);
+            final useRow = contentWidth >= 520;
+            final codeWidth =
+                useRow ? (contentWidth - 16) / 2 : min(320.0, contentWidth);
 
-    const qrCodeSize = 200.0;
-    final qrCode1 = Image.memory(
-      qrCode1Bytes,
-      width: qrCodeSize,
-      height: qrCodeSize,
-      filterQuality: FilterQuality.medium,
-    );
-    final qrCode2 = Image.memory(
-      qrCode2Bytes,
-      width: qrCodeSize,
-      height: qrCodeSize,
-      filterQuality: FilterQuality.medium,
-    );
-    showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-              title: Text(tr('donation_link_subtitle')),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  qrCode1,
-                  const SizedBox(
-                    width: 20,
-                    height: 20,
+            Widget buildCode(
+              String labelKey,
+              String assetPath,
+              Key imageKey,
+            ) {
+              return SizedBox(
+                width: codeWidth,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(labelKey.tr()),
+                    const SizedBox(height: 8),
+                    AspectRatio(
+                      aspectRatio: 2 / 3,
+                      child: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: Theme.of(
+                              dialogContext,
+                            ).colorScheme.outlineVariant,
+                          ),
+                        ),
+                        child: Image.asset(
+                          assetPath,
+                          key: imageKey,
+                          fit: BoxFit.contain,
+                          alignment: Alignment.center,
+                          filterQuality: FilterQuality.high,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            final wechat = buildCode(
+              'donation_wechat',
+              'assets/donation/wechat-pay.png',
+              const Key('donation-wechat-code'),
+            );
+            final alipay = buildCode(
+              'donation_alipay',
+              'assets/donation/alipay.jpg',
+              const Key('donation-alipay-code'),
+            );
+            return AlertDialog(
+              insetPadding:
+                  const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+              contentPadding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+              title: Text(tr('donation_link')),
+              content: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: contentWidth,
+                  maxHeight: viewportHeight * 0.72,
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        tr('donation_dialog_message'),
+                        key: const Key('donation-dialog-message'),
+                        textAlign: TextAlign.center,
+                        style: Theme.of(dialogContext)
+                            .textTheme
+                            .titleMedium
+                            ?.copyWith(height: 1.45),
+                      ),
+                      const SizedBox(height: 20),
+                      if (useRow)
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            wechat,
+                            const SizedBox(width: 16),
+                            alipay,
+                          ],
+                        )
+                      else
+                        Column(
+                          children: [
+                            wechat,
+                            const SizedBox(height: 20),
+                            alipay,
+                          ],
+                        ),
+                    ],
                   ),
-                  qrCode2,
-                ],
+                ),
               ),
-            ));
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: Text(tr('confirm')),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   void _showDebugDialog(BuildContext context) {

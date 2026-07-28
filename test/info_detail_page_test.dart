@@ -4,6 +4,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_command/flutter_command.dart';
 import 'package:get_it/get_it.dart';
 import 'package:image/image.dart' as img;
 import 'package:nai_casrand/data/models/command_status.dart';
@@ -15,7 +16,9 @@ import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/info_card.dart';
+import 'package:nai_casrand/ui/generation_page/widgets/generation_page_view.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/result_actions.dart';
+import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
 
 class _TestAssetLoader extends AssetLoader {
   final Map<String, dynamic> translations;
@@ -236,6 +239,140 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.space);
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('fullscreen-image-viewer')), findsNothing);
+  });
+
+  testWidgets('gallery arrows switch the image and matching information', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    var reportedIndex = 0;
+    final second = InfoCardContent(
+      title: 'second.png',
+      info: 'second block prompt',
+      additionalInfo: const {
+        'input': 'second final prompt',
+        'negative_prompt': 'second negative',
+        'seed': 2,
+        'width': 64,
+        'height': 96,
+      },
+      imageBytes: solidPng(64, 96),
+    );
+
+    await tester.pumpWidget(
+      localizedApp(
+        InfoDetailPage.gallery(
+          contents: [
+            buildContent(bytes: solidPng(64, 96)),
+            second,
+          ],
+          initialIndex: 0,
+          onIndexChanged: (index) => reportedIndex = index,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('1 / 2'), findsOneWidget);
+    expect(find.byKey(const Key('detail-gallery-previous')), findsNothing);
+    expect(find.byKey(const Key('detail-gallery-next')), findsOneWidget);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pumpAndSettle();
+
+    expect(reportedIndex, 1);
+    expect(find.text('second.png'), findsOneWidget);
+    expect(find.text('second block prompt'), findsOneWidget);
+    expect(find.text('second final prompt'), findsOneWidget);
+    expect(find.text('2 / 2'), findsOneWidget);
+    expect(find.byKey(const Key('detail-gallery-previous')), findsOneWidget);
+    expect(find.byKey(const Key('detail-gallery-next')), findsNothing);
+  });
+
+  testWidgets('horizontal swipe switches gallery items on touch layouts', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(500, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    var reportedIndex = 0;
+
+    await tester.pumpWidget(
+      localizedApp(
+        InfoDetailPage.gallery(
+          contents: [
+            buildContent(bytes: solidPng(64, 96)),
+            InfoCardContent(
+              title: 'swiped.png',
+              info: 'swiped info',
+              additionalInfo: const {'seed': 9},
+              imageBytes: solidPng(64, 96),
+            ),
+          ],
+          initialIndex: 0,
+          onIndexChanged: (index) => reportedIndex = index,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.fling(
+      find.byKey(const Key('detail-gallery-swipe-target')),
+      const Offset(-420, 0),
+      1200,
+    );
+    await tester.pumpAndSettle();
+
+    expect(reportedIndex, 1);
+    expect(find.text('swiped.png'), findsOneWidget);
+    expect(find.text('swiped info'), findsOneWidget);
+  });
+
+  testWidgets('leaving the gallery reveals the last viewed result card', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(500, 700));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final payloadConfig = GetIt.I<PayloadConfig>();
+    payloadConfig.settings.generationPageColumnCount = 1;
+    payloadConfig.settings.resultDisplayMode = 'classic';
+    final commandStatus = GetIt.I<CommandStatus>();
+    for (var index = 0; index < 8; index++) {
+      final content = InfoCardContent(
+        title: 'item$index.png',
+        info: 'prompt $index',
+        additionalInfo: {'seed': index},
+        imageBytes: solidPng(64, 96),
+      );
+      commandStatus.commandList.add(
+        Command.createAsyncNoParam(
+          () async => content,
+          initialValue: content,
+        ),
+      );
+    }
+    final viewmodel = GenerationPageViewmodel();
+    addTearDown(viewmodel.dispose);
+
+    await tester.pumpWidget(
+      localizedApp(GenerationPageView(viewmodel: viewmodel)),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('item7.png'));
+    await tester.pumpAndSettle();
+    for (var step = 0; step < 6; step++) {
+      await tester.tap(find.byKey(const Key('detail-gallery-next')));
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('item1.png'), findsOneWidget);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('detail-gallery-position')), findsNothing);
+    expect(find.text('item1.png'), findsOneWidget,
+        reason: 'the grid scrolls back to the result last viewed in detail');
   });
 
   testWidgets('enhance carries the complete profile to the Enhance page', (

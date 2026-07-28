@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:math';
 
-import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_command/flutter_command.dart';
@@ -19,6 +18,7 @@ import 'package:nai_casrand/data/services/api_service.dart';
 import 'package:nai_casrand/data/services/file_service.dart';
 import 'package:nai_casrand/data/services/image_service.dart';
 import 'package:nai_casrand/data/use_cases/anlas_cost.dart';
+import 'package:nai_casrand/data/use_cases/encode_vibe_use_case.dart';
 import 'package:nai_casrand/data/use_cases/generate_payload_use_case.dart';
 import 'package:nai_casrand/data/use_cases/prepare_i2i_request_use_case.dart';
 
@@ -30,11 +30,53 @@ class _WorkerState {
   PayloadGenerationResult? cachedPayloadResult;
   I2iRequestBatch? cachedI2iBatch;
   int cacheRetriesCount = 0;
+  int consecutiveTransientFailures = 0;
+  bool halted = false;
   Timer? intervalTimer;
   Command<void, InfoCardContent>? command;
 }
 
+class _BatchAccounting {
+  _BatchAccounting(this.tokens, {required this.reconcileBalances});
+
+  final List<String> tokens;
+  final bool reconcileBalances;
+  final Map<String, int> startingBalances = {};
+  final Map<String, int> estimatedTotals = {};
+  final Map<String, int> successCounts = {};
+  final Map<String, int> sentRequests = {};
+  final Map<String, Command<void, InfoCardContent>> lastCommands = {};
+  final Map<String, Future<void>> baselineFutures = {};
+  int activeRequests = 0;
+  bool stopped = false;
+  Future<void>? finalization;
+}
+
 class GenerationPageViewmodel extends ChangeNotifier {
+  final EncodeVibeUseCase _encodeVibeUseCase;
+  final ApiService _apiService;
+  final AccountService _accountService;
+  final FileService _fileService;
+  final ImageService _imageService;
+  final Random _i2iSeedRandom;
+  final Map<String, Future<String>> _vibeEncodingFutures = {};
+
+  GenerationPageViewmodel({
+    EncodeVibeUseCase? encodeVibeUseCase,
+    ApiService? apiService,
+    AccountService? accountService,
+    FileService? fileService,
+    ImageService? imageService,
+    Random? i2iSeedRandom,
+  })  : _encodeVibeUseCase = encodeVibeUseCase ??
+            EncodeVibeUseCase(apiService: apiService ?? ApiService.shared),
+        _apiService = apiService ?? ApiService.shared,
+        _accountService = accountService ??
+            AccountService(apiService: apiService ?? ApiService.shared),
+        _fileService = fileService ?? FileService(),
+        _imageService = imageService ?? ImageService(),
+        _i2iSeedRandom = i2iSeedRandom ?? Random();
+
   PayloadConfig get payloadConfig => GetIt.I<PayloadConfig>();
   CommandStatus get commandStatus => GetIt.I<CommandStatus>();
   List<Command<void, InfoCardContent>> get commandList =>
@@ -45,18 +87,25 @@ class GenerationPageViewmodel extends ChangeNotifier {
   Command<void, InfoCardContent>? lastEnhanceCommand;
   Command<void, InfoCardContent>? lastDirectorCommand;
 
+  bool _isPreparingEnhance = false;
+  bool get isPreparingEnhance => _isPreparingEnhance;
+
   PayloadGenerationResult? _cachedPayloadResult;
   I2iRequestBatch? _cachedI2iBatch;
   int _cacheRetriesCount = 0;
+  int _consecutiveTransientFailures = 0;
+  bool _primaryWorkerHalted = false;
   Timer? _generationIntervalTimer;
 
   /// Tokens captured at generation start; index-aligned with workers.
   List<String> _activeTokens = [];
   List<String> _activeTokenLabels = [];
   final Map<int, _WorkerState> _extraWorkers = {};
+  _BatchAccounting? _activeBatch;
 
   /// Last known Anlas balance per token (updated after each generation).
   final Map<String, int> _lastAnlasBalances = {};
+  final Map<String, DateTime> _lastAnlasBalanceTimes = {};
   Map<String, int> get lastAnlasBalances => Map.of(_lastAnlasBalances);
 
   /// Estimated Anlas for the next generation, shown on the start buttons
@@ -71,7 +120,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
   /// picked at random per request — the estimate uses the most expensive).
   bool get nextCostIsUpperBound =>
       payloadConfig.paramConfig.sizes.length > 1 &&
-      !payloadConfig.i2iConfig.hasImage;
+      !(payloadConfig.i2iEnabled && payloadConfig.i2iConfig.hasImage);
 
   /// Whether SMEA multipliers apply to the current model (V4 models drop the
   /// sm flags from the payload entirely).
@@ -85,7 +134,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
     refreshSubscriptionSnapshot();
     final paramConfig = payloadConfig.paramConfig;
     final i2i = payloadConfig.i2iConfig;
-    final sizes = i2i.hasImage ? [i2i.requestSize] : paramConfig.sizes;
+    final sizes = payloadConfig.i2iEnabled && i2i.hasImage
+        ? [i2i.requestSize]
+        : paramConfig.sizes;
     if (sizes.isEmpty) return;
     if (!payloadConfig.settings.subscriptionStatusKnown) {
       nextCostEstimate.value = null;
@@ -94,24 +145,29 @@ class GenerationPageViewmodel extends ChangeNotifier {
     final sm = _smActive && paramConfig.sm;
     final smDyn = _smActive && paramConfig.smDyn;
     final key = [
-      i2i.hasImage,
-      i2i.revision,
+      payloadConfig.i2iEnabled && i2i.hasImage,
+      i2i.planRevision,
+      i2i.strength,
       sizes.map((size) => '${size.width}x${size.height}').join(','),
       paramConfig.steps,
       sm,
       smDyn,
       payloadConfig.settings.subscriptionTier,
       payloadConfig.settings.subscriptionActive,
-      payloadConfig.preciseReferenceConfigList
-          .where((reference) => reference.enabled)
-          .length,
-      payloadConfig.vibeConfigListV4.length,
+      payloadConfig.preciseReferenceEnabled
+          ? payloadConfig.preciseReferenceConfigList
+              .where((reference) => reference.enabled)
+              .length
+          : 0,
+      payloadConfig.vibeEnabled ? payloadConfig.vibeConfigListV4.length : 0,
       paramConfig.nSamples,
     ].join('|');
     if (key == _costEstimateKey) return;
     _costEstimateKey = key;
     final epoch = ++_costEstimateEpoch;
-    _computeCostEstimate(epoch);
+    Future<void>.microtask(() {
+      if (epoch == _costEstimateEpoch) _computeCostEstimate(epoch);
+    });
   }
 
   Future<void> _computeCostEstimate(int epoch) async {
@@ -121,13 +177,17 @@ class GenerationPageViewmodel extends ChangeNotifier {
     final subscriptionActive = payloadConfig.settings.subscriptionActive;
     final sm = _smActive && paramConfig.sm;
     final smDyn = _smActive && paramConfig.smDyn;
-    final preciseCount = payloadConfig.preciseReferenceConfigList
-        .where((reference) => reference.enabled)
-        .length;
-    final vibeCount = payloadConfig.vibeConfigListV4.length;
+    final preciseCount = payloadConfig.preciseReferenceEnabled
+        ? payloadConfig.preciseReferenceConfigList
+            .where((reference) => reference.enabled)
+            .length
+        : 0;
+    final vibeCount =
+        payloadConfig.vibeEnabled ? payloadConfig.vibeConfigListV4.length : 0;
     // With several sizes one is picked at random per request; estimate the
     // most expensive so the display is an honest upper bound.
-    final sizes = i2i.hasImage ? [i2i.requestSize] : paramConfig.sizes;
+    final useI2i = payloadConfig.i2iEnabled && i2i.hasImage;
+    final sizes = useI2i ? [i2i.requestSize] : paramConfig.sizes;
     var largest = sizes.first;
     for (final size in sizes) {
       if (size.width * size.height > largest.width * largest.height) {
@@ -137,7 +197,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
 
     AnlasCost? estimate;
     try {
-      if (!i2i.hasImage) {
+      if (!useI2i) {
         estimate = estimateAnlasCost(
           width: largest.width,
           height: largest.height,
@@ -167,6 +227,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
             tier: tier,
             subscriptionActive: subscriptionActive,
             nSamples: paramConfig.nSamples,
+            opusFocusedInpaint: batch.plans.isNotEmpty &&
+                batch.plans.every((plan) => plan.composite != null),
           );
           // Precise references and extra vibes are billed per request, so a
           // split mask pays them once per tile.
@@ -188,8 +250,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
   }
 
   /// Refreshes the active account used for the pre-generation price display.
-  /// Calls within one minute are coalesced; the actual generation path still
-  /// refreshes again immediately before sending.
+  /// Calls within one minute are coalesced. Generation uses this cached
+  /// snapshot for pricing and never waits for an account query before sending.
   Future<void> refreshSubscriptionSnapshot() async {
     if (_subscriptionRefreshInFlight) return;
     final settings = payloadConfig.settings;
@@ -216,7 +278,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
     }
     _subscriptionRefreshInFlight = true;
     _lastSubscriptionRefreshAttempt = now;
-    final info = await AccountService().fetchSubscription(
+    final info = await _accountService.fetchSubscription(
       token: tokens.first.token,
       proxy: settings.proxy,
     );
@@ -224,15 +286,21 @@ class GenerationPageViewmodel extends ChangeNotifier {
     if (info == null) {
       settings.subscriptionStatusKnown = false;
     } else {
-      settings.subscriptionTier = info.tier;
-      settings.subscriptionActive = info.active;
-      settings.subscriptionStatusKnown = true;
-      if (info.anlas != null) {
-        _lastAnlasBalances[tokens.first.token] = info.anlas!;
-      }
+      _recordSubscriptionInfo(tokens.first.token, info);
     }
     _costEstimateKey = null;
     notifyListeners();
+  }
+
+  void _recordSubscriptionInfo(String token, SubscriptionInfo info) {
+    final settings = payloadConfig.settings;
+    settings.subscriptionTier = info.tier;
+    settings.subscriptionActive = info.active;
+    settings.subscriptionStatusKnown = true;
+    if (info.anlas != null) {
+      _lastAnlasBalances[token] = info.anlas!;
+      _lastAnlasBalanceTimes[token] = DateTime.now();
+    }
   }
 
   void setCardsPerCol(int value) {
@@ -246,6 +314,11 @@ class GenerationPageViewmodel extends ChangeNotifier {
   }
 
   void promptModeChanged() {
+    _costEstimateKey = null;
+    notifyListeners();
+  }
+
+  void advancedFeaturesChanged() {
     _costEstimateKey = null;
     notifyListeners();
   }
@@ -344,28 +417,6 @@ class GenerationPageViewmodel extends ChangeNotifier {
     addAndRunCommand(command);
   }
 
-  void addTestPromptInfoCardContent() {
-    // Sync command but wrapped as async
-    commandFunc() async {
-      final payloadResult = GeneratePayloadUseCase(
-        payloadConfig: payloadConfig,
-      )();
-      final additionalInfo = digestPayloadResult(payloadResult);
-      return InfoCardContent(
-        title: tr('test_prompt'),
-        info: payloadResult.comment,
-        additionalInfo: additionalInfo,
-      );
-    }
-
-    // Skip the check of active command (because command is sync)
-    final command = Command.createAsyncNoParam(
-      commandFunc,
-      initialValue: InfoCardContent.fromEmpty(),
-    );
-    addAndRunCommand(command);
-  }
-
   String _tokenForWorker(int workerIndex) {
     if (workerIndex < _activeTokens.length) return _activeTokens[workerIndex];
     return payloadConfig.settings.apiKey;
@@ -384,11 +435,15 @@ class GenerationPageViewmodel extends ChangeNotifier {
     final useCase = PrepareI2iRequestUseCase(config: payloadConfig.i2iConfig);
     final canvas = useCase.newCompositeCanvas();
     Uint8List? lastResponse;
+    final baseParameters =
+        basePayloadResult.payload['parameters'] as Map<String, dynamic>;
+    final batchSeed = baseParameters['seed'] as int?;
 
     Map<String, dynamic> payloadFor(I2iRequestPlan plan) {
       return GeneratePayloadUseCase(
         payloadConfig: payloadConfig,
         i2iPlan: plan,
+        seedOverride: batchSeed,
       )()
           .payload;
     }
@@ -398,10 +453,10 @@ class GenerationPageViewmodel extends ChangeNotifier {
         // Re-plan against the canvas as it stands so later tiles build on the
         // already-repainted pixels.
         final response = await sendPlan(payloadFor(plan));
-        useCase.pasteTileInto(
+        useCase.blendInpaintTileInto(
           canvas: canvas,
           responseBytes: response,
-          composite: plan.composite!,
+          plan: plan,
         );
         lastResponse = response;
       }
@@ -414,10 +469,10 @@ class GenerationPageViewmodel extends ChangeNotifier {
           slice.map((plan) => sendPlan(payloadFor(plan))),
         );
         for (final (index, response) in responses.indexed) {
-          useCase.pasteTileInto(
+          useCase.blendInpaintTileInto(
             canvas: canvas,
             responseBytes: response,
-            composite: slice[index].composite!,
+            plan: slice[index],
           );
           lastResponse = response;
         }
@@ -448,23 +503,43 @@ class GenerationPageViewmodel extends ChangeNotifier {
   Command<void, InfoCardContent> createGenerationCommand({
     required int workerIndex,
     I2iRequestBatch? presetBatch,
+    int? seedOverride,
+    String promptSuffix = '',
   }) {
+    final batchAccounting = _activeBatch;
+    final token = _tokenForWorker(workerIndex);
+    int? startingBalance;
+    DateTime? startingBalanceTime;
+    var vibeExtractionAnlas = 0;
+
     commandFunc() async {
       final settings = payloadConfig.settings;
       final endpoint = settings.debugApiEnabled
           ? settings.debugApiPath
           : 'https://image.novelai.net/ai/generate-image';
-      final token = _tokenForWorker(workerIndex);
+      startingBalance = _lastAnlasBalances[token];
+      startingBalanceTime = _lastAnlasBalanceTimes[token];
+      batchAccounting?.activeRequests++;
 
       PayloadGenerationResult? payloadResult;
+      I2iRequestBatch? i2iBatch;
       try {
-        // Check whether cached payload exists, use cache if exists
-        I2iRequestBatch? i2iBatch;
+        vibeExtractionAnlas = await ensureVibeEncodings(
+          token: token,
+          endpoint: settings.debugApiEnabled
+              ? EncodeVibeUseCase.endpointForDebugGenerationPath(endpoint)
+              : EncodeVibeUseCase.officialEndpoint,
+        );
+
+        // Check whether cached payload exists, use cache if exists.
         if (presetBatch != null) {
           i2iBatch = presetBatch;
           payloadResult = GeneratePayloadUseCase(
             payloadConfig: payloadConfig,
             i2iPlan: i2iBatch.plans.first,
+            seedOverride: seedOverride,
+            applyI2iAreaRandomSeed: false,
+            promptSuffix: promptSuffix,
           )();
         } else if (_getCachedPayload(workerIndex) != null &&
             _getCacheRetries(workerIndex) < 3) {
@@ -473,7 +548,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
           _setCacheRetries(workerIndex, _getCacheRetries(workerIndex) + 1);
         } else {
           final i2iConfig = payloadConfig.i2iConfig;
-          if (i2iConfig.hasImage) {
+          if (payloadConfig.i2iEnabled && i2iConfig.hasImage) {
             final target = i2iConfig.requestSize;
             i2iBatch = await PrepareI2iRequestUseCase(
               config: i2iConfig,
@@ -482,31 +557,22 @@ class GenerationPageViewmodel extends ChangeNotifier {
           payloadResult = GeneratePayloadUseCase(
             payloadConfig: payloadConfig,
             i2iPlan: i2iBatch?.plans.first,
+            applyI2iAreaRandomSeed: i2iBatch != null,
+            random: _i2iSeedRandom,
           )();
           _setCachedPayload(workerIndex, payloadResult, i2iBatch);
           _setCacheRetries(workerIndex, 0);
         }
-
-        // Fetch the starting balance once per token so cost can be derived,
-        // and record the tier so cost estimates know about Opus.
-        if (!settings.debugApiEnabled) {
-          final info = await AccountService().fetchSubscription(
-            token: token,
-            proxy: settings.proxy,
-          );
-          if (info == null) {
-            settings.subscriptionStatusKnown = false;
-          } else {
-            if (info.anlas != null) _lastAnlasBalances[token] = info.anlas!;
-            settings.subscriptionTier = info.tier;
-            settings.subscriptionActive = info.active;
-            settings.subscriptionStatusKnown = true;
-          }
-        }
+        _applyCurrentVibesToPayload(payloadResult);
 
         final headers = payloadConfig.getHeadersForToken(token);
         Future<Uint8List> sendPlan(Map<String, dynamic> payload) async {
-          final response = await ApiService().fetchData(
+          batchAccounting?.sentRequests.update(
+            token,
+            (value) => value + 1,
+            ifAbsent: () => 1,
+          );
+          final response = await _apiService.fetchData(
             ApiRequest(
               endpoint: endpoint,
               proxy: settings.proxy,
@@ -514,9 +580,11 @@ class GenerationPageViewmodel extends ChangeNotifier {
               payload: payload,
             ),
           );
-          // Even if response status is not 2xx, postprocess could throw
-          // the correct exception.
-          return ImageService().processResponse(response.data);
+          final data = ApiService.requireSuccessfulData(
+            response,
+            operation: 'generate the image',
+          );
+          return _imageService.processResponse(data);
         }
 
         Uint8List imageBytes;
@@ -528,14 +596,15 @@ class GenerationPageViewmodel extends ChangeNotifier {
           );
         } else {
           imageBytes = await sendPlan(payloadResult.payload);
-          // Paste the focus frame back into the original image.
-          final composite = i2iBatch?.plans.first.composite;
-          if (composite != null) {
+          // NovelAI returns raw infill pixels. Match the official frontend by
+          // blending every infill response locally with its feathered mask.
+          final plan = i2iBatch?.plans.first;
+          if (plan?.isInpaint == true) {
             imageBytes = await PrepareI2iRequestUseCase(
               config: payloadConfig.i2iConfig,
-            ).compositeResponse(
+            ).compositeInpaintResponse(
               responseBytes: imageBytes,
-              composite: composite,
+              plan: plan!,
             );
           }
         }
@@ -544,7 +613,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
           final metadataString = settings.customMetadataEnabled
               ? settings.customMetadataContent
               : '';
-          imageBytes = await ImageService().embedMetadata(
+          imageBytes = await _imageService.embedMetadata(
             imageBytes,
             metadataString,
           );
@@ -554,37 +623,38 @@ class GenerationPageViewmodel extends ChangeNotifier {
             ? _getSafeFileName(payloadResult.suggestedFileName)
             : '';
         final fileName = [
-          FileService().generateTimestampString(
+          _fileService.generateTimestampString(
             commandStatus.generationTimestamp,
           ),
           commandStatus.currentGenerationCount.toString().padLeft(6, '0'),
           filePrefix,
-          '${FileService().generateRandomString()}.png',
+          '${_fileService.generateRandomString()}.png',
         ].join('-');
-        final imageFilePath = await FileService().savePictureToFile(
+        final imageFilePath = await _fileService.savePictureToFile(
           imageBytes,
           fileName,
           settings.outputFolderPath,
         );
-        // Anlas cost via balance difference (token-sequential, so exact).
-        int? anlasCost;
-        int? anlasRemaining;
-        if (!settings.debugApiEnabled) {
-          final previousBalance = _lastAnlasBalances[token];
-          final newBalance = await AccountService().fetchAnlasBalance(
-            token: token,
-            proxy: settings.proxy,
+        final estimatedCost = _estimateResultAnlas(
+          payloadResult: payloadResult,
+          batch: i2iBatch,
+          vibeExtractionAnlas: vibeExtractionAnlas,
+        );
+        if (batchAccounting != null) {
+          batchAccounting.estimatedTotals.update(
+            token,
+            (value) => value + estimatedCost,
+            ifAbsent: () => estimatedCost,
           );
-          if (newBalance != null) {
-            anlasRemaining = newBalance;
-            if (previousBalance != null && previousBalance >= newBalance) {
-              anlasCost = previousBalance - newBalance;
-            }
-            _lastAnlasBalances[token] = newBalance;
-          }
+          batchAccounting.successCounts.update(
+            token,
+            (value) => value + 1,
+            ifAbsent: () => 1,
+          );
         }
         // Reset cache after successful generation
         _setCachedPayload(workerIndex, null, null);
+        _recordAttemptSuccess(workerIndex);
         // Only increment total count after successful generation
         commandStatus.currentGenerationCount++;
         return InfoCardContent(
@@ -593,25 +663,328 @@ class GenerationPageViewmodel extends ChangeNotifier {
           additionalInfo: digestPayloadResult(payloadResult),
           imageBytes: imageBytes,
           imageFilePath: imageFilePath,
-          anlasCost: anlasCost,
-          anlasRemaining: anlasRemaining,
+          anlasCost: estimatedCost,
+          anlasCostIsEstimated: true,
           tokenLabel: _tokenLabelForWorker(workerIndex),
         );
       } catch (e) {
+        final transientFailures = _recordAttemptFailure(workerIndex, e);
+        final pauseNotice =
+            commandStatus.isGenerationActive.value && transientFailures >= 3
+                ? '\nAutomatic attempts for this token will pause after three '
+                    'temporary server failures. You can retry manually later.'
+                : '';
         return InfoCardContent(
           title: 'Error occurred in generation process.',
-          info: e.toString(),
+          info: '${e.toString()}$pauseNotice',
           additionalInfo:
               payloadResult != null ? digestPayloadResult(payloadResult) : {},
+          anlasCost: vibeExtractionAnlas == 0 ? null : vibeExtractionAnlas,
+          anlasCostIsEstimated: vibeExtractionAnlas != 0,
           tokenLabel: _tokenLabelForWorker(workerIndex),
         );
+      } finally {
+        if (batchAccounting != null) batchAccounting.activeRequests--;
       }
     }
 
-    return Command.createAsyncNoParam(
+    late final Command<void, InfoCardContent> command;
+    command = Command.createAsyncNoParam(
       commandFunc,
       initialValue: InfoCardContent.fromEmpty(),
     );
+    command.isExecuting.addListener(() {
+      if (command.isExecuting.value) return;
+      _handleGenerationCommandFinished(
+        command: command,
+        token: token,
+        startingBalance: startingBalance,
+        startingBalanceTime: startingBalanceTime,
+        batch: batchAccounting,
+      );
+    });
+    return command;
+  }
+
+  int _estimateResultAnlas({
+    required PayloadGenerationResult payloadResult,
+    required I2iRequestBatch? batch,
+    required int vibeExtractionAnlas,
+  }) {
+    try {
+      final parameters =
+          payloadResult.payload['parameters'] as Map<String, dynamic>;
+      final width = (parameters['width'] as num).toInt();
+      final height = (parameters['height'] as num).toInt();
+      final steps = (parameters['steps'] as num).toInt();
+      final nSamples = (parameters['n_samples'] as num?)?.toInt() ?? 1;
+      final action = payloadResult.payload['action']?.toString() ?? 'generate';
+      final preciseCount =
+          (parameters['director_reference_images'] as List?)?.length ?? 0;
+      final vibeCount =
+          (parameters['reference_image_multiple'] as List?)?.length ?? 0;
+      final settings = payloadConfig.settings;
+      final tier =
+          settings.subscriptionStatusKnown ? settings.subscriptionTier : null;
+      final subscriptionActive =
+          settings.subscriptionStatusKnown && settings.subscriptionActive;
+      final sm = parameters['sm'] == true;
+      final smDyn = parameters['sm_dyn'] == true;
+      final plans = batch?.plans ?? const <I2iRequestPlan>[];
+      final strength = plans.isNotEmpty
+          ? plans.first.strength
+          : (parameters['inpaintImg2ImgStrength'] as num?)?.toDouble() ??
+              (parameters['strength'] as num?)?.toDouble() ??
+              1.0;
+      final focusedInpaint = plans.isNotEmpty &&
+          plans.every((plan) => plan.isInpaint && plan.composite != null);
+
+      if (batch != null && batch.isSplit) {
+        final base = estimateBatchAnlasCost(
+          tiles: plans
+              .map((plan) => (width: plan.width, height: plan.height))
+              .toList(growable: false),
+          steps: steps,
+          action: action,
+          strength: strength,
+          sm: sm,
+          smDyn: smDyn,
+          tier: tier,
+          subscriptionActive: subscriptionActive,
+          nSamples: nSamples,
+          opusFocusedInpaint: focusedInpaint,
+        );
+        final referenceCostPerRequest = (preciseCount * preciseReferenceAnlas +
+                max(0, vibeCount - freeVibeCount) * extraVibeAnlas) *
+            nSamples;
+        return base.anlas +
+            referenceCostPerRequest * plans.length +
+            vibeExtractionAnlas;
+      }
+
+      return estimateAnlasCost(
+            width: width,
+            height: height,
+            steps: steps,
+            action: action,
+            nSamples: nSamples,
+            strength: strength,
+            sm: sm,
+            smDyn: smDyn,
+            tier: tier,
+            subscriptionActive: subscriptionActive,
+            preciseReferenceCount: preciseCount,
+            vibeCount: vibeCount,
+            opusFocusedInpaint: focusedInpaint,
+          ).anlas +
+          vibeExtractionAnlas;
+    } catch (_) {
+      return (nextCostEstimate.value?.anlas ?? 0) + vibeExtractionAnlas;
+    }
+  }
+
+  void _handleGenerationCommandFinished({
+    required Command<void, InfoCardContent> command,
+    required String token,
+    required int? startingBalance,
+    required DateTime? startingBalanceTime,
+    required _BatchAccounting? batch,
+  }) {
+    final content = command.value;
+    if (content.imageBytes != null && batch != null) {
+      batch.lastCommands[token] = command;
+    } else if (content.imageBytes != null &&
+        !payloadConfig.settings.debugApiEnabled) {
+      unawaited(_refreshSingleResultBalance(
+        command: command,
+        token: token,
+        startingBalance: startingBalance,
+        startingBalanceTime: startingBalanceTime,
+      ));
+    }
+    if (batch?.stopped == true && batch!.reconcileBalances) {
+      _tryFinalizeBatch(batch);
+    }
+  }
+
+  Future<void> _refreshSingleResultBalance({
+    required Command<void, InfoCardContent> command,
+    required String token,
+    required int? startingBalance,
+    required DateTime? startingBalanceTime,
+  }) async {
+    final info = await _accountService.fetchSubscription(
+      token: token,
+      proxy: payloadConfig.settings.proxy,
+      forceRefresh: true,
+    );
+    if (info == null) return;
+    _recordSubscriptionInfo(token, info);
+    final remaining = info.anlas;
+    if (remaining == null) return;
+    final baselineIsFresh = startingBalanceTime != null &&
+        DateTime.now().difference(startingBalanceTime) <
+            const Duration(minutes: 2);
+    final exactCost = baselineIsFresh &&
+            startingBalance != null &&
+            startingBalance >= remaining
+        ? startingBalance - remaining
+        : null;
+    command.value = command.value.copyWith(
+      anlasCost: exactCost ?? command.value.anlasCost,
+      anlasCostIsEstimated: exactCost == null,
+      anlasRemaining: remaining,
+    );
+    notifyListeners();
+  }
+
+  Future<void> _captureBatchStartingBalance(
+    _BatchAccounting batch,
+    String token,
+  ) async {
+    final info = await _accountService.fetchSubscription(
+      token: token,
+      proxy: payloadConfig.settings.proxy,
+      forceRefresh: true,
+    );
+    if (info == null) return;
+    _recordSubscriptionInfo(token, info);
+    final balance = info.anlas;
+    if (balance != null && (batch.sentRequests[token] ?? 0) == 0) {
+      batch.startingBalances[token] = balance;
+    }
+  }
+
+  void _tryFinalizeBatch(_BatchAccounting batch) {
+    if (!batch.stopped || batch.activeRequests != 0) return;
+    batch.finalization ??= _finalizeBatchBalances(batch);
+  }
+
+  Future<void> _finalizeBatchBalances(_BatchAccounting batch) async {
+    if (batch.baselineFutures.isNotEmpty) {
+      await Future.wait(batch.baselineFutures.values);
+    }
+    await Future.wait(batch.tokens.map((token) async {
+      final info = await _accountService.fetchSubscription(
+        token: token,
+        proxy: payloadConfig.settings.proxy,
+        forceRefresh: true,
+      );
+      if (info == null) return;
+      _recordSubscriptionInfo(token, info);
+      final remaining = info.anlas;
+      final command = batch.lastCommands[token];
+      if (remaining == null || command == null) return;
+      final starting = batch.startingBalances[token];
+      final actual = starting != null && starting >= remaining
+          ? starting - remaining
+          : null;
+      final successCount = batch.successCounts[token] ?? 0;
+      command.value = command.value.copyWith(
+        anlasCost: actual != null && successCount == 1
+            ? actual
+            : command.value.anlasCost,
+        anlasCostIsEstimated: !(actual != null && successCount == 1),
+        anlasRemaining: remaining,
+        batchAnlasCost: successCount > 1 ? actual : null,
+      );
+    }));
+    notifyListeners();
+  }
+
+  @visibleForTesting
+  Future<int> ensureVibeEncodings({
+    required String token,
+    String endpoint = EncodeVibeUseCase.officialEndpoint,
+  }) async {
+    final config = payloadConfig;
+    final model = config.paramConfig.model;
+    if (!config.vibeEnabled || !model.contains('-4-')) return 0;
+    // Precise Reference takes the V4.5 reference payload slot. The normal
+    // setters keep the two features mutually exclusive, but this guard also
+    // protects migrated or transient state from spending 2 Anlas on an
+    // encoding that would not be sent.
+    if (config.preciseReferenceEnabled && model.contains('-4-5-')) return 0;
+
+    var extractedCount = 0;
+
+    for (final vibe in config.vibeConfigListV4) {
+      if (vibe.encodingFor(model) != null) continue;
+      final imageBytes = vibe.imageBytes;
+      if (imageBytes == null || imageBytes.isEmpty) {
+        throw VibeEncodingException(
+          'The Vibe "${vibe.fileName}" has no encoding for $model and no '
+          'original image to extract again.',
+        );
+      }
+
+      final info = vibe.informationExtracted;
+      final cacheKey = '${identityHashCode(vibe)}|$model|'
+          '${info.toStringAsFixed(6)}';
+      var future = _vibeEncodingFutures[cacheKey];
+      var ownsExtraction = false;
+      if (future == null) {
+        ownsExtraction = true;
+        future = _encodeVibeUseCase(
+          imageBytes: imageBytes,
+          informationExtracted: info,
+          model: model,
+          token: token,
+          proxy: config.settings.proxy,
+          endpoint: endpoint,
+        );
+        _vibeEncodingFutures[cacheKey] = future;
+      }
+      try {
+        final encoding = await future;
+        if (ownsExtraction) extractedCount++;
+        vibe.cacheEncoding(
+          model: model,
+          informationExtracted: info,
+          encoding: encoding,
+        );
+      } finally {
+        if (identical(_vibeEncodingFutures[cacheKey], future)) {
+          _vibeEncodingFutures.remove(cacheKey);
+        }
+      }
+    }
+    return extractedCount * 2;
+  }
+
+  void _applyCurrentVibesToPayload(PayloadGenerationResult result) {
+    final config = payloadConfig;
+    final model = config.paramConfig.model;
+    if (!model.contains('-4-')) return;
+
+    final parameters = result.payload['parameters'];
+    if (parameters is! Map<String, dynamic>) return;
+    // A retry may reuse a cached payload after the user changes or disables
+    // Vibe settings. Clear the V4 reference arrays before applying the current
+    // state so stale encodings never leak into the next request.
+    parameters['reference_image_multiple'] = <String>[];
+    parameters['reference_strength_multiple'] = <double>[];
+    parameters['reference_information_extracted_multiple'] = <double>[];
+
+    if (!config.vibeEnabled) return;
+    if (config.preciseReferenceEnabled && model.contains('-4-5-')) return;
+
+    final encodings = <String>[];
+    final strengths = <double>[];
+    final informationExtracted = <double>[];
+    for (final vibe in config.vibeConfigListV4) {
+      final encoding = vibe.encodingFor(model);
+      if (encoding == null) {
+        throw StateError('Vibe encoding is not ready for ${vibe.fileName}.');
+      }
+      encodings.add(encoding);
+      strengths.add(vibe.referenceStrength);
+      informationExtracted.add(vibe.informationExtracted);
+    }
+    parameters['reference_image_multiple'] = encodings;
+    parameters['reference_strength_multiple'] = strengths;
+    parameters['reference_information_extracted_multiple'] =
+        informationExtracted;
   }
 
   PayloadGenerationResult? _getCachedPayload(int workerIndex) {
@@ -653,6 +1026,42 @@ class GenerationPageViewmodel extends ChangeNotifier {
     _extraWorkers[workerIndex]?.cacheRetriesCount = value;
   }
 
+  void _recordAttemptSuccess(int workerIndex) {
+    if (workerIndex == 0) {
+      _consecutiveTransientFailures = 0;
+      _primaryWorkerHalted = false;
+      return;
+    }
+    final state = _extraWorkers[workerIndex];
+    if (state == null) return;
+    state.consecutiveTransientFailures = 0;
+    state.halted = false;
+  }
+
+  int _recordAttemptFailure(int workerIndex, Object error) {
+    final transient = error is NovelAiApiException && error.isTransient;
+    if (workerIndex == 0) {
+      _consecutiveTransientFailures =
+          transient ? _consecutiveTransientFailures + 1 : 0;
+      return _consecutiveTransientFailures;
+    }
+    final state = _extraWorkers[workerIndex];
+    if (state == null) return 0;
+    state.consecutiveTransientFailures =
+        transient ? state.consecutiveTransientFailures + 1 : 0;
+    return state.consecutiveTransientFailures;
+  }
+
+  Duration _transientBackoff(int consecutiveFailures) {
+    if (consecutiveFailures >= 2) return const Duration(seconds: 15);
+    if (consecutiveFailures == 1) return const Duration(seconds: 5);
+    return Duration.zero;
+  }
+
+  bool get _allWorkersHalted =>
+      _primaryWorkerHalted &&
+      _extraWorkers.values.every((state) => state.halted);
+
   void nextCommand() {
     if (!commandStatus.isGenerationActive.value) return;
     if (commandStatus.isWaitingForNextGeneration.value) return;
@@ -685,12 +1094,17 @@ class GenerationPageViewmodel extends ChangeNotifier {
     if (!config.hasImage) return;
     commandStatus.generationTimestamp = DateTime.now();
 
+    var additionalResults = const <InfoCardContent>[];
+    int? startingBalance;
+    DateTime? startingBalanceTime;
     commandFunc() async {
       final settings = payloadConfig.settings;
       final payload = config.getPayload();
       final toolName = config.displayName;
+      startingBalance = _lastAnlasBalances[settings.apiKey];
+      startingBalanceTime = _lastAnlasBalanceTimes[settings.apiKey];
       try {
-        final response = await ApiService().fetchData(
+        final response = await _apiService.fetchData(
           ApiRequest(
             endpoint: augmentImageEndpoint,
             proxy: settings.proxy,
@@ -698,40 +1112,80 @@ class GenerationPageViewmodel extends ChangeNotifier {
             payload: payload,
           ),
         );
-        var imageBytes = ImageService().processResponse(response.data);
-        if (settings.metadataEraseEnabled) {
-          final metadataString = settings.customMetadataEnabled
-              ? settings.customMetadataContent
-              : '';
-          imageBytes = await ImageService().embedMetadata(
-            imageBytes,
-            metadataString,
+        final data = ApiService.requireSuccessfulData(
+          response,
+          operation: 'run Director Tools',
+        );
+        final unpacked = _imageService.processResponseImages(data);
+        const backgroundVariants = ['Masked', 'Generated', 'Blend'];
+        if (config.type == 'bg-removal' &&
+            unpacked.length < backgroundVariants.length) {
+          throw Exception(
+            'Remove Background returned ${unpacked.length} image(s); expected 3.',
           );
         }
-        final fileName = [
-          FileService().generateTimestampString(
-            commandStatus.generationTimestamp,
-          ),
-          commandStatus.currentGenerationCount.toString().padLeft(6, '0'),
-          config.type,
-          '${FileService().generateRandomString()}.png',
-        ].join('-');
-        final imageFilePath = await FileService().savePictureToFile(
-          imageBytes,
-          fileName,
-          settings.outputFolderPath,
-        );
-        commandStatus.currentGenerationCount++;
+        final responseImages = config.type == 'bg-removal'
+            ? unpacked.take(backgroundVariants.length).toList(growable: false)
+            : [unpacked.first];
         // The request carries the source image inline; keep it out of the card.
         final info = Map<String, dynamic>.from(payload)..remove('image');
-        return InfoCardContent(
-          title: fileName,
-          info:
-              '$toolName\n${info.entries.map((e) => '${e.key}: ${e.value}').join('\n')}',
-          additionalInfo: info,
-          imageBytes: imageBytes,
-          imageFilePath: imageFilePath,
+        final estimatedCost = estimateDirectorToolAnlas(
+          tool: config.type,
+          width: config.width,
+          height: config.height,
         );
+        final results = <InfoCardContent>[];
+        for (final (index, rawBytes) in responseImages.indexed) {
+          var imageBytes = rawBytes;
+          if (settings.metadataEraseEnabled) {
+            final metadataString = settings.customMetadataEnabled
+                ? settings.customMetadataContent
+                : '';
+            imageBytes = await _imageService.embedMetadata(
+              imageBytes,
+              metadataString,
+            );
+          }
+          final variant = config.type == 'bg-removal'
+              ? backgroundVariants[index]
+              : toolName;
+          final fileName = [
+            _fileService.generateTimestampString(
+              commandStatus.generationTimestamp,
+            ),
+            commandStatus.currentGenerationCount.toString().padLeft(6, '0'),
+            config.type,
+            if (config.type == 'bg-removal') variant.toLowerCase(),
+            '${_fileService.generateRandomString()}.png',
+          ].join('-');
+          final imageFilePath = await _fileService.savePictureToFile(
+            imageBytes,
+            fileName,
+            settings.outputFolderPath,
+          );
+          commandStatus.currentGenerationCount++;
+          final resultInfo = <String, dynamic>{
+            ...info,
+            if (config.type == 'bg-removal')
+              'background_removal_variant': variant,
+          };
+          final resultLabel =
+              config.type == 'bg-removal' ? '$toolName · $variant' : toolName;
+          results.add(InfoCardContent(
+            title: fileName,
+            info:
+                '$resultLabel\n${resultInfo.entries.map((e) => '${e.key}: ${e.value}').join('\n')}',
+            additionalInfo: resultInfo,
+            imageBytes: imageBytes,
+            imageFilePath: imageFilePath,
+            // One API request produced all three variants; report its total
+            // cost once instead of making every card look separately billed.
+            anlasCost: index == 0 ? estimatedCost : null,
+            anlasCostIsEstimated: index == 0,
+          ));
+        }
+        additionalResults = results.skip(1).toList(growable: false);
+        return results.first;
       } catch (e) {
         return InfoCardContent(
           title: 'Error occurred in Director Tools.',
@@ -745,10 +1199,38 @@ class GenerationPageViewmodel extends ChangeNotifier {
       commandFunc,
       initialValue: InfoCardContent.fromEmpty(),
     );
-    command.isExecuting.addListener(notifyListeners);
+    var appendedAdditionalResults = false;
+    command.isExecuting.addListener(() {
+      notifyListeners();
+      if (command.isExecuting.value || appendedAdditionalResults) return;
+      appendedAdditionalResults = true;
+      for (final result in additionalResults) {
+        _addCompletedResult(result);
+      }
+      if (command.value.imageBytes != null &&
+          !payloadConfig.settings.debugApiEnabled) {
+        unawaited(_refreshSingleResultBalance(
+          command: command,
+          token: payloadConfig.settings.apiKey,
+          startingBalance: startingBalance,
+          startingBalanceTime: startingBalanceTime,
+        ));
+      }
+    });
     lastDirectorCommand = command;
     currentCommand = command;
     addAndRunCommand(command);
+  }
+
+  void _addCompletedResult(InfoCardContent content) {
+    while (commandList.length >= infoCardContentListLength) {
+      commandList.removeAt(0);
+    }
+    commandList.add(Command.createAsyncNoParam(
+      () async => content,
+      initialValue: content,
+    ));
+    notifyListeners();
   }
 
   void clearDirectorResult() {
@@ -776,7 +1258,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
   /// destination's own source image, at the preset strength/noise and the
   /// magnified size. Returns false when busy or without a source image.
   Future<bool> runEnhanceGeneration() async {
-    if (commandStatus.isGenerationActive.value) return false;
+    if (_isPreparingEnhance || commandStatus.isGenerationActive.value) {
+      return false;
+    }
     if (currentCommand != null && currentCommand!.isExecuting.value) {
       return false;
     }
@@ -784,37 +1268,52 @@ class GenerationPageViewmodel extends ChangeNotifier {
     final bytes = enhance.imageBytes;
     if (bytes == null) return false;
     final target = enhance.targetSize;
-    final paramConfig = payloadConfig.paramConfig;
-    if (!paramConfig.randomSeed && paramConfig.seed == null) {
-      paramConfig.seed = 0;
+
+    _isPreparingEnhance = true;
+    notifyListeners();
+    try {
+      // A throwaway I2IConfig reuses the img2img plan builder without touching
+      // the real Img2Img base image. Heavy pixel work runs off the UI isolate.
+      final requestConfig = I2IConfig(
+        strength: enhance.strength,
+        noise: enhance.noise,
+      );
+      requestConfig.setImage(Uint8List.fromList(bytes));
+      final plan = await PrepareI2iRequestUseCase(
+        config: requestConfig,
+      ).preparePlainImg2ImgInBackground(
+        targetWidth: target.width,
+        targetHeight: target.height,
+      );
+      if (plan == null) return false;
+
+      final random = Random.secure();
+      final seed = (random.nextInt(1 << 16) << 16) | random.nextInt(1 << 16);
+      commandStatus.generationTimestamp = DateTime.now();
+      final command = createGenerationCommand(
+        workerIndex: 0,
+        presetBatch: I2iRequestBatch(
+          plans: [plan],
+          serial: true,
+          summary: plan.summary,
+        ),
+        seedOverride: seed,
+        promptSuffix: '-2::upscaled, blurry::,',
+      );
+      command.isExecuting.addListener(notifyListeners);
+      lastEnhanceCommand = command;
+      currentCommand = command;
+      _isPreparingEnhance = false;
+      addAndRunCommand(command);
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      if (_isPreparingEnhance) {
+        _isPreparingEnhance = false;
+        notifyListeners();
+      }
     }
-
-    // A throwaway I2IConfig reuses the img2img plan builder (cover-fit resize
-    // and PNG encoding) without touching the real Img2Img base image.
-    final requestConfig = I2IConfig(
-      strength: enhance.strength,
-      noise: enhance.noise,
-    );
-    requestConfig.setImage(bytes);
-    final plan = await PrepareI2iRequestUseCase(
-      config: requestConfig,
-    ).call(targetWidth: target.width, targetHeight: target.height);
-    if (plan == null) return false;
-
-    commandStatus.generationTimestamp = DateTime.now();
-    final command = createGenerationCommand(
-      workerIndex: 0,
-      presetBatch: I2iRequestBatch(
-        plans: [plan],
-        serial: true,
-        summary: plan.summary,
-      ),
-    );
-    command.isExecuting.addListener(notifyListeners);
-    lastEnhanceCommand = command;
-    currentCommand = command;
-    addAndRunCommand(command);
-    return true;
   }
 
   void clearEnhanceResult() {
@@ -850,13 +1349,23 @@ class GenerationPageViewmodel extends ChangeNotifier {
 
     final state = _extraWorkers[workerIndex];
     if (state == null) return;
+    if (state.consecutiveTransientFailures >= 3) {
+      state.halted = true;
+      if (_allWorkersHalted) stopGeneration();
+      return;
+    }
     state.intervalTimer?.cancel();
-    final interval = payloadConfig.settings.generationIntervalSec;
-    if (interval == 0) {
+    final configuredDelay = Duration(
+      seconds: payloadConfig.settings.generationIntervalSec,
+    );
+    final backoff = _transientBackoff(state.consecutiveTransientFailures);
+    final delay =
+        configuredDelay.compareTo(backoff) >= 0 ? configuredDelay : backoff;
+    if (delay == Duration.zero) {
       _nextCommandForExtraWorker(workerIndex);
       return;
     }
-    state.intervalTimer = Timer(Duration(seconds: interval), () {
+    state.intervalTimer = Timer(delay, () {
       state.intervalTimer = null;
       _nextCommandForExtraWorker(workerIndex);
     });
@@ -890,6 +1399,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
     }
     _generationIntervalTimer?.cancel();
     commandStatus.isWaitingForNextGeneration.value = false;
+    _consecutiveTransientFailures = 0;
+    _primaryWorkerHalted = false;
     if (!payloadConfig.settings.rememberSequentialProgress) {
       payloadConfig.resetSequentialState();
       _cachedPayloadResult = null;
@@ -901,6 +1412,21 @@ class GenerationPageViewmodel extends ChangeNotifier {
     _activeTokens = tokens.map((entry) => entry.token).toList(growable: false);
     _activeTokenLabels =
         tokens.map((entry) => entry.label).toList(growable: false);
+    final batch = _BatchAccounting(
+      List<String>.of(_activeTokens),
+      reconcileBalances: !payloadConfig.settings.debugApiEnabled,
+    );
+    for (final token in _activeTokens) {
+      final knownBalance = _lastAnlasBalances[token];
+      if (knownBalance != null) batch.startingBalances[token] = knownBalance;
+    }
+    _activeBatch = batch;
+    if (batch.reconcileBalances) {
+      for (final token in _activeTokens) {
+        batch.baselineFutures[token] =
+            _captureBatchStartingBalance(batch, token);
+      }
+    }
     commandStatus.currentGenerationCount = 0;
     commandStatus.isGenerationActive.value = true;
     commandStatus.generationTimestamp = DateTime.now();
@@ -914,20 +1440,31 @@ class GenerationPageViewmodel extends ChangeNotifier {
     _clearExtraWorkers();
     commandStatus.isWaitingForNextGeneration.value = false;
     commandStatus.isGenerationActive.value = false;
+    final batch = _activeBatch;
+    _activeBatch = null;
+    if (batch != null) {
+      batch.stopped = true;
+      if (batch.reconcileBalances) _tryFinalizeBatch(batch);
+    }
   }
 
-  void scheduleNextGeneration() {
+  void scheduleNextGeneration({Duration minimumDelay = Duration.zero}) {
     if (!commandStatus.isGenerationActive.value) return;
 
     _generationIntervalTimer?.cancel();
-    final interval = payloadConfig.settings.generationIntervalSec;
-    if (interval == 0) {
+    final configuredDelay = Duration(
+      seconds: payloadConfig.settings.generationIntervalSec,
+    );
+    final delay = configuredDelay.compareTo(minimumDelay) >= 0
+        ? configuredDelay
+        : minimumDelay;
+    if (delay == Duration.zero) {
       nextCommand();
       return;
     }
 
     commandStatus.isWaitingForNextGeneration.value = true;
-    _generationIntervalTimer = Timer(Duration(seconds: interval), () {
+    _generationIntervalTimer = Timer(delay, () {
       _generationIntervalTimer = null;
       commandStatus.isWaitingForNextGeneration.value = false;
       nextCommand();
@@ -944,7 +1481,14 @@ class GenerationPageViewmodel extends ChangeNotifier {
       stopGeneration();
       return;
     }
-    scheduleNextGeneration();
+    if (_consecutiveTransientFailures >= 3) {
+      _primaryWorkerHalted = true;
+      if (_allWorkersHalted) stopGeneration();
+      return;
+    }
+    scheduleNextGeneration(
+      minimumDelay: _transientBackoff(_consecutiveTransientFailures),
+    );
   }
 
   void toggleGeneration() {
@@ -959,6 +1503,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
   void dispose() {
     _generationIntervalTimer?.cancel();
     _clearExtraWorkers();
+    nextCostEstimate.dispose();
     super.dispose();
   }
 

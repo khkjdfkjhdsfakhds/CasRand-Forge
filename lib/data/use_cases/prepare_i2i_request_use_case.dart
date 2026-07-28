@@ -1,11 +1,167 @@
 import 'dart:convert';
 import 'dart:math';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 import 'package:nai_casrand/data/models/i2i_config.dart';
 import 'package:nai_casrand/data/services/image_service.dart';
 import 'package:nai_casrand/data/use_cases/autocrop_planner.dart';
+
+class _PlainI2iPrepareInput {
+  final Uint8List imageBytes;
+  final int targetWidth;
+  final int targetHeight;
+  final double strength;
+  final double noise;
+  final bool addOriginalImage;
+
+  const _PlainI2iPrepareInput({
+    required this.imageBytes,
+    required this.targetWidth,
+    required this.targetHeight,
+    required this.strength,
+    required this.noise,
+    required this.addOriginalImage,
+  });
+}
+
+class _EncodedInpaintMasks {
+  final Uint8List request;
+  final Uint8List blend;
+
+  const _EncodedInpaintMasks({required this.request, required this.blend});
+}
+
+I2iRequestPlan _preparePlainI2iPlan(_PlainI2iPrepareInput input) {
+  final decoded = img.decodeImage(input.imageBytes);
+  if (decoded == null) {
+    throw Exception('Failed to decode img2img base image.');
+  }
+  final base = img.bakeOrientation(decoded);
+  Uint8List pngBytes;
+  if (base.width == input.targetWidth && base.height == input.targetHeight) {
+    final raw = input.imageBytes;
+    final alreadyPng = raw.length > 8 &&
+        raw[0] == 0x89 &&
+        raw[1] == 0x50 &&
+        raw[2] == 0x4E &&
+        raw[3] == 0x47;
+    pngBytes = alreadyPng ? raw : Uint8List.fromList(img.encodePng(base));
+  } else {
+    final scale = max(
+      input.targetWidth / base.width,
+      input.targetHeight / base.height,
+    );
+    final scaledWidth = max(input.targetWidth, (base.width * scale).round());
+    final scaledHeight = max(input.targetHeight, (base.height * scale).round());
+    var resized = img.copyResize(
+      base,
+      width: scaledWidth,
+      height: scaledHeight,
+      interpolation: img.Interpolation.cubic,
+    );
+    resized = img.copyCrop(
+      resized,
+      x: ((scaledWidth - input.targetWidth) / 2).round(),
+      y: ((scaledHeight - input.targetHeight) / 2).round(),
+      width: input.targetWidth,
+      height: input.targetHeight,
+    );
+    pngBytes = Uint8List.fromList(img.encodePng(resized));
+  }
+  return I2iRequestPlan(
+    imageB64: base64Encode(pngBytes),
+    maskB64: null,
+    blendMaskB64: null,
+    width: input.targetWidth,
+    height: input.targetHeight,
+    strength: input.strength,
+    noise: input.noise,
+    addOriginalImage: input.addOriginalImage,
+    composite: null,
+    summary: 'img2img ${base.width}x${base.height} -> '
+        '${input.targetWidth}x${input.targetHeight}, '
+        'strength ${input.strength.toStringAsFixed(2)}, '
+        'noise ${input.noise.toStringAsFixed(2)}',
+  );
+}
+
+class _FocusPreviewInput {
+  final Uint8List? maskBytes;
+  final int imageWidth;
+  final int imageHeight;
+  final int maxArea;
+  final int contextPx;
+  final bool autocropEnabled;
+  final CropRect? manualFrame;
+
+  const _FocusPreviewInput({
+    required this.maskBytes,
+    required this.imageWidth,
+    required this.imageHeight,
+    required this.maxArea,
+    required this.contextPx,
+    required this.autocropEnabled,
+    required this.manualFrame,
+  });
+}
+
+FocusInpaintBatch? _planFocusPreview(_FocusPreviewInput input) {
+  MaskCellGrid? cells;
+  final maskBytes = input.maskBytes;
+  if (maskBytes != null) {
+    final mask = img.decodePng(maskBytes) ?? img.decodeImage(maskBytes);
+    if (mask == null) return null;
+    cells = maskCellGridFromPixels(
+      imageWidth: input.imageWidth,
+      imageHeight: input.imageHeight,
+      maskPixelAt: (x, y) {
+        final mx = mask.width == input.imageWidth
+            ? x
+            : ((x * mask.width) / input.imageWidth)
+                .floor()
+                .clamp(0, mask.width - 1);
+        final my = mask.height == input.imageHeight
+            ? y
+            : ((y * mask.height) / input.imageHeight)
+                .floor()
+                .clamp(0, mask.height - 1);
+        return mask.getPixel(mx, my).r > 127;
+      },
+    );
+    if (cells.isEmpty) return null;
+  }
+  final manual = input.manualFrame;
+  if (manual != null) {
+    final plan = planManualFocusInpaint(
+      imageWidth: input.imageWidth,
+      imageHeight: input.imageHeight,
+      cells: cells,
+      frame: manual,
+      maxArea: input.maxArea,
+      contextPx: input.contextPx,
+    );
+    if (plan != null) {
+      return FocusInpaintBatch(
+        tiles: [plan],
+        splitMode: FocusSplitMode.none,
+        serial: true,
+      );
+    }
+  }
+  if (cells == null) return null;
+  if (!input.autocropEnabled ||
+      !autocropAppliesToImage(input.imageWidth, input.imageHeight)) {
+    return null;
+  }
+  return planFocusInpaintBatch(
+    imageWidth: input.imageWidth,
+    imageHeight: input.imageHeight,
+    cells: cells,
+    maxArea: input.maxArea,
+    contextPx: input.contextPx,
+  );
+}
 
 /// Composite instructions for pasting a focus-inpainting response back into
 /// the original image: take [contentWidth] x [contentHeight] pixels at
@@ -35,7 +191,12 @@ class AutocropCompositeInfo {
 /// Everything the payload builder needs for one img2img / infill request.
 class I2iRequestPlan {
   final String imageB64;
+
+  /// Full request-size, opaque black/white mask sent to NovelAI.
   final String? maskB64;
+
+  /// Transparent/white 1/8 latent mask used only for local feathering.
+  final String? blendMaskB64;
   final int width;
   final int height;
   final double strength;
@@ -50,6 +211,7 @@ class I2iRequestPlan {
   const I2iRequestPlan({
     required this.imageB64,
     required this.maskB64,
+    this.blendMaskB64,
     required this.width,
     required this.height,
     required this.strength,
@@ -60,6 +222,32 @@ class I2iRequestPlan {
   });
 
   bool get isInpaint => maskB64 != null;
+
+  I2iRequestPlan withRequestParameters({
+    required double strength,
+    required double noise,
+    required bool addOriginalImage,
+  }) {
+    final parameterText = isInpaint
+        ? 'strength ${strength.toStringAsFixed(2)}'
+        : 'strength ${strength.toStringAsFixed(2)}, '
+            'noise ${noise.toStringAsFixed(2)}';
+    return I2iRequestPlan(
+      imageB64: imageB64,
+      maskB64: maskB64,
+      blendMaskB64: blendMaskB64,
+      width: width,
+      height: height,
+      strength: strength,
+      noise: noise,
+      addOriginalImage: addOriginalImage,
+      composite: composite,
+      summary: summary.replaceFirst(
+        RegExp(r'strength \d+(?:\.\d+)?(?:, noise \d+(?:\.\d+)?)?$'),
+        parameterText,
+      ),
+    );
+  }
 }
 
 /// One inpainting generation: a single request, or several focus tiles that
@@ -98,6 +286,22 @@ class _PlanCacheEntry {
   });
 }
 
+class _BatchCacheEntry {
+  final int configId;
+  final int revision;
+  final int targetWidth;
+  final int targetHeight;
+  final I2iRequestBatch batch;
+
+  const _BatchCacheEntry({
+    required this.configId,
+    required this.revision,
+    required this.targetWidth,
+    required this.targetHeight,
+    required this.batch,
+  });
+}
+
 /// Builds [I2iRequestPlan]s and composites autocrop responses.
 ///
 /// Image decoding / encoding is expensive, so plans are cached per
@@ -109,6 +313,7 @@ class PrepareI2iRequestUseCase {
   PrepareI2iRequestUseCase({required this.config});
 
   static final List<_PlanCacheEntry> _planCache = [];
+  static final List<_BatchCacheEntry> _batchCache = [];
   static const int _planCacheLimit = 4;
 
   static img.Image? _decodedBase;
@@ -120,12 +325,36 @@ class PrepareI2iRequestUseCase {
 
   static void clearCache() {
     _planCache.clear();
+    _batchCache.clear();
     _decodedBase = null;
     _decodedBaseConfigId = -1;
     _decodedBaseRevision = -1;
     _decodedMask = null;
     _decodedMaskConfigId = -1;
     _decodedMaskRevision = -1;
+  }
+
+  /// Plans only the visible focus frames. It decodes the mask on a background
+  /// isolate and skips base-image cropping/PNG encoding, so the page can show
+  /// Autocrop immediately without blocking slider interaction.
+  Future<FocusInpaintBatch?> planFocusPreview({
+    required int targetWidth,
+    required int targetHeight,
+  }) async {
+    if (!config.hasImage || !config.hasInpaintSelection) return null;
+    return compute(
+      _planFocusPreview,
+      _FocusPreviewInput(
+        maskBytes: config.maskBytes,
+        imageWidth: config.width,
+        imageHeight: config.height,
+        maxArea: areaCapForSize(targetWidth, targetHeight),
+        contextPx: config.contextPx,
+        autocropEnabled: config.autocropEnabled,
+        manualFrame: config.manualFocusFrame,
+      ),
+      debugLabel: 'plan-inpaint-focus-preview',
+    );
   }
 
   /// Builds the full request batch for one generation: a single img2img /
@@ -135,19 +364,82 @@ class PrepareI2iRequestUseCase {
     required int targetHeight,
   }) async {
     if (!config.hasImage) return null;
-    if (!config.hasMask) {
+    final configId = identityHashCode(config);
+    for (final entry in _batchCache) {
+      if (entry.configId == configId &&
+          entry.revision == config.planRevision &&
+          entry.targetWidth == targetWidth &&
+          entry.targetHeight == targetHeight) {
+        return _withCurrentParameters(entry.batch);
+      }
+    }
+
+    late final I2iRequestBatch batch;
+    if (!config.hasInpaintSelection) {
       final plan = await call(
         targetWidth: targetWidth,
         targetHeight: targetHeight,
       );
       if (plan == null) return null;
-      return I2iRequestBatch(
+      batch = I2iRequestBatch(
         plans: [plan],
         serial: true,
         summary: plan.summary,
       );
+    } else {
+      batch = _buildInpaintBatch(targetWidth, targetHeight);
     }
-    return _buildInpaintBatch(targetWidth, targetHeight);
+    _batchCache.add(_BatchCacheEntry(
+      configId: configId,
+      revision: config.planRevision,
+      targetWidth: targetWidth,
+      targetHeight: targetHeight,
+      batch: batch,
+    ));
+    while (_batchCache.length > _planCacheLimit) {
+      _batchCache.removeAt(0);
+    }
+    return _withCurrentParameters(batch);
+  }
+
+  I2iRequestBatch _withCurrentParameters(I2iRequestBatch batch) {
+    final plans = batch.plans
+        .map(
+          (plan) => plan.withRequestParameters(
+            strength: config.strength,
+            noise: config.noise,
+            addOriginalImage: config.addOriginalImage,
+          ),
+        )
+        .toList(growable: false);
+    return I2iRequestBatch(
+      plans: plans,
+      serial: batch.serial,
+      summary: batch.isSplit ? batch.summary : plans.first.summary,
+    );
+  }
+
+  /// Prepares a plain img2img request on a background isolate. Enhance uses
+  /// this path so decode, resize, PNG encode and base64 conversion never block
+  /// the UI isolate before the request spinner can appear.
+  Future<I2iRequestPlan?> preparePlainImg2ImgInBackground({
+    required int targetWidth,
+    required int targetHeight,
+  }) async {
+    final bytes = config.imageBytes;
+    if (bytes == null || config.hasInpaintSelection) return null;
+    return compute(
+      _preparePlainI2iPlan,
+      _PlainI2iPrepareInput(
+        imageBytes: bytes,
+        targetWidth: targetWidth,
+        targetHeight: targetHeight,
+        strength: config.strength,
+        noise: config.noise,
+        addOriginalImage: config.addOriginalImage,
+      ),
+      debugLabel: 'prepare-enhance-img2img',
+    );
   }
 
   /// Builds (or returns a cached) single request plan. For a split mask this
@@ -165,19 +457,23 @@ class PrepareI2iRequestUseCase {
     final configId = identityHashCode(config);
     for (final entry in _planCache) {
       if (entry.configId == configId &&
-          entry.revision == config.revision &&
+          entry.revision == config.planRevision &&
           entry.targetWidth == targetWidth &&
           entry.targetHeight == targetHeight) {
-        return entry.plan;
+        return entry.plan.withRequestParameters(
+          strength: config.strength,
+          noise: config.noise,
+          addOriginalImage: config.addOriginalImage,
+        );
       }
     }
 
-    final plan = config.hasMask
+    final plan = config.hasInpaintSelection
         ? _buildInpaintBatch(targetWidth, targetHeight).plans.first
         : _buildImg2ImgPlan(targetWidth, targetHeight);
     _planCache.add(_PlanCacheEntry(
       configId: configId,
-      revision: config.revision,
+      revision: config.planRevision,
       targetWidth: targetWidth,
       targetHeight: targetHeight,
       plan: plan,
@@ -185,14 +481,18 @@ class PrepareI2iRequestUseCase {
     while (_planCache.length > _planCacheLimit) {
       _planCache.removeAt(0);
     }
-    return plan;
+    return plan.withRequestParameters(
+      strength: config.strength,
+      noise: config.noise,
+      addOriginalImage: config.addOriginalImage,
+    );
   }
 
   img.Image _requireBaseImage() {
     final configId = identityHashCode(config);
     if (_decodedBase != null &&
         _decodedBaseConfigId == configId &&
-        _decodedBaseRevision == config.revision) {
+        _decodedBaseRevision == config.planRevision) {
       return _decodedBase!;
     }
     final decoded = img.decodeImage(config.imageBytes!);
@@ -202,7 +502,7 @@ class PrepareI2iRequestUseCase {
     final baked = img.bakeOrientation(decoded);
     _decodedBase = baked;
     _decodedBaseConfigId = configId;
-    _decodedBaseRevision = config.revision;
+    _decodedBaseRevision = config.planRevision;
     return baked;
   }
 
@@ -210,7 +510,7 @@ class PrepareI2iRequestUseCase {
     final configId = identityHashCode(config);
     if (_decodedMask != null &&
         _decodedMaskConfigId == configId &&
-        _decodedMaskRevision == config.revision) {
+        _decodedMaskRevision == config.planRevision) {
       return _decodedMask!;
     }
     final decoded = img.decodePng(config.maskBytes!);
@@ -219,7 +519,7 @@ class PrepareI2iRequestUseCase {
     }
     _decodedMask = decoded;
     _decodedMaskConfigId = configId;
-    _decodedMaskRevision = config.revision;
+    _decodedMaskRevision = config.planRevision;
     return decoded;
   }
 
@@ -253,6 +553,7 @@ class PrepareI2iRequestUseCase {
     return I2iRequestPlan(
       imageB64: imageB64,
       maskB64: null,
+      blendMaskB64: null,
       width: targetWidth,
       height: targetHeight,
       strength: config.strength,
@@ -269,7 +570,7 @@ class PrepareI2iRequestUseCase {
   /// Builds one focus tile request from its plan.
   I2iRequestPlan _buildFocusTile({
     required img.Image base,
-    required img.Image mask,
+    required img.Image? mask,
     required FocusInpaintPlan plan,
     required String label,
   }) {
@@ -296,7 +597,7 @@ class PrepareI2iRequestUseCase {
       dstX: plan.contentOffsetX,
       dstY: plan.contentOffsetY,
     );
-    final maskPng = _renderFocusMask(
+    final masks = _renderFocusMasks(
       mask: mask,
       imageWidth: base.width,
       imageHeight: base.height,
@@ -304,7 +605,8 @@ class PrepareI2iRequestUseCase {
     );
     return I2iRequestPlan(
       imageB64: base64Encode(img.encodePng(canvas)),
-      maskB64: base64Encode(maskPng),
+      maskB64: base64Encode(masks.request),
+      blendMaskB64: base64Encode(masks.blend),
       width: plan.requestWidth,
       height: plan.requestHeight,
       strength: config.strength,
@@ -325,21 +627,25 @@ class PrepareI2iRequestUseCase {
 
   I2iRequestBatch _buildInpaintBatch(int targetWidth, int targetHeight) {
     final base = _requireBaseImage();
-    final mask = _requireMaskImage();
-    final cells = maskCellGridFromPixels(
-      imageWidth: base.width,
-      imageHeight: base.height,
-      maskPixelAt: (x, y) => _maskPixelSet(mask, base.width, base.height, x, y),
-    );
-    if (cells.isEmpty) {
-      throw Exception(
-          'Inpainting mask is empty; paint the repaint area first.');
+    final mask = config.hasMask ? _requireMaskImage() : null;
+    MaskCellGrid? cells;
+    if (mask != null) {
+      cells = maskCellGridFromPixels(
+        imageWidth: base.width,
+        imageHeight: base.height,
+        maskPixelAt: (x, y) =>
+            _maskPixelSet(mask, base.width, base.height, x, y),
+      );
+      if (cells.isEmpty) {
+        throw Exception(
+            'Inpainting mask is empty; paint the repaint area first.');
+      }
     }
     final cap = areaCapForSize(targetWidth, targetHeight);
 
-    // A hand-drawn focus frame overrides the automatic search. Only the mask
-    // inside the frame is repainted; when the frame misses the mask or cannot
-    // be planned, fall through to the automatic path.
+    // A hand-drawn focus frame overrides the automatic search. With no mask,
+    // NovelAI repaints the whole inner region and keeps the Context Region.
+    // With a mask, only painted pixels inside the frame are repainted.
     final manualFrame = config.manualFocusFrame;
     if (manualFrame != null) {
       final plan = planManualFocusInpaint(
@@ -348,6 +654,7 @@ class PrepareI2iRequestUseCase {
         cells: cells,
         frame: manualFrame,
         maxArea: cap,
+        contextPx: config.contextPx,
       );
       if (plan != null) {
         final tile = _buildFocusTile(
@@ -364,12 +671,19 @@ class PrepareI2iRequestUseCase {
       }
     }
 
-    if (config.autocropEnabled) {
+    if (mask == null || cells == null) {
+      throw Exception(
+          'Maskless inpainting requires a valid manual Focus frame.');
+    }
+
+    if (config.autocropEnabled &&
+        autocropAppliesToImage(base.width, base.height)) {
       final batch = planFocusInpaintBatch(
         imageWidth: base.width,
         imageHeight: base.height,
         cells: cells,
         maxArea: cap,
+        contextPx: config.contextPx,
       );
       if (batch != null) {
         final plans = <I2iRequestPlan>[];
@@ -399,8 +713,8 @@ class PrepareI2iRequestUseCase {
       // refuses to shrink, so fall through to the whole-image path.
     }
 
-    // Autocrop off, or the repaint area is too large to focus on: send the
-    // whole image, scaled down to a compliant size.
+    // Autocrop off/inactive, or the repaint area is too large to focus on:
+    // send the whole image, scaled down to a compliant size.
     final requestSize = requestSizeForWindow(base.width, base.height, cap);
     final window = CropRect(x: 0, y: 0, w: base.width, h: base.height);
     img.Image whole = base;
@@ -412,7 +726,7 @@ class PrepareI2iRequestUseCase {
         interpolation: img.Interpolation.cubic,
       );
     }
-    final maskPng = _renderRequestMask(
+    final masks = _renderRequestMasks(
       mask: mask,
       imageWidth: base.width,
       imageHeight: base.height,
@@ -422,7 +736,8 @@ class PrepareI2iRequestUseCase {
     );
     final wholePlan = I2iRequestPlan(
       imageB64: base64Encode(img.encodePng(whole)),
-      maskB64: base64Encode(maskPng),
+      maskB64: base64Encode(masks.request),
+      blendMaskB64: base64Encode(masks.blend),
       width: requestSize.x,
       height: requestSize.y,
       strength: config.strength,
@@ -443,8 +758,8 @@ class PrepareI2iRequestUseCase {
   /// Renders the request-resolution mask for a focus plan: mask pixels are
   /// mapped through the outer frame and the content scale, quantized to the
   /// 8-px latent grid, and the padding around the content stays black.
-  Uint8List _renderFocusMask({
-    required img.Image mask,
+  _EncodedInpaintMasks _renderFocusMasks({
+    required img.Image? mask,
     required int imageWidth,
     required int imageHeight,
     required FocusInpaintPlan plan,
@@ -479,7 +794,14 @@ class PrepareI2iRequestUseCase {
         var found = false;
         for (var y = iy0; y < iy1 && !found; y++) {
           for (var x = ix0; x < ix1; x++) {
-            if (_maskPixelSet(mask, imageWidth, imageHeight, x, y)) {
+            if (x < plan.inner.x ||
+                x >= plan.inner.right ||
+                y < plan.inner.y ||
+                y >= plan.inner.bottom) {
+              continue;
+            }
+            if (mask == null ||
+                _maskPixelSet(mask, imageWidth, imageHeight, x, y)) {
               found = true;
               break;
             }
@@ -489,52 +811,75 @@ class PrepareI2iRequestUseCase {
       }
     }
 
-    final maskImage = img.Image(
-      width: plan.requestWidth,
-      height: plan.requestHeight,
-      numChannels: 3,
+    return _encodeInpaintMasks(
+      cells,
+      cellsW,
+      cellsH,
+      plan.requestWidth,
+      plan.requestHeight,
     );
-    for (var y = 0; y < plan.requestHeight; y++) {
-      final cy = min(cellsH - 1, y ~/ maskCellSize);
-      for (var x = 0; x < plan.requestWidth; x++) {
-        final cx = min(cellsW - 1, x ~/ maskCellSize);
-        if (cells[cy * cellsW + cx] > 0) {
-          maskImage.setPixelRgb(x, y, 255, 255, 255);
-        }
-      }
-    }
-    return img.encodePng(maskImage);
   }
 
-  /// Pastes the response tile back into the original image and returns the
-  /// final PNG bytes (with the tile's stealth metadata re-embedded).
-  Future<Uint8List> compositeResponse({
+  /// Blends one infill response over its request source using the same
+  /// expanded, feathered latent mask as the official frontend.
+  Future<Uint8List> compositeInpaintResponse({
     required Uint8List responseBytes,
-    required AutocropCompositeInfo composite,
+    required I2iRequestPlan plan,
   }) async {
-    final canvas = img.Image.from(_requireBaseImage());
-    pasteTileInto(
+    if (!plan.isInpaint) {
+      throw ArgumentError('The request plan is not an infill request.');
+    }
+    final canvas = plan.composite == null
+        ? _decodeRequestImage(plan)
+        : img.Image.from(_requireBaseImage());
+    blendInpaintTileInto(
       canvas: canvas,
       responseBytes: responseBytes,
-      composite: composite,
+      plan: plan,
     );
     return finishComposite(canvas: canvas, responseBytes: responseBytes);
   }
 
-  /// Pastes one focus tile's response onto [canvas] in place, so a split mask
-  /// accumulates all of its tiles onto the same image.
-  void pasteTileInto({
+  /// Blends one focus tile onto [canvas] in place, so a split mask accumulates
+  /// all of its softly feathered tiles onto the same image.
+  void blendInpaintTileInto({
     required img.Image canvas,
     required Uint8List responseBytes,
-    required AutocropCompositeInfo composite,
+    required I2iRequestPlan plan,
   }) {
     final response = img.decodePng(responseBytes);
     if (response == null) {
       throw Exception('Failed to decode generated tile for compositing.');
     }
+    if (!plan.isInpaint) {
+      throw ArgumentError('The request plan is not an infill request.');
+    }
+    if (response.width != plan.width || response.height != plan.height) {
+      throw Exception(
+        'Response ${response.width}x${response.height} does not match the '
+        'planned infill size ${plan.width}x${plan.height}.',
+      );
+    }
+
+    final featheredMask = _buildOfficialBlendAlpha(plan);
+    var maskedResponse = _applyAlphaMask(response, featheredMask);
+    final composite = plan.composite;
+    if (composite == null) {
+      if (canvas.width != maskedResponse.width ||
+          canvas.height != maskedResponse.height) {
+        throw Exception(
+          'The infill source canvas does not match the response size.',
+        );
+      }
+      img.compositeImage(canvas, maskedResponse);
+      return;
+    }
+
     final outer = composite.outer;
-    if (response.width < composite.contentOffsetX + composite.contentWidth ||
-        response.height < composite.contentOffsetY + composite.contentHeight) {
+    if (maskedResponse.width <
+            composite.contentOffsetX + composite.contentWidth ||
+        maskedResponse.height <
+            composite.contentOffsetY + composite.contentHeight) {
       throw Exception(
         'Response ${response.width}x${response.height} is smaller than the '
         'planned content area; cannot composite.',
@@ -544,7 +889,7 @@ class PrepareI2iRequestUseCase {
     // Cut the content out of the request canvas, then scale it back to the
     // outer frame's own resolution.
     var content = img.copyCrop(
-      response,
+      maskedResponse,
       x: composite.contentOffsetX,
       y: composite.contentOffsetY,
       width: composite.contentWidth,
@@ -562,7 +907,131 @@ class PrepareI2iRequestUseCase {
     _pasteIntersection(canvas, content, outer);
   }
 
-  /// A canvas seeded with the base image, ready for [pasteTileInto].
+  img.Image _decodeRequestImage(I2iRequestPlan plan) {
+    final decoded = img.decodePng(base64Decode(plan.imageB64)) ??
+        img.decodeImage(base64Decode(plan.imageB64));
+    if (decoded == null) {
+      throw Exception('Failed to decode the infill request source image.');
+    }
+    return img.Image.from(decoded);
+  }
+
+  Uint8List _buildOfficialBlendAlpha(I2iRequestPlan plan) {
+    final blendMaskB64 = plan.blendMaskB64;
+    if (blendMaskB64 == null) {
+      throw Exception('Infill plan is missing its local blend mask.');
+    }
+    final maskBytes = base64Decode(blendMaskB64);
+    final latent = img.decodePng(maskBytes) ?? img.decodeImage(maskBytes);
+    if (latent == null) {
+      throw Exception('Failed to decode the infill request mask.');
+    }
+    final expectedWidth = (plan.width / maskCellSize).ceil();
+    final expectedHeight = (plan.height / maskCellSize).ceil();
+    if (latent.width != expectedWidth || latent.height != expectedHeight) {
+      throw Exception(
+        'Infill mask ${latent.width}x${latent.height} does not match the '
+        'expected latent size ${expectedWidth}x$expectedHeight.',
+      );
+    }
+
+    const dilationRadius = 4;
+    final dilated = Uint8List(latent.width * latent.height);
+    for (var y = 0; y < latent.height; y++) {
+      for (var x = 0; x < latent.width; x++) {
+        final pixel = latent.getPixel(x, y);
+        if (pixel.a <= 155 || pixel.r <= 155) continue;
+        final y0 = max(0, y - dilationRadius);
+        final y1 = min(latent.height - 1, y + dilationRadius);
+        final x0 = max(0, x - dilationRadius);
+        final x1 = min(latent.width - 1, x + dilationRadius);
+        for (var dy = y0; dy <= y1; dy++) {
+          final row = dy * latent.width;
+          for (var dx = x0; dx <= x1; dx++) {
+            dilated[row + dx] = 255;
+          }
+        }
+      }
+    }
+
+    var scaled = Uint8List(plan.width * plan.height);
+    for (var y = 0; y < plan.height; y++) {
+      final sourceY = min(latent.height - 1, y ~/ maskCellSize);
+      final sourceRow = sourceY * latent.width;
+      final outputRow = y * plan.width;
+      for (var x = 0; x < plan.width; x++) {
+        final sourceX = min(latent.width - 1, x ~/ maskCellSize);
+        scaled[outputRow + x] = dilated[sourceRow + sourceX];
+      }
+    }
+
+    // The website worker applies radius-20 blur twice. A sliding-window blur
+    // keeps this linear in pixel count, which matters for 1 MP focus tiles.
+    scaled = _boxBlurAlpha(scaled, plan.width, plan.height, 20);
+    return _boxBlurAlpha(scaled, plan.width, plan.height, 20);
+  }
+
+  Uint8List _boxBlurAlpha(
+    Uint8List source,
+    int width,
+    int height,
+    int radius,
+  ) {
+    final window = radius * 2 + 1;
+    final horizontal = Uint8List(source.length);
+    final output = Uint8List(source.length);
+
+    for (var y = 0; y < height; y++) {
+      final row = y * width;
+      var sum = 0;
+      for (var offset = -radius; offset <= radius; offset++) {
+        sum += source[row + offset.clamp(0, width - 1)];
+      }
+      for (var x = 0; x < width; x++) {
+        horizontal[row + x] = (sum / window).round();
+        final removeX = (x - radius).clamp(0, width - 1);
+        final addX = (x + radius + 1).clamp(0, width - 1);
+        sum += source[row + addX] - source[row + removeX];
+      }
+    }
+
+    for (var x = 0; x < width; x++) {
+      var sum = 0;
+      for (var offset = -radius; offset <= radius; offset++) {
+        final sourceY = offset.clamp(0, height - 1);
+        sum += horizontal[sourceY * width + x];
+      }
+      for (var y = 0; y < height; y++) {
+        output[y * width + x] = (sum / window).round();
+        final removeY = (y - radius).clamp(0, height - 1);
+        final addY = (y + radius + 1).clamp(0, height - 1);
+        sum += horizontal[addY * width + x] - horizontal[removeY * width + x];
+      }
+    }
+    return output;
+  }
+
+  img.Image _applyAlphaMask(img.Image response, Uint8List mask) {
+    final output = response.convert(numChannels: 4);
+    for (var y = 0; y < output.height; y++) {
+      for (var x = 0; x < output.width; x++) {
+        final source = output.getPixel(x, y);
+        final alpha =
+            (source.a.toInt() * mask[y * output.width + x] / 255).round();
+        output.setPixelRgba(
+          x,
+          y,
+          source.r,
+          source.g,
+          source.b,
+          alpha,
+        );
+      }
+    }
+    return output;
+  }
+
+  /// A canvas seeded with the base image, ready for [blendInpaintTileInto].
   img.Image newCompositeCanvas() => img.Image.from(_requireBaseImage());
 
   /// Encodes the finished canvas, re-embedding the response's stealth
@@ -645,7 +1114,7 @@ class PrepareI2iRequestUseCase {
 
   /// Renders the request-resolution mask PNG (white = repaint), quantized to
   /// the server's 8-px cells like the official web editor.
-  Uint8List _renderRequestMask({
+  _EncodedInpaintMasks _renderRequestMasks({
     required img.Image mask,
     required int imageWidth,
     required int imageHeight,
@@ -684,26 +1153,63 @@ class PrepareI2iRequestUseCase {
       }
     }
 
-    final maskImage = img.Image(
+    return _encodeInpaintMasks(
+      cells,
+      cellsW,
+      cellsH,
+      requestWidth,
+      requestHeight,
+    );
+  }
+
+  _EncodedInpaintMasks _encodeInpaintMasks(
+    Uint8List cells,
+    int cellsWidth,
+    int cellsHeight,
+    int requestWidth,
+    int requestHeight,
+  ) {
+    final blendMask = img.Image(
+      width: cellsWidth,
+      height: cellsHeight,
+      numChannels: 4,
+    );
+    final requestMask = img.Image(
       width: requestWidth,
       height: requestHeight,
       numChannels: 3,
     );
-    for (var y = 0; y < requestHeight; y++) {
-      final cy = min(cellsH - 1, y ~/ maskCellSize);
-      for (var x = 0; x < requestWidth; x++) {
-        final cx = min(cellsW - 1, x ~/ maskCellSize);
-        if (cells[cy * cellsW + cx] > 0) {
-          maskImage.setPixelRgb(x, y, 255, 255, 255);
+    img.fill(requestMask, color: img.ColorRgb8(0, 0, 0));
+    for (var y = 0; y < cellsHeight; y++) {
+      for (var x = 0; x < cellsWidth; x++) {
+        if (cells[y * cellsWidth + x] > 0) {
+          blendMask.setPixelRgba(x, y, 255, 255, 255, 255);
+          final x1 = x * maskCellSize;
+          final y1 = y * maskCellSize;
+          final x2 = min(requestWidth, x1 + maskCellSize) - 1;
+          final y2 = min(requestHeight, y1 + maskCellSize) - 1;
+          if (x2 >= x1 && y2 >= y1) {
+            img.fillRect(
+              requestMask,
+              x1: x1,
+              y1: y1,
+              x2: x2,
+              y2: y2,
+              color: img.ColorRgb8(255, 255, 255),
+            );
+          }
+        } else {
+          blendMask.setPixelRgba(x, y, 0, 0, 0, 0);
         }
       }
     }
-    return img.encodePng(maskImage);
+    return _EncodedInpaintMasks(
+      request: Uint8List.fromList(img.encodePng(requestMask)),
+      blend: Uint8List.fromList(img.encodePng(blendMask)),
+    );
   }
 
-  /// 1:1 paste of the tile onto the canvas at the window position, clipped to
-  /// the image bounds. Valid because add_original_image keeps unmasked pixels
-  /// identical to the input tile.
+  /// Alpha-composites a tile at the window position, clipped to image bounds.
   void _pasteIntersection(img.Image canvas, img.Image tile, CropRect window) {
     final ix = max(0, window.x);
     final iy = max(0, window.y);

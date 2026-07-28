@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:adaptive_theme/adaptive_theme.dart';
 import 'package:image/image.dart' as img;
 import 'package:easy_localization/easy_localization.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -16,6 +17,8 @@ import 'package:nai_casrand/data/models/settings.dart';
 import 'package:nai_casrand/data/models/vibe_config.dart';
 import 'package:nai_casrand/data/models/vibe_config_v4.dart';
 import 'package:nai_casrand/data/services/config_service.dart';
+import 'package:nai_casrand/data/services/proxy_detection_service.dart';
+import 'package:nai_casrand/ui/settings_page/view_models/settings_page_viewmodel.dart';
 import 'package:nai_casrand/ui/settings_page/widgets/settings_page_view.dart';
 
 class _TestAssetLoader extends AssetLoader {
@@ -132,7 +135,7 @@ void main() {
     await GetIt.instance.reset();
   });
 
-  Widget localizedSettingsPage() {
+  Widget localizedSettingsPage({SettingsPageViewmodel? viewmodel}) {
     return EasyLocalization(
       key: UniqueKey(),
       supportedLocales: const [Locale('en')],
@@ -152,33 +155,184 @@ void main() {
             localizationsDelegates: context.localizationDelegates,
             supportedLocales: context.supportedLocales,
             locale: context.locale,
-            home: SettingsPageView(),
+            home: SettingsPageView(viewmodel: viewmodel),
           ),
         ),
       ),
     );
   }
 
-  testWidgets('sequential progress memory is shown and defaults disabled', (
+  testWidgets('setup entry is combined and behavior toggles follow output', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    await tester.binding.setSurfaceSize(const Size(1200, 1400));
+    try {
+      await tester.pumpWidget(localizedSettingsPage());
+      await tester.pumpAndSettle();
+
+      final setup = find.byKey(const Key('api-proxy-settings-tile'));
+      final metadata = find.byKey(const Key('metadata-erase-enabled'));
+      final output = find.byKey(const Key('output-folder'));
+      final prefix = find.byKey(const Key('output-file-name-prefix'));
+      final remember = find.byKey(const Key('remember-sequential-progress'));
+      final confirmation = find.byKey(const Key('confirm-prompt-mode-switch'));
+
+      expect(setup, findsOneWidget);
+      expect(find.text('API & Proxy Settings'), findsOneWidget);
+      expect(find.byKey(const Key('proxy-settings-tile')), findsNothing);
+      expect(find.byKey(const Key('multi-token-manager-tile')), findsNothing);
+      expect(find.byType(CheckboxListTile), findsNothing);
+      expect(tester.getTopLeft(setup).dy,
+          lessThan(tester.getTopLeft(metadata).dy));
+      expect(tester.getTopLeft(metadata).dy,
+          lessThan(tester.getTopLeft(output).dy));
+      expect(
+          tester.getTopLeft(output).dy, lessThan(tester.getTopLeft(prefix).dy));
+      expect(tester.getTopLeft(prefix).dy,
+          lessThan(tester.getTopLeft(remember).dy));
+      expect(
+        tester.getTopLeft(remember).dy,
+        lessThan(tester.getTopLeft(confirmation).dy),
+      );
+
+      expect(GetIt.I<PayloadConfig>().settings.rememberSequentialProgress,
+          isFalse);
+      await tester.tap(remember);
+      await tester.pump();
+      expect(
+        GetIt.I<PayloadConfig>().settings.rememberSequentialProgress,
+        isTrue,
+      );
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+      await tester.binding.setSurfaceSize(null);
+    }
+  });
+
+  testWidgets('combined setup contains required API, optional APIs and proxy', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    try {
+      await tester.pumpWidget(localizedSettingsPage());
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('api-proxy-settings-tile')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('api-token-input')), findsOneWidget);
+      expect(find.text('NovelAI API Token (required)'), findsOneWidget);
+      expect(find.text('Multiple APIs (optional)'), findsOneWidget);
+      expect(
+        find.textContaining('Leave this unset for normal use'),
+        findsOneWidget,
+      );
+      expect(find.text('Proxy Settings'), findsOneWidget);
+      expect(find.byKey(const Key('proxy-settings-input')), findsOneWidget);
+      expect(find.byKey(const Key('proxy-detect-button')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('api-tokens-optional-tile')));
+      await tester.pumpAndSettle();
+      expect(find.text('Multi-token concurrency'), findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('desktop proxy detection fills the edit field before confirm', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    try {
+      final proxyDetector = ProxyDetectionService(
+        ports: const [7890],
+        probe: (host, port, timeout) async => true,
+      );
+      final viewmodel = SettingsPageViewmodel(
+        proxyDetectionService: proxyDetector,
+      );
+      await tester.pumpWidget(localizedSettingsPage(viewmodel: viewmodel));
+      await tester.pumpAndSettle();
+
+      final setupTile = find.byKey(const Key('api-proxy-settings-tile'));
+      expect(setupTile, findsOneWidget);
+      await tester.ensureVisible(setupTile);
+      await tester.tap(setupTile);
+      await tester.pumpAndSettle();
+
+      expect(find.text('API & Proxy Settings'), findsNWidgets(2));
+      expect(find.byKey(const Key('proxy-detect-button')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('proxy-detect-button')));
+      await tester.pumpAndSettle();
+
+      final input = tester.widget<TextField>(
+        find.byKey(const Key('proxy-settings-input')),
+      );
+      expect(input.controller?.text, '127.0.0.1:7890');
+      expect(
+        find.text('Local proxy detected: 127.0.0.1:7890'),
+        findsOneWidget,
+      );
+      expect(GetIt.I<PayloadConfig>().settings.proxy, isEmpty);
+
+      await tester.tap(find.text('Confirm'));
+      await tester.pumpAndSettle();
+
+      expect(GetIt.I<PayloadConfig>().settings.proxy, '127.0.0.1:7890');
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('welcome navigation request opens combined setup directly', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    try {
+      final navigation = GetIt.I<NavigationRequest>();
+      navigation.goToApiProxySettings();
+      expect(navigation.requestedDestination.value, AppDestination.settings);
+      expect(
+        testTranslations['welcome_message_markdown'],
+        contains('#jump_to_api_proxy_settings'),
+      );
+      expect(
+        testTranslations['welcome_message_markdown'],
+        isNot(contains('#jump_to_settings')),
+      );
+
+      await tester.pumpWidget(localizedSettingsPage());
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('api-token-input')), findsOneWidget);
+      expect(find.byKey(const Key('proxy-settings-input')), findsOneWidget);
+      expect(find.byKey(const Key('proxy-detect-button')), findsOneWidget);
+      expect(navigation.takeOpenApiProxySettingsRequest(), isFalse);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('mobile proxy settings follow VPN or TUN when left blank', (
     tester,
   ) async {
     await tester.pumpWidget(localizedSettingsPage());
     await tester.pumpAndSettle();
 
-    final tile = find.widgetWithText(
-      CheckboxListTile,
-      'Remember sequential progress',
-    );
-    expect(tile, findsOneWidget);
-    expect(
-        GetIt.I<PayloadConfig>().settings.rememberSequentialProgress, isFalse);
+    final setupTile = find.byKey(const Key('api-proxy-settings-tile'));
+    await tester.ensureVisible(setupTile);
+    await tester.tap(setupTile);
+    await tester.pumpAndSettle();
 
-    await tester.tap(tile);
-    await tester.pump();
-
+    expect(find.byKey(const Key('proxy-detect-button')), findsNothing);
     expect(
-      GetIt.I<PayloadConfig>().settings.rememberSequentialProgress,
-      isTrue,
+      find.text(
+        'Leave this blank when your mobile proxy app uses VPN / TUN mode. '
+        'Enter a value only when the proxy app explicitly provides a local '
+        'HTTP proxy port.',
+      ),
+      findsOneWidget,
     );
   });
 

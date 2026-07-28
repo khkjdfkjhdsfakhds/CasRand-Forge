@@ -160,7 +160,9 @@ class NavigationViewState extends State<NavigationView> {
 
   @override
   Widget build(BuildContext context) {
-    final appBar = NavigationAppBar();
+    final appBar = NavigationAppBar(
+      onRestoreWelcomeMessage: _restoreWelcomeMessage,
+    );
     final body = Scaffold(
       appBar: appBar,
       body: MetadataDropArea(
@@ -184,6 +186,17 @@ class NavigationViewState extends State<NavigationView> {
           }
         },
         child: body);
+  }
+
+  void _restoreWelcomeMessage() {
+    if (!mounted) return;
+    final config = GetIt.I<PayloadConfig>();
+    config.settings.welcomeMessageVersion = '';
+    GetIt.I<ConfigService>().saveConfig(config.toJson());
+    _changeDestination(AppDestination.generation);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _showWelcomeDialog();
+    });
   }
 
   Widget getBody() {
@@ -294,9 +307,11 @@ class NavigationViewState extends State<NavigationView> {
               data: tr('welcome_message_markdown'),
               onTapLink: (text, href, title) {
                 if (href == null) return;
-                if (href == '#jump_to_settings') {
-                  _changeDestination(AppDestination.settings);
+                if (href == '#jump_to_api_proxy_settings') {
                   Navigator.of(dialogContext).pop();
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) _navigationRequest.goToApiProxySettings();
+                  });
                 } else {
                   // Launch link
                   launchUrl(Uri.parse(href));

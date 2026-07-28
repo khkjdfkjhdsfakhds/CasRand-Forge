@@ -8,12 +8,22 @@ import '../../../core/constants/image_formats.dart';
 import '../../../data/models/vibe_config.dart';
 
 class VibeConfigListViewmodel extends ChangeNotifier {
-  List<VibeConfig> get vibeList => GetIt.I<PayloadConfig>().vibeConfigList;
+  PayloadConfig get payloadConfig => GetIt.I<PayloadConfig>();
+  List<VibeConfig> get vibeList => payloadConfig.vibeConfigList;
+  bool get featureEnabled => payloadConfig.vibeEnabled;
+
+  void setFeatureEnabled(bool value) {
+    payloadConfig.setVibeEnabled(value);
+    notifyListeners();
+  }
 
   VibeConfigListViewmodel();
 
   void removeVibeConfigAt(int idx) {
     vibeList.removeAt(idx);
+    if (!payloadConfig.hasVibeResources) {
+      payloadConfig.clearVibeResourceState();
+    }
     notifyListeners();
   }
 
@@ -23,24 +33,31 @@ class VibeConfigListViewmodel extends ChangeNotifier {
     if (image == null) return;
     final bytes = await image.readAsBytes();
     var newConfig = VibeConfig.fromBytes(bytes, image.name, 1.0, 0.3);
+    final wasEmpty = !payloadConfig.hasVibeResources;
     vibeList.add(newConfig);
+    payloadConfig.noteVibeImported(wasEmpty: wasEmpty);
     notifyListeners();
   }
 
   Future<void> handleVibeDropEvent(PerformDropEvent event) async {
+    final wasEmpty = !payloadConfig.hasVibeResources;
     final item = event.session.items.first;
     final reader = item.dataReader!;
     reader.getFile(imageFormat, (file) async {
       final data = await file.readAll();
       vibeList.add(
           VibeConfig.fromBytes(data, file.fileName ?? 'Unnamed Vibe', 1, 0.3));
+      payloadConfig.noteVibeImported(wasEmpty: wasEmpty);
+      notifyListeners();
     });
-    notifyListeners();
   }
 
   void removeConfigAtIndex(int index) {
     if (index >= 0 && index < vibeList.length) {
       vibeList.removeAt(index);
+      if (!payloadConfig.hasVibeResources) {
+        payloadConfig.clearVibeResourceState();
+      }
       notifyListeners();
     }
   }

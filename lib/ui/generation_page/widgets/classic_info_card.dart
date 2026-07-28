@@ -13,11 +13,16 @@ import 'package:nai_casrand/ui/generation_page/widgets/info_card.dart';
 /// generated prompt side by side, plus the Anlas cost of the generation.
 class ClassicInfoCard extends StatelessWidget {
   final Command<void, InfoCardContent> command;
+  final VoidCallback? onOpenDetail;
 
   CommandStatus get commandStatus => GetIt.I();
   Settings get settings => GetIt.I<PayloadConfig>().settings;
 
-  const ClassicInfoCard({super.key, required this.command});
+  const ClassicInfoCard({
+    super.key,
+    required this.command,
+    this.onOpenDetail,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -51,7 +56,7 @@ class ClassicInfoCard extends StatelessWidget {
       ),
       clipBehavior: Clip.hardEdge,
       child: InkWell(
-        onTap: () => _showDetail(context),
+        onTap: onOpenDetail ?? () => _showDetail(context),
         child: body,
       ),
     );
@@ -165,15 +170,37 @@ class ClassicInfoCard extends StatelessWidget {
       chips.add(_chip(context, content.tokenLabel!, Icons.key_outlined));
     }
     if (content.anlasCost != null || content.anlasRemaining != null) {
-      final label = content.anlasCost != null
-          ? tr('anlas_info', namedArgs: {
-              'cost': content.anlasCost.toString(),
-              'remaining': content.anlasRemaining?.toString() ?? '?',
-            })
-          : tr('anlas_remaining_only', namedArgs: {
-              'remaining': content.anlasRemaining.toString(),
-            });
+      final String label;
+      if (content.anlasCost != null && content.anlasCostIsEstimated) {
+        final key =
+            content.anlasRemaining != null && content.batchAnlasCost == null
+                ? 'anlas_estimated_with_remaining'
+                : 'anlas_estimated_info';
+        label = tr(key, namedArgs: {
+          'cost': content.anlasCost.toString(),
+          'remaining': content.anlasRemaining?.toString() ?? '?',
+        });
+      } else if (content.anlasCost != null) {
+        label = tr('anlas_info', namedArgs: {
+          'cost': content.anlasCost.toString(),
+          'remaining': content.anlasRemaining?.toString() ?? '?',
+        });
+      } else {
+        label = tr('anlas_remaining_only', namedArgs: {
+          'remaining': content.anlasRemaining.toString(),
+        });
+      }
       chips.add(_chip(context, label, Icons.toll_outlined));
+    }
+    if (content.batchAnlasCost != null) {
+      chips.add(_chip(
+        context,
+        tr('anlas_batch_info', namedArgs: {
+          'cost': content.batchAnlasCost.toString(),
+          'remaining': content.anlasRemaining?.toString() ?? '?',
+        }),
+        Icons.receipt_long_outlined,
+      ));
     }
     if (chips.isEmpty) return const SizedBox.shrink();
     return Wrap(spacing: 6, runSpacing: 4, children: chips);

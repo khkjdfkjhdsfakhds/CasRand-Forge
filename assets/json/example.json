@@ -1,6 +1,7 @@
 {
     "settings": {
-        "api_key": "pst-abc"
+        "api_key": "pst-abc",
+        "generation_interval": 2
     },
     "prompt_config": {
         "selectionMethod": "all",
@@ -132,7 +133,7 @@
                 "filter": "",
                 "depth": 1,
                 "strs": [
-                    "best quality, amazing quality, very aesthetic, absurdres"
+                    "very aesthetic, masterpiece, no text"
                 ],
                 "prompts": []
             }
@@ -150,7 +151,7 @@
         "filter": "",
         "depth": 0,
         "strs": [
-            "lowres, {bad}, error, fewer, extra, missing, worst quality, jpeg artifacts, bad quality, watermark, unfinished, displeasing, chromatic aberration, signature, extra digits, artistic error, username, scan, [abstract], bad anatomy, bad hands"
+            "lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone, screentone, multiple views, logo, too many watermarks, negative space, blank page"
         ],
         "prompts": []
     },
@@ -174,6 +175,6 @@
         "uncond_scale": 1,
         "cfg_rescale": 0.0,
         "noise_schedule": "native",
-        "negative_prompt": "lowres, {bad}, error, fewer, extra, missing, worst quality, jpeg artifacts, bad quality, watermark, unfinished, displeasing, chromatic aberration, signature, extra digits, artistic error, username, scan, [abstract], bad anatomy, bad hands"
+        "negative_prompt": "lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone, screentone, multiple views, logo, too many watermarks, negative space, blank page"
     }
 }

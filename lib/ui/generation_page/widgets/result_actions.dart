@@ -57,7 +57,12 @@ class ResultActions {
   void _sendToI2i(BuildContext context, {required I2iEntryMode mode}) {
     final bytes = content.imageBytes;
     if (bytes == null) return;
+    final replacing = _payloadConfig.i2iConfig.hasImage;
     _payloadConfig.i2iConfig.setImage(Uint8List.fromList(bytes));
+    _payloadConfig.noteI2iImported(
+      replacing: replacing,
+      explicitUse: true,
+    );
     _navigation.goToI2i(mode);
   }
 
@@ -140,6 +145,16 @@ String formatAnlasTooltip(AnlasCost? cost, {bool isUpperBound = false}) {
     isUpperBound
         ? 'generation_cost_tooltip_upper_bound'
         : 'generation_cost_tooltip',
+    namedArgs: {'anlas': cost.anlas.toString()},
+  );
+}
+
+/// Reader-facing hover text for tools whose displayed cost is an estimate.
+String formatEstimatedAnlasTooltip(AnlasCost? cost) {
+  if (cost == null) return tr('estimated_generation_cost_pending');
+  if (cost.isFreeUnderOpus) return tr('estimated_generation_cost_free');
+  return tr(
+    'estimated_generation_cost_tooltip',
     namedArgs: {'anlas': cost.anlas.toString()},
   );
 }

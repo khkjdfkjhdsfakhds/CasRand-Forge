@@ -1,6 +1,5 @@
 import 'dart:convert';
 
-import 'package:http/http.dart' as http;
 import 'package:nai_casrand/data/services/api_service.dart';
 
 /// Subscription snapshot: Anlas balance plus the tier that decides whether
@@ -19,38 +18,86 @@ class SubscriptionInfo {
 
 /// Read-only NovelAI account queries (Anlas balance).
 class AccountService {
+  static final AccountService shared = AccountService(
+    apiService: ApiService.shared,
+  );
+
   /// The legacy api.novelai.net host rejects third-party clients; the image
   /// host serves the same subscription payload.
   static const String subscriptionEndpoint =
       'https://image.novelai.net/user/subscription';
+
+  final ApiService _apiService;
+  final Duration cacheTtl;
+  final Duration requestTimeout;
+  final Map<String, ({DateTime fetchedAt, SubscriptionInfo info})> _cache = {};
+  final Map<String, Future<SubscriptionInfo?>> _inFlight = {};
+
+  AccountService({
+    ApiService? apiService,
+    this.cacheTtl = const Duration(minutes: 1),
+    this.requestTimeout = const Duration(seconds: 10),
+  }) : _apiService = apiService ?? ApiService.shared;
 
   /// Returns the Anlas balance (fixed + purchased training steps), or null
   /// when the query fails. Never throws.
   Future<int?> fetchAnlasBalance({
     required String token,
     required String proxy,
+    bool forceRefresh = false,
   }) async {
-    return (await fetchSubscription(token: token, proxy: proxy))?.anlas;
+    return (await fetchSubscription(
+      token: token,
+      proxy: proxy,
+      forceRefresh: forceRefresh,
+    ))
+        ?.anlas;
   }
 
   /// Returns the balance and tier, or null when the query fails.
   Future<SubscriptionInfo?> fetchSubscription({
     required String token,
     required String proxy,
+    bool forceRefresh = false,
   }) async {
     if (token.isEmpty) return null;
+    final key = '$proxy\u0000$token';
+    final cached = _cache[key];
+    if (!forceRefresh &&
+        cached != null &&
+        DateTime.now().difference(cached.fetchedAt) < cacheTtl) {
+      return cached.info;
+    }
+    final pending = _inFlight[key];
+    if (pending != null) return pending;
+
+    final future = _fetchSubscription(token: token, proxy: proxy);
+    _inFlight[key] = future;
+    try {
+      final info = await future;
+      if (info != null) {
+        _cache[key] = (fetchedAt: DateTime.now(), info: info);
+      }
+      return info;
+    } finally {
+      if (identical(_inFlight[key], future)) _inFlight.remove(key);
+    }
+  }
+
+  Future<SubscriptionInfo?> _fetchSubscription({
+    required String token,
+    required String proxy,
+  }) async {
     try {
       final url = Uri.parse(subscriptionEndpoint);
-      final headers = {
-        'authorization': 'Bearer $token',
-        'accept': 'application/json',
-      };
-      final client = ApiService().createHttpClient(proxy);
-      final response =
-          await (client == null
-                  ? http.get(url, headers: headers)
-                  : client.get(url, headers: headers))
-              .timeout(const Duration(seconds: 10));
+      final response = await _apiService.get(
+        url,
+        proxy: proxy,
+        headers: {
+          'authorization': 'Bearer $token',
+          'accept': 'application/json',
+        },
+      ).timeout(requestTimeout);
       if (response.statusCode != 200) return null;
       final data = json.decode(response.body);
       if (data is! Map<String, dynamic>) return null;
@@ -66,8 +113,7 @@ class AccountService {
       if (steps is Map) {
         final fixed = steps['fixedTrainingStepsLeft'];
         final purchased = steps['purchasedTrainingSteps'];
-        anlas =
-            (fixed is num ? fixed.toInt() : 0) +
+        anlas = (fixed is num ? fixed.toInt() : 0) +
             (purchased is num ? purchased.toInt() : 0);
       } else if (steps is num) {
         anlas = steps.toInt();
@@ -76,5 +122,15 @@ class AccountService {
     } catch (_) {
       return null;
     }
+  }
+
+  void invalidate({String? token, String? proxy}) {
+    _cache.removeWhere((key, _) {
+      final separator = key.indexOf('\u0000');
+      final cachedProxy = separator < 0 ? '' : key.substring(0, separator);
+      final cachedToken = separator < 0 ? key : key.substring(separator + 1);
+      return (token == null || token == cachedToken) &&
+          (proxy == null || proxy == cachedProxy);
+    });
   }
 }

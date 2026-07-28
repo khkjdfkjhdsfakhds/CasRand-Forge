@@ -42,6 +42,7 @@ void main() {
       ),
     ]);
     final viewmodel = PreciseReferenceListViewmodel();
+    viewmodel.setFeatureEnabled(true);
 
     expect(viewmodel.isSupported, isTrue);
     expect(viewmodel.activeReferenceCount, 1);
@@ -59,6 +60,29 @@ void main() {
 
     expect(config.strength, 0.0);
     expect(config.fidelity, 1.0);
+  });
+
+  test('manual disable survives additions, then deleting all resets it',
+      () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final sourceImage = img.Image(width: 64, height: 64);
+    img.fill(sourceImage, color: img.ColorRgb8(0, 120, 255));
+    final bytes = Uint8List.fromList(img.encodePng(sourceImage));
+    final payloadConfig = GetIt.I<PayloadConfig>();
+    final viewmodel = PreciseReferenceListViewmodel();
+
+    await viewmodel.addReferenceBytes(bytes, 'first.png');
+    expect(payloadConfig.preciseReferenceEnabled, isTrue);
+    viewmodel.setFeatureEnabled(false);
+    await viewmodel.addReferenceBytes(bytes, 'second.png');
+    expect(payloadConfig.preciseReferenceEnabled, isFalse);
+
+    viewmodel.removeConfigAtIndex(1);
+    viewmodel.removeConfigAtIndex(0);
+    expect(payloadConfig.preciseReferenceEnabled, isFalse);
+    await viewmodel.addReferenceBytes(bytes, 'third.png');
+    expect(payloadConfig.preciseReferenceEnabled, isTrue);
   });
 
   test('imported image is preprocessed to an official reference canvas',

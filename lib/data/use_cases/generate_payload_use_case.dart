@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:easy_localization/easy_localization.dart';
 import 'package:nai_casrand/core/constants/parameters.dart';
 import 'package:nai_casrand/data/models/character_config.dart';
@@ -57,10 +59,21 @@ class GeneratePayloadUseCase {
   /// switches to the corresponding action and uses the plan's request size.
   final I2iRequestPlan? i2iPlan;
 
+  /// Per-request overrides used by transient flows such as Enhance. They do
+  /// not mutate the user's saved prompt or seed settings.
+  final int? seedOverride;
+  final bool applyI2iAreaRandomSeed;
+  final String promptSuffix;
+  final Random _random;
+
   GeneratePayloadUseCase({
     required this.payloadConfig,
     this.i2iPlan,
-  });
+    this.seedOverride,
+    this.applyI2iAreaRandomSeed = false,
+    this.promptSuffix = '',
+    Random? random,
+  }) : _random = random ?? Random();
 
   ParamConfig get paramConfig => payloadConfig.paramConfig;
   PromptConfig get rootPromptConfig => payloadConfig.rootPromptConfig;
@@ -87,6 +100,10 @@ class GeneratePayloadUseCase {
       prompt: basePromptResult.toPrompt(),
       comment: basePromptResult.toComment(),
     );
+    final effectiveBasePrompt = _appendPromptSuffix(
+      basePair.prompt,
+      promptSuffix,
+    );
     final plan = i2iPlan;
     final paramPayload = plan == null
         ? paramConfig.getPayload()
@@ -96,6 +113,14 @@ class GeneratePayloadUseCase {
               height: plan.height,
             ),
           );
+    if (seedOverride != null) {
+      paramPayload['seed'] = seedOverride;
+    } else if (plan != null &&
+        applyI2iAreaRandomSeed &&
+        payloadConfig.i2iConfig.useRandomSeed) {
+      paramPayload['seed'] =
+          (_random.nextInt(1 << 16) << 16) | _random.nextInt(1 << 16);
+    }
     String payloadComment = basePair.comment;
 
     // Get character prompt
@@ -153,7 +178,7 @@ class GeneratePayloadUseCase {
     paramPayload['negative_prompt'] = negativePair.prompt;
     final v4Prompt = {
       'caption': {
-        'base_caption': basePair.prompt,
+        'base_caption': effectiveBasePrompt,
         'char_captions': v4CharPosCaptions,
       },
       'use_coords': !paramConfig.autoPosition,
@@ -170,10 +195,12 @@ class GeneratePayloadUseCase {
     paramPayload['v4_negative_prompt'] = v4NegPrompt;
     paramPayload['characterPrompts'] = characterPrompts;
 
-    final activePreciseReferenceList = preciseReferenceConfigList
-        .where((config) => config.enabled)
-        .toList(growable: false);
-    if (paramConfig.model.contains('-3')) {
+    final activePreciseReferenceList = payloadConfig.preciseReferenceEnabled
+        ? preciseReferenceConfigList
+            .where((config) => config.enabled)
+            .toList(growable: false)
+        : <PreciseReferenceConfig>[];
+    if (payloadConfig.vibeEnabled && paramConfig.model.contains('-3')) {
       // Vibe config for NAI3 models
       final imageB64List = [];
       final referenceStrengthList = [];
@@ -212,15 +239,22 @@ class GeneratePayloadUseCase {
           activePreciseReferenceList
               .map((config) => 1.0 - config.fidelity)
               .toList(growable: false);
-    } else if (paramConfig.model.contains('-4-')) {
+    } else if (payloadConfig.vibeEnabled && paramConfig.model.contains('-4-')) {
       // Vibe config for NAI4 models
       final imageB64List = [];
       final infoExtractedList = [];
       final referenceStrengthList = [];
       for (final vc in vibeConfigV4List) {
-        imageB64List.add(vc.vibeB64);
+        final encoding = vc.encodingFor(paramConfig.model);
+        if (encoding == null) {
+          throw StateError(
+            'Vibe encoding is not ready for ${vc.fileName} and '
+            '${paramConfig.model}.',
+          );
+        }
+        imageB64List.add(encoding);
         referenceStrengthList.add(vc.referenceStrength);
-        infoExtractedList.add(1.0);
+        infoExtractedList.add(vc.informationExtracted);
       }
       paramPayload['reference_image_multiple'] = imageB64List;
       paramPayload['reference_strength_multiple'] = referenceStrengthList;
@@ -239,7 +273,9 @@ class GeneratePayloadUseCase {
         action = 'infill';
         model = inpaintModelMapping[model] ?? model;
         paramPayload['mask'] = plan.maskB64;
-        paramPayload['add_original_image'] = plan.addOriginalImage;
+        // The official frontend always requests the raw infill result, then
+        // blends it over the source image locally with a feathered mask.
+        paramPayload['add_original_image'] = false;
         // The user-facing strength maps to inpaintImg2ImgStrength; the legacy
         // strength/noise pair takes fixed values on modern inpainting.
         paramPayload['strength'] = 0.7;
@@ -266,12 +302,25 @@ class GeneratePayloadUseCase {
       comment: payloadComment,
       suggestedFileName: processedFileName,
       payload: {
-        'input': basePair.prompt,
+        'input': effectiveBasePrompt,
         'model': model,
         'action': action,
         'parameters': paramPayload,
       },
     );
+  }
+
+  String _appendPromptSuffix(String prompt, String suffix) {
+    var normalizedSuffix = suffix.trim();
+    if (normalizedSuffix.isEmpty) return prompt;
+    if (normalizedSuffix.startsWith(',')) {
+      normalizedSuffix = normalizedSuffix.substring(1).trimLeft();
+    }
+    if (prompt.trim().isEmpty) return normalizedSuffix;
+
+    final normalizedPrompt = prompt.trimRight();
+    final separator = normalizedPrompt.endsWith(',') ? ' ' : ', ';
+    return '$normalizedPrompt$separator$normalizedSuffix';
   }
 
   String _processFileNameKey(

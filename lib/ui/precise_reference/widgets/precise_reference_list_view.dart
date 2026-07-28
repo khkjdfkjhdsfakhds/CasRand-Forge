@@ -4,6 +4,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:nai_casrand/data/models/precise_reference_config.dart';
 import 'package:nai_casrand/ui/core/utils/platform_support.dart';
+import 'package:nai_casrand/ui/core/utils/flushbar.dart';
 import 'package:nai_casrand/ui/core/widgets/slider_list_tile.dart';
 import 'package:nai_casrand/ui/precise_reference/view_models/precise_reference_list_viewmodel.dart';
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
@@ -23,7 +24,8 @@ class PreciseReferenceListView extends StatelessWidget {
           children: [
             _buildHeader(context),
             if (!viewmodel.isSupported) _buildUnsupportedNotice(context),
-            if (viewmodel.activeReferenceCount > 0) _buildCostNotice(context),
+            if (viewmodel.featureEnabled && viewmodel.activeReferenceCount > 0)
+              _buildCostNotice(context),
             if (viewmodel.activeReferenceCount > 0 &&
                 viewmodel.activeVibeCount > 0)
               _buildVibeConflictNotice(context),
@@ -55,6 +57,29 @@ class PreciseReferenceListView extends StatelessWidget {
         leading: const Icon(Icons.center_focus_strong),
         title: Text(context.tr('precise_reference')),
         subtitle: Text(context.tr('precise_reference_page_tip')),
+        trailing: Switch(
+          key: const Key('precise-reference-feature-switch'),
+          value: viewmodel.featureEnabled,
+          onChanged: viewmodel.referenceList.isEmpty || !viewmodel.isSupported
+              ? null
+              : (value) {
+                  final disabledVibe =
+                      value && viewmodel.payloadConfig.vibeEnabled;
+                  viewmodel.setFeatureEnabled(value);
+                  if (disabledVibe) {
+                    showInfoBar(
+                      context,
+                      tr(
+                        'advanced_feature_conflict_kept',
+                        namedArgs: {
+                          'enabled': 'Precise Reference',
+                          'disabled': 'Vibe Transfer',
+                        },
+                      ),
+                    );
+                  }
+                },
+        ),
       ),
     );
   }

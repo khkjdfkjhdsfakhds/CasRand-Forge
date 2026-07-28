@@ -12,8 +12,8 @@ class Settings {
   int generationPageColumnCount;
   String themeMode;
 
-  /// Result display style: 'waterfall' (default) or 'classic' (0.55-style
-  /// grid with the prompt shown beside the image).
+  /// Result display style: 'classic' (default) or 'waterfall'. The classic
+  /// mode restores the 0.55-style grid with the prompt beside the image.
   String resultDisplayMode;
 
   // Optional top-level workspaces. Image Generation, Generation Config and
@@ -82,7 +82,7 @@ class Settings {
     required this.fileNamePrefixKey,
     required this.generationPageColumnCount,
     required this.themeMode,
-    this.resultDisplayMode = 'waterfall',
+    this.resultDisplayMode = 'classic',
     this.showImageToImagePage = true,
     this.showVibeReferencePage = true,
     this.showEnhancePage = true,
@@ -119,15 +119,19 @@ class Settings {
     final tokenListJson = json['api_tokens'];
     final apiTokens = tokenListJson is List
         ? tokenListJson
-              .whereType<Map<String, dynamic>>()
-              .map(ApiTokenConfig.fromJson)
-              .toList()
+            .whereType<Map<String, dynamic>>()
+            .map(ApiTokenConfig.fromJson)
+            .toList()
         : <ApiTokenConfig>[];
     return Settings(
       welcomeMessageVersion: json['welcome_message_version'] ?? '',
       apiKey: json['api_key'] ?? 'pst-abcd',
       apiTokens: apiTokens,
-      resultDisplayMode: json['result_display_mode'] ?? 'waterfall',
+      resultDisplayMode: json['classic_grid_default_migrated'] == true
+          ? (json['result_display_mode'] == 'waterfall'
+              ? 'waterfall'
+              : 'classic')
+          : 'classic',
       showImageToImagePage: json['show_image_to_image_page'] ?? true,
       showVibeReferencePage: json['show_vibe_reference_page'] ?? true,
       showEnhancePage: json['show_enhance_page'] ?? true,
@@ -145,7 +149,7 @@ class Settings {
       generationCount:
           json['generation_count'] ?? json['number_of_requests'] ?? 0,
       generationIntervalSec:
-          json['generation_interval'] ?? json['batch_interval'] ?? 10,
+          json['generation_interval'] ?? json['batch_interval'] ?? 2,
       rememberSequentialProgress: json['remember_sequential_progress'] ?? false,
       fileNamePrefixKey: json['file_name_prefix_key'] ?? '',
       generationPageColumnCount: json['generation_page_column_count'] ?? 2,
@@ -159,6 +163,7 @@ class Settings {
       'api_key': apiKey,
       'api_tokens': apiTokens.map((entry) => entry.toJson()).toList(),
       'result_display_mode': resultDisplayMode,
+      'classic_grid_default_migrated': true,
       'show_image_to_image_page': showImageToImagePage,
       'show_vibe_reference_page': showVibeReferencePage,
       'show_enhance_page': showEnhancePage,

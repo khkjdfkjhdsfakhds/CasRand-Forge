@@ -7,17 +7,19 @@ import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
+import 'package:nai_casrand/ui/core/widgets/fullscreen_image_view.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/generated_image_view.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/result_actions.dart';
 import 'package:flutter_command/flutter_command.dart';
 
 class InfoCard extends StatelessWidget {
   final Command<void, InfoCardContent> command;
+  final VoidCallback? onOpenDetail;
 
   CommandStatus get commandStatus => GetIt.I();
   Settings get settings => GetIt.I<PayloadConfig>().settings;
 
-  const InfoCard({super.key, required this.command});
+  const InfoCard({super.key, required this.command, this.onOpenDetail});
 
   @override
   Widget build(BuildContext context) {
@@ -44,7 +46,7 @@ class InfoCard extends StatelessWidget {
     return Card(
       clipBehavior: Clip.hardEdge,
       child: InkWell(
-        onTap: () => _showDetailedInfoDialog(context),
+        onTap: onOpenDetail ?? () => _showDetailedInfoDialog(context),
         child: cardBody,
       ),
     );
@@ -132,13 +134,30 @@ class InfoCard extends StatelessWidget {
     final parts = <String>[];
     if (content.tokenLabel != null) parts.add(content.tokenLabel!);
     if (content.anlasCost != null) {
-      parts.add(tr('anlas_info', namedArgs: {
-        'cost': content.anlasCost.toString(),
-        'remaining': content.anlasRemaining?.toString() ?? '?',
-      }));
+      if (content.anlasCostIsEstimated) {
+        final key =
+            content.anlasRemaining != null && content.batchAnlasCost == null
+                ? 'anlas_estimated_with_remaining'
+                : 'anlas_estimated_info';
+        parts.add(tr(key, namedArgs: {
+          'cost': content.anlasCost.toString(),
+          'remaining': content.anlasRemaining?.toString() ?? '?',
+        }));
+      } else {
+        parts.add(tr('anlas_info', namedArgs: {
+          'cost': content.anlasCost.toString(),
+          'remaining': content.anlasRemaining?.toString() ?? '?',
+        }));
+      }
     } else if (content.anlasRemaining != null) {
       parts.add(tr('anlas_remaining_only', namedArgs: {
         'remaining': content.anlasRemaining.toString(),
+      }));
+    }
+    if (content.batchAnlasCost != null) {
+      parts.add(tr('anlas_batch_info', namedArgs: {
+        'cost': content.batchAnlasCost.toString(),
+        'remaining': content.anlasRemaining?.toString() ?? '?',
       }));
     }
     if (parts.isEmpty) return null;
@@ -168,9 +187,21 @@ const List<(String, String)> _detailParamKeys = [
 ];
 
 class InfoDetailPage extends StatefulWidget {
-  final InfoCardContent content;
+  final List<InfoCardContent> contents;
+  final int initialIndex;
+  final ValueChanged<int>? onIndexChanged;
 
-  const InfoDetailPage({super.key, required this.content});
+  InfoDetailPage({super.key, required InfoCardContent content})
+      : contents = [content],
+        initialIndex = 0,
+        onIndexChanged = null;
+
+  const InfoDetailPage.gallery({
+    super.key,
+    required this.contents,
+    required this.initialIndex,
+    this.onIndexChanged,
+  });
 
   @override
   State<InfoDetailPage> createState() => _InfoDetailPageState();
@@ -178,8 +209,17 @@ class InfoDetailPage extends StatefulWidget {
 
 class _InfoDetailPageState extends State<InfoDetailPage> {
   final FocusNode _focusNode = FocusNode();
+  late int _currentIndex;
 
-  InfoCardContent get content => widget.content;
+  InfoCardContent get content => widget.contents[_currentIndex];
+  bool get _hasPrevious => _currentIndex > 0;
+  bool get _hasNext => _currentIndex + 1 < widget.contents.length;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.initialIndex.clamp(0, widget.contents.length - 1);
+  }
 
   @override
   void dispose() {
@@ -191,7 +231,15 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     if (event.logicalKey == LogicalKeyboardKey.space &&
         content.imageBytes != null) {
-      _openFullscreenImage(context, content);
+      openFullscreenImage(context, content);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+      _changeIndex(_currentIndex - 1);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+      _changeIndex(_currentIndex + 1);
       return KeyEventResult.handled;
     }
     if (event.logicalKey == LogicalKeyboardKey.escape) {
@@ -201,26 +249,59 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
     return KeyEventResult.ignored;
   }
 
+  void _changeIndex(int index) {
+    if (index < 0 ||
+        index >= widget.contents.length ||
+        index == _currentIndex) {
+      return;
+    }
+    setState(() => _currentIndex = index);
+    widget.onIndexChanged?.call(index);
+    _focusNode.requestFocus();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final showShortcutHint = MediaQuery.sizeOf(context).width >= 720;
     return Scaffold(
       appBar: AppBar(
-        title:
-            Text(content.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-        actions: [
-          if (content.imageBytes != null)
-            Padding(
-              padding: const EdgeInsets.only(right: 12),
-              child: Center(
-                child: Text(
-                  tr('detail_shortcut_hint'),
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: Theme.of(context).colorScheme.outline,
-                      ),
-                ),
+        title: Row(
+          children: [
+            Expanded(
+              child: Text(
+                content.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
             ),
-        ],
+            if (widget.contents.length > 1)
+              Padding(
+                padding: const EdgeInsets.only(left: 12),
+                child: Center(
+                  child: Text(
+                    '${_currentIndex + 1} / ${widget.contents.length}',
+                    key: const Key('detail-gallery-position'),
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+                ),
+              ),
+            if (content.imageBytes != null && showShortcutHint)
+              Flexible(
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 12),
+                  child: Text(
+                    tr('detail_shortcut_hint'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.end,
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: Theme.of(context).colorScheme.outline,
+                        ),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
       body: Focus(
         focusNode: _focusNode,
@@ -290,23 +371,68 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
   /// The image on a dark rounded stage, like the official result viewer.
   Widget _buildImagePane(BuildContext context) {
     if (content.imageBytes == null) return const SizedBox.shrink();
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: GeneratedImageView(
-        content: content,
-        child: GestureDetector(
-          key: const Key('detail-image-zoom-target'),
-          onTap: () => _openFullscreenImage(context, content),
-          child: Image.memory(
-            content.imageBytes!,
-            fit: BoxFit.contain,
-            filterQuality: FilterQuality.medium,
-          ),
+    return GestureDetector(
+      key: const Key('detail-gallery-swipe-target'),
+      behavior: HitTestBehavior.opaque,
+      onHorizontalDragEnd: (details) {
+        final velocity = details.primaryVelocity ?? 0;
+        if (velocity < -120) {
+          _changeIndex(_currentIndex + 1);
+        } else if (velocity > 120) {
+          _changeIndex(_currentIndex - 1);
+        }
+      },
+      child: Container(
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            GeneratedImageView(
+              key: ValueKey('detail-image-$_currentIndex'),
+              content: content,
+              child: GestureDetector(
+                key: const Key('detail-image-zoom-target'),
+                onTap: () => openFullscreenImage(context, content),
+                child: Image.memory(
+                  content.imageBytes!,
+                  fit: BoxFit.contain,
+                  filterQuality: FilterQuality.medium,
+                  gaplessPlayback: true,
+                ),
+              ),
+            ),
+            if (_hasPrevious)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: IconButton.filledTonal(
+                    key: const Key('detail-gallery-previous'),
+                    tooltip: tr('detail_previous_image'),
+                    onPressed: () => _changeIndex(_currentIndex - 1),
+                    icon: const Icon(Icons.chevron_left),
+                  ),
+                ),
+              ),
+            if (_hasNext)
+              Align(
+                alignment: Alignment.centerRight,
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: IconButton.filledTonal(
+                    key: const Key('detail-gallery-next'),
+                    tooltip: tr('detail_next_image'),
+                    onPressed: () => _changeIndex(_currentIndex + 1),
+                    icon: const Icon(Icons.chevron_right),
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -417,12 +543,24 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
       chips.add(_paramChip(context, tr('api_token'), content.tokenLabel!));
     }
     if (content.anlasCost != null) {
-      chips.add(
-          _paramChip(context, tr('anlas_cost'), content.anlasCost.toString()));
+      chips.add(_paramChip(
+        context,
+        tr(content.anlasCostIsEstimated
+            ? 'anlas_estimated_cost'
+            : 'anlas_cost'),
+        content.anlasCost.toString(),
+      ));
     }
     if (content.anlasRemaining != null) {
       chips.add(_paramChip(
           context, tr('anlas_remaining'), content.anlasRemaining.toString()));
+    }
+    if (content.batchAnlasCost != null) {
+      chips.add(_paramChip(
+        context,
+        tr('anlas_batch_cost'),
+        content.batchAnlasCost.toString(),
+      ));
     }
     if (chips.isEmpty) return const SizedBox.shrink();
 
@@ -476,78 +614,5 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
     await Clipboard.setData(ClipboardData(text: body));
     if (!context.mounted) return;
     showInfoBar(context, '${tr('info_export_to_clipboard')}${tr('succeed')}');
-  }
-
-  void _openFullscreenImage(BuildContext context, InfoCardContent content) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        fullscreenDialog: true,
-        builder: (context) => FullscreenImageView(content: content),
-      ),
-    );
-  }
-}
-
-/// Fullscreen viewer with pinch/scroll zoom and panning. Space or Escape
-/// returns to the detail page.
-class FullscreenImageView extends StatefulWidget {
-  final InfoCardContent content;
-
-  const FullscreenImageView({super.key, required this.content});
-
-  @override
-  State<FullscreenImageView> createState() => _FullscreenImageViewState();
-}
-
-class _FullscreenImageViewState extends State<FullscreenImageView> {
-  final FocusNode _focusNode = FocusNode();
-
-  @override
-  void dispose() {
-    _focusNode.dispose();
-    super.dispose();
-  }
-
-  KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
-    if (event.logicalKey == LogicalKeyboardKey.space ||
-        event.logicalKey == LogicalKeyboardKey.escape) {
-      Navigator.of(context).pop();
-      return KeyEventResult.handled;
-    }
-    return KeyEventResult.ignored;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black54,
-        foregroundColor: Colors.white,
-        title: Text(
-          widget.content.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-      ),
-      body: Focus(
-        focusNode: _focusNode,
-        autofocus: true,
-        onKeyEvent: _handleKey,
-        child: Center(
-          child: InteractiveViewer(
-            key: const Key('fullscreen-image-viewer'),
-            minScale: 1.0,
-            maxScale: 8.0,
-            child: Image.memory(
-              widget.content.imageBytes!,
-              fit: BoxFit.contain,
-              filterQuality: FilterQuality.high,
-            ),
-          ),
-        ),
-      ),
-    );
   }
 }

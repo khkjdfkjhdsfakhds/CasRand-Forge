@@ -1,16 +1,22 @@
+import 'dart:math';
+
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/core/constants/image_formats.dart';
+import 'package:nai_casrand/data/models/i2i_config.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/data/use_cases/anlas_cost.dart';
+import 'package:nai_casrand/data/use_cases/autocrop_planner.dart';
 import 'package:nai_casrand/data/use_cases/i2i_request_size.dart';
+import 'package:nai_casrand/data/use_cases/prepare_i2i_request_use_case.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
 import 'package:nai_casrand/ui/core/utils/platform_support.dart';
 import 'package:nai_casrand/ui/core/widgets/slider_list_tile.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/result_actions.dart';
 import 'package:nai_casrand/ui/i2i_page/view_models/i2i_page_viewmodel.dart';
+import 'package:nai_casrand/ui/i2i_page/widgets/inpaint_mask_overlay.dart';
 import 'package:nai_casrand/ui/i2i_page/widgets/mask_editor_view.dart';
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 
@@ -28,8 +34,32 @@ class I2iPageView extends StatefulWidget {
 
 class _I2iPageViewState extends State<I2iPageView> {
   final ScrollController _scrollController = ScrollController();
+  String? _focusPreviewKey;
+  Future<FocusInpaintBatch?>? _focusPreviewFuture;
 
   I2iPageViewmodel get viewmodel => widget.viewmodel;
+
+  Future<FocusInpaintBatch?>? _focusPreviewFor(I2IConfig config) {
+    final automaticFocusActive = config.autocropEnabled &&
+        autocropAppliesToImage(config.width, config.height);
+    if (!config.hasInpaintSelection ||
+        (config.manualFocusFrame == null && !automaticFocusActive)) {
+      _focusPreviewKey = null;
+      _focusPreviewFuture = null;
+      return null;
+    }
+    final key = '${identityHashCode(config)}|${config.planRevision}|'
+        '${config.requestSize.width}x${config.requestSize.height}';
+    if (_focusPreviewKey != key) {
+      _focusPreviewKey = key;
+      _focusPreviewFuture =
+          PrepareI2iRequestUseCase(config: config).planFocusPreview(
+        targetWidth: config.requestSize.width,
+        targetHeight: config.requestSize.height,
+      );
+    }
+    return _focusPreviewFuture;
+  }
 
   @override
   void initState() {
@@ -90,6 +120,7 @@ class _I2iPageViewState extends State<I2iPageView> {
               ? widthAtMaxHeight
               : constraints.maxWidth;
           final displayHeight = displayWidth / aspectRatio;
+          final focusPreview = _focusPreviewFor(config);
           return Center(
             child: SizedBox(
               key: const Key('i2i-image-preview-stack'),
@@ -104,24 +135,41 @@ class _I2iPageViewState extends State<I2iPageView> {
                     filterQuality: FilterQuality.medium,
                     gaplessPlayback: true,
                   ),
-                  if (config.hasMask || config.manualFocusFrame != null)
-                    IgnorePointer(
-                      child: CustomPaint(
-                        key: const Key('i2i-mask-preview-overlay'),
-                        painter: MaskOverlayPainter(
-                          strokes: config.maskStrokes,
-                          imageWidth: config.width.toDouble(),
-                          imageHeight: config.height.toDouble(),
-                          focusFrame: config.manualFocusFrame == null
-                              ? null
-                              : Rect.fromLTWH(
-                                  config.manualFocusFrame!.x.toDouble(),
-                                  config.manualFocusFrame!.y.toDouble(),
-                                  config.manualFocusFrame!.w.toDouble(),
-                                  config.manualFocusFrame!.h.toDouble(),
-                                ),
-                        ),
-                      ),
+                  if (config.hasMask)
+                    InpaintMaskOverlay(
+                      key: const Key('i2i-mask-preview-raster'),
+                      maskBytes: config.maskBytes!,
+                    ),
+                  if (focusPreview != null)
+                    FutureBuilder<FocusInpaintBatch?>(
+                      future: focusPreview,
+                      builder: (context, snapshot) {
+                        final batch = snapshot.data;
+                        final manual = config.manualFocusFrame;
+                        final specs = batch != null
+                            ? batch.tiles
+                                .map(FocusFrameOverlaySpec.fromPlan)
+                                .toList(growable: false)
+                            : manual == null
+                                ? const <FocusFrameOverlaySpec>[]
+                                : [
+                                    _manualFocusOverlaySpec(
+                                      manual,
+                                      config.contextPx,
+                                    ),
+                                  ];
+                        return IgnorePointer(
+                          child: CustomPaint(
+                            key: const Key('i2i-mask-preview-overlay'),
+                            painter: MaskOverlayPainter(
+                              strokes: const <MaskStroke>[],
+                              imageWidth: config.width.toDouble(),
+                              imageHeight: config.height.toDouble(),
+                              focusFrames: specs,
+                            ),
+                          ),
+                        );
+                      },
                     ),
                 ],
               ),
@@ -186,7 +234,7 @@ class _I2iPageViewState extends State<I2iPageView> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (config.hasMask) ...[
+              if (config.hasInpaintSelection) ...[
                 Tooltip(
                   message: tr('inpaint_clear_mask'),
                   child: FilledButton.tonal(
@@ -230,6 +278,11 @@ class _I2iPageViewState extends State<I2iPageView> {
                       '${viewmodel.config.width} × ${viewmodel.config.height}',
                     )
                   : Text(tr('i2i_page_sections_hint')),
+              trailing: Switch(
+                key: const Key('i2i-feature-switch'),
+                value: viewmodel.enabled,
+                onChanged: config.hasImage ? viewmodel.setEnabled : null,
+              ),
             ),
             imageWorkspace,
             const SizedBox(height: 8),
@@ -254,6 +307,29 @@ class _I2iPageViewState extends State<I2iPageView> {
           ],
         ),
       ),
+    );
+  }
+
+  FocusFrameOverlaySpec _manualFocusOverlaySpec(
+    CropRect frame,
+    int contextPx,
+  ) {
+    final outer = Rect.fromLTWH(
+      frame.x.toDouble(),
+      frame.y.toDouble(),
+      frame.w.toDouble(),
+      frame.h.toDouble(),
+    );
+    final effective = min(
+      contextPx.toDouble(),
+      min(
+        max(0.0, (outer.width - latentGrid) / 2),
+        max(0.0, (outer.height - latentGrid) / 2),
+      ),
+    );
+    return FocusFrameOverlaySpec(
+      outer: outer,
+      inner: outer.deflate(effective),
     );
   }
 
@@ -283,7 +359,7 @@ class _I2iPageViewState extends State<I2iPageView> {
             divisions: 99,
             onChanged: viewmodel.setStrength,
           ),
-          if (!config.hasMask)
+          if (!config.hasInpaintSelection)
             SliderListTile(
               title: '${tr('i2i_noise')}: ${config.noise.toStringAsFixed(2)}',
               sliderValue: config.noise,
@@ -292,6 +368,14 @@ class _I2iPageViewState extends State<I2iPageView> {
               divisions: 99,
               onChanged: viewmodel.setNoise,
             ),
+          SwitchListTile(
+            key: const Key('i2i-use-random-seed'),
+            secondary: const Icon(Icons.casino_outlined),
+            title: Text(tr('use_random_seed')),
+            subtitle: Text(tr('i2i_random_seed_hint')),
+            value: config.useRandomSeed,
+            onChanged: viewmodel.setUseRandomSeed,
+          ),
           ListTile(
             leading: const Icon(Icons.photo_size_select_large),
             title: Text(tr('i2i_request_size')),
@@ -353,16 +437,8 @@ class _I2iPageViewState extends State<I2iPageView> {
               ],
             ),
           ),
-          if (config.hasMask) ...[
+          if (config.hasInpaintSelection) ...[
             const Divider(height: 1),
-            SwitchListTile(
-              key: const Key('inpaint-add-original-image'),
-              secondary: const Icon(Icons.layers_outlined),
-              title: Text(tr('inpaint_add_original_image')),
-              subtitle: Text(tr('inpaint_add_original_image_hint')),
-              value: config.addOriginalImage,
-              onChanged: viewmodel.setAddOriginalImage,
-            ),
             if (config.manualFocusFrame != null)
               ListTile(
                 key: const Key('inpaint-manual-frame'),
@@ -373,7 +449,7 @@ class _I2iPageViewState extends State<I2iPageView> {
                   '${config.manualFocusFrame!.h} @ '
                   '(${config.manualFocusFrame!.x}, '
                   '${config.manualFocusFrame!.y})'
-                  ' · ${tr('inpaint_manual_frame_hint')}',
+                  ' · ${tr(config.hasMask ? 'inpaint_manual_frame_hint' : 'inpaint_manual_frame_hint_maskless')}',
                 ),
                 trailing: TextButton.icon(
                   key: const Key('inpaint-clear-frame'),
@@ -389,11 +465,29 @@ class _I2iPageViewState extends State<I2iPageView> {
                 title: Text(tr('inpaint_autocrop')),
                 subtitle: Text(
                   config.autocropEnabled
-                      ? tr('inpaint_autocrop_hint_on')
+                      ? tr(
+                          autocropAppliesToImage(config.width, config.height)
+                              ? 'inpaint_autocrop_hint_on'
+                              : 'inpaint_autocrop_hint_inactive',
+                        )
                       : tr('inpaint_autocrop_hint_off'),
                 ),
                 value: config.autocropEnabled,
                 onChanged: viewmodel.setAutocropEnabled,
+              ),
+            if (config.manualFocusFrame != null || config.autocropEnabled)
+              SliderListTile(
+                key: const Key('inpaint-context-area'),
+                leading: const Icon(Icons.filter_center_focus_outlined),
+                title: '${tr('inpaint_minimum_context_area')}: '
+                    '${config.contextPx}px',
+                inputTitle: tr('inpaint_minimum_context_area'),
+                inputDecimalPlaces: 0,
+                sliderValue: config.contextPx.toDouble(),
+                min: minContextPx.toDouble(),
+                max: maxContextPx.toDouble(),
+                divisions: (maxContextPx - minContextPx) ~/ latentGrid,
+                onChanged: viewmodel.setContextPx,
               ),
           ],
         ],
@@ -570,14 +664,18 @@ class _I2iPageViewState extends State<I2iPageView> {
       imageBytes: config.imageBytes!,
       imageWidth: config.width,
       imageHeight: config.height,
+      initialBaseMaskBytes: config.maskBaseBytes,
       initialStrokes: config.maskStrokes,
       initialFocusFrame: config.manualFocusFrame,
+      initialContextPx: config.contextPx,
     );
     if (result == null) return;
     viewmodel.setMask(
       result.maskBytes,
       result.strokes,
+      baseMaskBytes: result.baseMaskBytes,
       focusFrame: result.focusFrame,
+      contextPx: result.contextPx,
     );
   }
 

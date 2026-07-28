@@ -10,14 +10,19 @@ import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
 import 'package:nai_casrand/data/services/config_service.dart';
 import 'package:nai_casrand/data/services/file_service.dart';
+import 'package:nai_casrand/data/services/proxy_detection_service.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
 
 class SettingsPageViewmodel extends ChangeNotifier {
+  final ProxyDetectionService _proxyDetectionService;
+
   PayloadConfig get payloadConfig => GetIt.I();
   ConfigService get configService => GetIt.I();
 
-  SettingsPageViewmodel();
+  SettingsPageViewmodel({ProxyDetectionService? proxyDetectionService})
+      : _proxyDetectionService =
+            proxyDetectionService ?? ProxyDetectionService();
 
   Settings get settings {
     return payloadConfig.settings;
@@ -106,6 +111,8 @@ class SettingsPageViewmodel extends ChangeNotifier {
     payloadConfig.settings.proxy = value;
     notifyListeners();
   }
+
+  Future<String?> detectProxy() => _proxyDetectionService.detect();
 
   void loadJsonConfig(BuildContext context) async {
     FilePickerResult? result =

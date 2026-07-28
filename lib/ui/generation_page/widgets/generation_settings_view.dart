@@ -47,7 +47,7 @@ class GenerationSettingsView extends StatelessWidget {
               ),
               ListTile(
                 key: const Key('generation-settings-image-size'),
-                title: Text(context.tr('image_size')),
+                title: Text(context.tr('generation_image_size')),
                 subtitle: Text(
                   paramConfig.sizes
                       .map((size) => '${size.width} × ${size.height}')
@@ -86,14 +86,14 @@ class GenerationSettingsView extends StatelessWidget {
                   child: SegmentedButton<String>(
                     segments: [
                       ButtonSegment(
-                        value: 'waterfall',
-                        icon: const Icon(Icons.view_column_outlined),
-                        label: Text(context.tr('display_mode_waterfall')),
-                      ),
-                      ButtonSegment(
                         value: 'classic',
                         icon: const Icon(Icons.grid_on_outlined),
                         label: Text(context.tr('display_mode_classic')),
+                      ),
+                      ButtonSegment(
+                        value: 'waterfall',
+                        icon: const Icon(Icons.view_column_outlined),
+                        label: Text(context.tr('display_mode_waterfall')),
                       ),
                     ],
                     selected: {
@@ -129,7 +129,7 @@ class GenerationSettingsView extends StatelessWidget {
       builder: (dialogContext) => AlertDialog(
         title: Text(
           '${dialogContext.tr('edit')}${dialogContext.tr('colon')}'
-          '${dialogContext.tr('image_size')}',
+          '${dialogContext.tr('generation_image_size')}',
         ),
         content: ConstrainedBox(
           constraints: BoxConstraints(

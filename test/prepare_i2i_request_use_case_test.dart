@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:nai_casrand/data/models/i2i_config.dart';
 import 'package:nai_casrand/data/use_cases/autocrop_planner.dart';
+import 'package:nai_casrand/data/use_cases/import_inpaint_mask.dart';
 import 'package:nai_casrand/data/use_cases/prepare_i2i_request_use_case.dart';
 
 Uint8List solidPng(int width, int height, int r, int g, int b) {
@@ -94,37 +95,178 @@ void main() {
     final sent = img.decodePng(base64Decode(plan.imageB64))!;
     expect(sent.width, plan.width);
     expect(sent.height, plan.height);
-    final mask = img.decodePng(base64Decode(plan.maskB64!))!;
-    expect(mask.width, plan.width);
-    expect(mask.height, plan.height);
-    // The mask must carry white cells inside the request canvas.
+    final requestMask = img.decodePng(base64Decode(plan.maskB64!))!;
+    expect(requestMask.width, plan.width);
+    expect(requestMask.height, plan.height);
+    // The server mask is opaque black/white at request resolution.
     var white = 0;
-    for (var y = 0; y < mask.height; y += 8) {
-      for (var x = 0; x < mask.width; x += 8) {
-        if (mask.getPixel(x, y).r > 127) white++;
+    for (var y = 0; y < requestMask.height; y++) {
+      for (var x = 0; x < requestMask.width; x++) {
+        final pixel = requestMask.getPixel(x, y);
+        expect(pixel.a, 255);
+        if (pixel.r > 127) {
+          expect(pixel.r, 255);
+          white++;
+        } else {
+          expect(pixel.r, 0);
+        }
       }
     }
     expect(white, greaterThan(0));
+
+    final blendMask = img.decodePng(base64Decode(plan.blendMaskB64!))!;
+    expect(blendMask.width, plan.width ~/ 8);
+    expect(blendMask.height, plan.height ~/ 8);
+    expect(blendMask.numChannels, 4);
+    for (var y = 0; y < blendMask.height; y++) {
+      for (var x = 0; x < blendMask.width; x++) {
+        final pixel = blendMask.getPixel(x, y);
+        expect(pixel.a, pixel.r > 127 ? 255 : 0);
+      }
+    }
   });
 
-  test('small image is magnified so the request uses the full budget',
+  test('manual Focus frame without a mask repaints its whole inner region',
       () async {
-    final config = I2IConfig()..setImage(quadrantPng(512, 512));
-    config.setMask(maskPngWithWhiteRect(512, 512, 200, 200, 60, 60), []);
+    final config = I2IConfig()..setImage(quadrantPng(1600, 2400));
+    config.setMask(
+      null,
+      const [],
+      focusFrame: const CropRect(x: 500, y: 800, w: 480, h: 640),
+      minimumContextPx: 64,
+    );
+
+    expect(config.hasMask, isFalse);
+    expect(config.hasInpaintSelection, isTrue);
+    final plan = await PrepareI2iRequestUseCase(config: config)(
+      targetWidth: 832,
+      targetHeight: 1216,
+    );
+
+    expect(plan, isNotNull);
+    expect(plan!.isInpaint, isTrue);
+    expect(plan.composite, isNotNull);
+    expect(plan.summary, contains('manual'));
+    final mask = img.decodePng(base64Decode(plan.maskB64!))!;
+    final composite = plan.composite!;
+    final outer = composite.outer;
+
+    int requestX(int sourceX) => (composite.contentOffsetX +
+        ((sourceX - outer.x) * composite.contentWidth / outer.w).floor());
+    int requestY(int sourceY) => (composite.contentOffsetY +
+        ((sourceY - outer.y) * composite.contentHeight / outer.h).floor());
+
+    final innerX = outer.x + outer.w ~/ 2;
+    final innerY = outer.y + outer.h ~/ 2;
+    expect(
+        mask.getPixel(requestX(innerX), requestY(innerY)).r, greaterThan(200));
+
+    // The red Context Region is visible to the model but remains unpainted.
+    final contextX = outer.x + 16;
+    expect(
+      mask.getPixel(requestX(contextX), requestY(innerY)).r,
+      lessThan(50),
+    );
+  });
+
+  test('autocrop stays inactive for a base image within the free size',
+      () async {
+    final config = I2IConfig()..setImage(quadrantPng(832, 1216));
+    config.setMask(maskPngWithWhiteRect(832, 1216, 300, 500, 60, 60), []);
     final plan = await PrepareI2iRequestUseCase(config: config)(
       targetWidth: 832,
       targetHeight: 1216,
     );
     expect(plan!.isInpaint, isTrue);
-    final composite = plan.composite!;
-    expect(composite.scale, greaterThan(1.0));
-    expect(composite.isNativeScale, isFalse);
-    // A 512x512 source must not be sent as a 512x512 request.
-    expect(plan.width, greaterThan(512));
-    expect(plan.width * plan.height, greaterThan((1024 * 1024 * 0.8).round()));
-    final sent = img.decodePng(base64Decode(plan.imageB64))!;
-    expect(sent.width, plan.width);
-    expect(sent.height, plan.height);
+    expect(plan.composite, isNull);
+    expect(plan.summary, contains('whole image'));
+  });
+
+  test('official 1/8 alpha mask survives import and request round trip',
+      () async {
+    final exported = img.Image(width: 104, height: 152, numChannels: 4);
+    img.fillRect(
+      exported,
+      x1: 37,
+      y1: 33,
+      x2: 73,
+      y2: 69,
+      color: img.ColorRgba8(255, 255, 255, 255),
+    );
+    final imported = renderInpaintMask(
+      sourceBytes: Uint8List.fromList(img.encodePng(exported)),
+      targetWidth: 832,
+      targetHeight: 1216,
+    );
+    final config = I2IConfig()..setImage(solidPng(832, 1216, 40, 50, 60));
+    config.setMask(imported.pngBytes, []);
+
+    final plan = await PrepareI2iRequestUseCase(config: config)(
+      targetWidth: 832,
+      targetHeight: 1216,
+    );
+    final sent = img.decodePng(base64Decode(plan!.blendMaskB64!))!;
+
+    expect(sent.width, exported.width);
+    expect(sent.height, exported.height);
+    for (var y = 0; y < exported.height; y++) {
+      for (var x = 0; x < exported.width; x++) {
+        final expected = exported.getPixel(x, y).a > 155;
+        final actual = sent.getPixel(x, y);
+        expect(actual.a > 155 && actual.r > 155, expected);
+      }
+    }
+  });
+
+  test('local composite uses the blend mask, not the opaque server mask',
+      () async {
+    final baseBytes = solidPng(512, 512, 20, 40, 60);
+    final config = I2IConfig()..setImage(baseBytes);
+    config.setMask(
+      maskPngWithWhiteRect(512, 512, 240, 240, 32, 32),
+      [],
+    );
+    final useCase = PrepareI2iRequestUseCase(config: config);
+    final original = await useCase(targetWidth: 512, targetHeight: 512);
+    final allWhite = img.Image(width: 512, height: 512, numChannels: 3);
+    img.fill(allWhite, color: img.ColorRgb8(255, 255, 255));
+    final plan = I2iRequestPlan(
+      imageB64: original!.imageB64,
+      maskB64: base64Encode(img.encodePng(allWhite)),
+      blendMaskB64: original.blendMaskB64,
+      width: original.width,
+      height: original.height,
+      strength: original.strength,
+      noise: original.noise,
+      addOriginalImage: original.addOriginalImage,
+      composite: original.composite,
+      summary: original.summary,
+    );
+
+    final resultBytes = await useCase.compositeInpaintResponse(
+      responseBytes: solidPng(512, 512, 180, 180, 180),
+      plan: plan,
+    );
+    final result = img.decodePng(resultBytes)!;
+    final corner = result.getPixel(0, 0);
+    expect((corner.r, corner.g, corner.b), (20, 40, 60));
+    expect(result.getPixel(256, 256).r, greaterThan(100));
+  });
+
+  test('a manual Focus frame still applies to a small base image', () async {
+    final config = I2IConfig()..setImage(quadrantPng(512, 512));
+    config.setMask(
+      maskPngWithWhiteRect(512, 512, 200, 200, 60, 60),
+      [],
+      focusFrame: const CropRect(x: 128, y: 128, w: 256, h: 256),
+    );
+    final plan = await PrepareI2iRequestUseCase(config: config)(
+      targetWidth: 832,
+      targetHeight: 1216,
+    );
+    expect(plan!.composite, isNotNull);
+    expect(plan.summary, contains('manual'));
+    expect(plan.composite!.scale, greaterThan(1.0));
   });
 
   test('a mask beyond one frame is split into focus tiles', () async {
@@ -187,10 +329,10 @@ void main() {
     // Paste a distinct colour per tile so every frame is verifiable.
     for (final (index, plan) in batch!.plans.indexed) {
       final shade = 20 + index * 10;
-      useCase.pasteTileInto(
+      useCase.blendInpaintTileInto(
         canvas: canvas,
         responseBytes: solidPng(plan.width, plan.height, shade, shade, shade),
-        composite: plan.composite!,
+        plan: plan,
       );
     }
     final bytes = await useCase.finishComposite(
@@ -253,9 +395,9 @@ void main() {
 
     // A uniformly coloured response makes the pasted region obvious.
     final responseBytes = solidPng(plan.width, plan.height, 12, 34, 56);
-    final resultBytes = await useCase.compositeResponse(
+    final resultBytes = await useCase.compositeInpaintResponse(
       responseBytes: responseBytes,
-      composite: composite,
+      plan: plan,
     );
     final result = img.decodePng(resultBytes)!;
     expect(result.width, 1600);
@@ -291,16 +433,20 @@ void main() {
       () async {
     final baseBytes = quadrantPng(512, 512);
     final config = I2IConfig()..setImage(baseBytes);
-    config.setMask(maskPngWithWhiteRect(512, 512, 200, 200, 60, 60), []);
+    config.setMask(
+      maskPngWithWhiteRect(512, 512, 200, 200, 60, 60),
+      [],
+      focusFrame: const CropRect(x: 128, y: 128, w: 256, h: 256),
+    );
     final useCase = PrepareI2iRequestUseCase(config: config);
     final plan = await useCase(targetWidth: 832, targetHeight: 1216);
     final composite = plan!.composite!;
     expect(composite.isNativeScale, isFalse);
 
     final responseBytes = solidPng(plan.width, plan.height, 200, 0, 200);
-    final resultBytes = await useCase.compositeResponse(
+    final resultBytes = await useCase.compositeInpaintResponse(
       responseBytes: responseBytes,
-      composite: composite,
+      plan: plan,
     );
     final result = img.decodePng(resultBytes)!;
     // The composed image keeps the source resolution, not the request one.
@@ -319,30 +465,76 @@ void main() {
     final useCase = PrepareI2iRequestUseCase(config: config);
     final plan = await useCase(targetWidth: 832, targetHeight: 1216);
     expect(
-      () => useCase.compositeResponse(
+      () => useCase.compositeInpaintResponse(
         responseBytes: solidPng(64, 64, 0, 0, 0),
-        composite: plan!.composite!,
+        plan: plan!,
       ),
       throwsA(isA<Exception>()),
     );
   });
 
-  test('plans are cached per config revision and target size', () async {
+  test('whole-image infill uses the official feathered local composite',
+      () async {
+    final baseBytes = solidPng(512, 512, 20, 40, 60);
+    final config = I2IConfig()..setImage(baseBytes);
+    config.setMask(
+      maskPngWithWhiteRect(512, 512, 232, 232, 48, 48),
+      [],
+    );
+    final useCase = PrepareI2iRequestUseCase(config: config);
+    final plan = await useCase(targetWidth: 512, targetHeight: 512);
+    expect(plan!.composite, isNull);
+
+    final resultBytes = await useCase.compositeInpaintResponse(
+      responseBytes: solidPng(512, 512, 220, 10, 10),
+      plan: plan,
+    );
+    final result = img.decodePng(resultBytes)!;
+
+    final untouched = result.getPixel(0, 0);
+    expect(untouched.r, 20);
+    expect(untouched.g, 40);
+    expect(untouched.b, 60);
+
+    final painted = result.getPixel(256, 256);
+    expect(painted.r, greaterThan(180));
+    expect(painted.g, lessThan(20));
+
+    final feathered = result.getPixel(180, 256);
+    expect(feathered.r, greaterThan(20));
+    expect(feathered.r, lessThan(220));
+  });
+
+  test('heavy plan data is cached while light request parameters stay fresh',
+      () async {
     final config = I2IConfig()..setImage(quadrantPng(1600, 2400));
     config.setMask(maskPngWithWhiteRect(1600, 2400, 700, 1100, 120, 160), []);
     final useCase = PrepareI2iRequestUseCase(config: config);
     final first = await useCase(targetWidth: 832, targetHeight: 1216);
     final second = await useCase(targetWidth: 832, targetHeight: 1216);
-    expect(identical(first, second), isTrue);
+    expect(second!.imageB64, first!.imageB64);
+    expect(second.maskB64, first.maskB64);
+    expect(second.composite!.outer, first.composite!.outer);
+
+    final planRevision = config.planRevision;
+    config.setStrength(0.42);
+    config.setNoise(0.31);
+    expect(config.planRevision, planRevision,
+        reason: 'slider ticks must not invalidate image decoding or tiles');
+    final retuned = await useCase(targetWidth: 832, targetHeight: 1216);
+    expect(retuned!.imageB64, first.imageB64);
+    expect(retuned.maskB64, first.maskB64);
+    expect(retuned.strength, 0.42);
+    expect(retuned.noise, 0.31);
+    expect(retuned.summary, contains('strength 0.42'));
 
     // Changing the mask must invalidate the cached plan.
     config.setMask(maskPngWithWhiteRect(1600, 2400, 100, 100, 120, 160), []);
     final third = await useCase(targetWidth: 832, targetHeight: 1216);
-    expect(identical(first, third), isFalse);
-    expect(third!.composite!.outer == first!.composite!.outer, isFalse);
+    expect(third!.composite!.outer == first.composite!.outer, isFalse);
   });
 
-  test('request area cap follows the selected generation size tier', () async {
+  test('focus request area stays at the official 1 MP ceiling', () async {
     final config = I2IConfig()..setImage(quadrantPng(2000, 3000));
     config.setMask(maskPngWithWhiteRect(2000, 3000, 900, 1400, 200, 200), []);
     final normal = await PrepareI2iRequestUseCase(config: config)(
@@ -356,8 +548,7 @@ void main() {
       targetWidth: 1024,
       targetHeight: 1536,
     );
-    expect(large!.width * large.height, lessThanOrEqualTo(areaCapLarge));
-    expect(
-        large.width * large.height, greaterThan(normal.width * normal.height));
+    expect(large!.width * large.height, lessThanOrEqualTo(areaCapNormal));
+    expect(large.width * large.height, normal.width * normal.height);
   });
 }

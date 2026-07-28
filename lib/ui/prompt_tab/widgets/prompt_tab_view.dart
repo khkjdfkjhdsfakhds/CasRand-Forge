@@ -1,6 +1,5 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
-import 'package:nai_casrand/data/models/character_config.dart';
 import 'package:nai_casrand/ui/character_config/widgets/character_config_view.dart';
 import 'package:nai_casrand/ui/character_config/view_models/character_config_viewmodel.dart';
 import 'package:nai_casrand/ui/core/widgets/prompt_mode_switch_button.dart';
@@ -85,7 +84,6 @@ class PromptTabView extends StatelessWidget {
               payloadConfig: viewmodel.payloadConfig!,
               onChanged: viewmodel.promptModeChanged,
               heroTag: 'ptvfab-mode',
-              expandOnHover: true,
             ),
             const SizedBox(height: 20.0),
           ],
@@ -189,46 +187,12 @@ class _FixedPromptEditor extends StatelessWidget {
             title: '${context.tr('character')} ${index + 1}',
             icon: Icons.person_outline,
             accentColor: Theme.of(context).colorScheme.secondary,
-            child: Column(
-              children: [
-                SwitchListTile(
-                  key: Key('fixed-character-enabled-$index'),
-                  title: Text(context.tr('enabled')),
-                  value: character.enabled,
-                  onChanged: (value) =>
-                      viewmodel.setCharacterEnabled(index, value),
-                ),
-                _FixedTextField(
-                  fieldKey: Key('fixed-character-positive-$index'),
-                  initialValue: viewmodel.fixedCharacterPromptText(index),
-                  hintText: context.tr('fixed_character_positive_hint'),
-                  onChanged: (value) =>
-                      viewmodel.setFixedCharacterPrompt(index, value),
-                ),
-                _FixedTextField(
-                  fieldKey: Key('fixed-character-negative-$index'),
-                  initialValue:
-                      viewmodel.fixedCharacterNegativePromptText(index),
-                  hintText: context.tr('fixed_character_negative_hint'),
-                  onChanged: (value) =>
-                      viewmodel.setFixedCharacterNegativePrompt(index, value),
-                ),
-                ListTile(
-                  key: Key('fixed-character-position-$index'),
-                  leading: const Icon(Icons.location_on_outlined),
-                  title: Text(context.tr('character_position')),
-                  subtitle: Text(
-                    viewmodel.paramConfig.autoPosition
-                        ? context.tr('character_position_ai')
-                        : CharacterConfigViewmodel(
-                            config: character,
-                            paramConfig: viewmodel.paramConfig,
-                          ).getPositionsTexts(),
-                  ),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => _editPosition(context, character),
-                ),
-              ],
+            child: CharacterConfigView(
+              viewmodel: CharacterConfigViewmodel(
+                config: character,
+                paramConfig: viewmodel.paramConfig,
+                onAutoPositionChanged: viewmodel.setAutoPosition,
+              ),
             ),
           ),
         _PromptSectionCard(
@@ -245,34 +209,6 @@ class _FixedPromptEditor extends StatelessWidget {
         ),
       ],
     );
-  }
-
-  Future<void> _editPosition(
-    BuildContext context,
-    CharacterConfig character,
-  ) async {
-    final positionViewmodel = CharacterConfigViewmodel(
-      config: character,
-      paramConfig: viewmodel.paramConfig,
-      onAutoPositionChanged: viewmodel.setAutoPosition,
-    );
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(
-          '${dialogContext.tr('edit')}${dialogContext.tr('colon')}'
-          '${dialogContext.tr('character_position')}',
-        ),
-        content: CharacterPositionView(viewmodel: positionViewmodel),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: Text(dialogContext.tr('confirm')),
-          ),
-        ],
-      ),
-    );
-    viewmodel.promptModeChanged();
   }
 }
 

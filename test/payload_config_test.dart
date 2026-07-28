@@ -6,7 +6,10 @@ import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
+import 'package:nai_casrand/data/models/precise_reference_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
+import 'package:nai_casrand/data/models/vibe_config.dart';
+import 'package:nai_casrand/data/models/vibe_config_v4.dart';
 import 'package:nai_casrand/data/use_cases/i2i_request_size.dart';
 
 void main() {
@@ -67,6 +70,26 @@ void main() {
       const [GenerationSize(width: 1024, height: 1024)],
     );
     expect(restored.i2iConfig.sizeMode, I2iSizeMode.manual);
+  });
+
+  test('I2I random-seed override persists without changing profile seeds', () {
+    final config = PayloadConfig.fromJson(legacyConfigJson('legacy'));
+    config.paramConfig
+      ..randomSeed = false
+      ..seed = 424242;
+    config.i2iConfig.setUseRandomSeed(true);
+
+    final restored = PayloadConfig.fromJson(config.toJson());
+
+    expect(restored.i2iConfig.useRandomSeed, isTrue);
+    expect(restored.paramConfig.randomSeed, isFalse);
+    expect(restored.paramConfig.seed, 424242);
+
+    restored.loadJson({
+      ...legacyConfigJson('legacy'),
+      'i2i_use_random_seed': false,
+    });
+    expect(restored.i2iConfig.useRandomSeed, isFalse);
   });
 
   test('saved string negative config keeps its roll settings without wrapping',
@@ -323,23 +346,109 @@ void main() {
   });
 
   test(
-      'built-in defaults use NAI 4.5 Full parameters, a fixed negative prompt, and no characters',
+      'built-in defaults use the requested prompts, interval, and NAI 4.5 Full parameters',
       () async {
+    const qualityPrompt = 'very aesthetic, masterpiece, no text';
+    const negativePrompt =
+        'lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone, screentone, multiple views, logo, too many watermarks, negative space, blank page';
     final source = await rootBundle.loadString('assets/json/example.json');
     final config = PayloadConfig.fromJson(
       json.decode(source) as Map<String, dynamic>,
+    );
+    final qualityConfig = config.rootPromptConfig.prompts.singleWhere(
+      (prompt) => prompt.comment == '质量',
     );
 
     expect(config.characterConfigList, isEmpty);
     expect(config.paramConfig.model, 'nai-diffusion-4-5-full');
     expect(config.paramConfig.scale, 5.0);
     expect(config.paramConfig.cfgRescale, 0.0);
+    expect(config.settings.generationIntervalSec, 2);
+    expect(qualityConfig.strs, [qualityPrompt]);
     expect(config.negativePromptConfig.type, 'str');
     expect(config.negativePromptConfig.comment, '负面内容');
     expect(config.negativePromptConfig.selectionMethod, 'all');
     expect(config.negativePromptConfig.shuffled, isFalse);
     expect(config.negativePromptConfig.prompts, isEmpty);
-    expect(config.negativePromptConfig.strs, hasLength(1));
-    expect(config.negativePromptConfig.getPrmpts().toPrompt(), isNotEmpty);
+    expect(config.negativePromptConfig.strs, [negativePrompt]);
+    expect(config.paramConfig.negativePrompt, negativePrompt);
+    expect(ParamConfig().negativePrompt, negativePrompt);
+  });
+
+  test('advanced resources preserve manual disable until fully deleted', () {
+    final config = PayloadConfig.fromJson(legacyConfigJson('legacy'));
+
+    config.vibeConfigListV4.add(VibeConfigV4(
+      fileName: 'vibe',
+      vibeB64: 'encoded',
+      referenceStrength: 0.2,
+    ));
+    config.noteVibeImported(wasEmpty: true);
+    expect(config.vibeEnabled, isTrue);
+    config.setVibeEnabled(false);
+    config.noteVibeImported(wasEmpty: false);
+    expect(config.vibeEnabled, isFalse);
+    config.vibeConfigListV4.clear();
+    config.clearVibeResourceState();
+    config.vibeConfigListV4.add(VibeConfigV4(
+      fileName: 'new vibe',
+      vibeB64: 'encoded-2',
+      referenceStrength: 0.2,
+    ));
+    config.noteVibeImported(wasEmpty: true);
+    expect(config.vibeEnabled, isTrue);
+  });
+
+  test('Vibe and Precise Reference are mutually exclusive without data loss',
+      () {
+    final config = PayloadConfig.fromJson(legacyConfigJson('legacy'));
+    config.vibeConfigListV4.add(VibeConfigV4(
+      fileName: 'vibe',
+      vibeB64: 'encoded',
+      referenceStrength: 0.2,
+    ));
+    config.preciseReferenceConfigList.add(PreciseReferenceConfig(
+      imageB64: 'image',
+      fileName: 'reference',
+    ));
+
+    config.setVibeEnabled(true);
+    expect(config.vibeEnabled, isTrue);
+    config.setPreciseReferenceEnabled(true);
+    expect(config.preciseReferenceEnabled, isTrue);
+    expect(config.vibeEnabled, isFalse);
+    expect(config.vibeConfigListV4, hasLength(1));
+  });
+
+  test('Vibe reset waits until both NAI3 and NAI4 resource lists are empty',
+      () {
+    final config = PayloadConfig.fromJson(legacyConfigJson('legacy'));
+    config.vibeConfigList.add(VibeConfig(
+      imageB64: 'nai3',
+      fileName: 'nai3.png',
+      infoExtracted: 1,
+      referenceStrength: 0.3,
+    ));
+    config.vibeConfigListV4.add(VibeConfigV4(
+      fileName: 'nai4',
+      vibeB64: 'nai4-vibe',
+      referenceStrength: 0.2,
+    ));
+    config.setVibeEnabled(true);
+    config.setVibeEnabled(false);
+
+    config.vibeConfigListV4.clear();
+    expect(config.hasVibeResources, isTrue);
+    expect(config.vibeEnabled, isFalse);
+
+    config.vibeConfigList.clear();
+    config.clearVibeResourceState();
+    config.vibeConfigListV4.add(VibeConfigV4(
+      fileName: 'new nai4',
+      vibeB64: 'new-vibe',
+      referenceStrength: 0.2,
+    ));
+    config.noteVibeImported(wasEmpty: true);
+    expect(config.vibeEnabled, isTrue);
   });
 }

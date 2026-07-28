@@ -4,7 +4,6 @@ import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/services/config_service.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
-import 'package:nai_casrand/ui/core/widgets/hover_expandable_fab.dart';
 
 class PromptModeSwitchButton extends StatelessWidget {
   const PromptModeSwitchButton({
@@ -12,13 +11,11 @@ class PromptModeSwitchButton extends StatelessWidget {
     required this.payloadConfig,
     required this.onChanged,
     this.heroTag,
-    this.expandOnHover = false,
   });
 
   final PayloadConfig payloadConfig;
   final VoidCallback onChanged;
   final Object? heroTag;
-  final bool expandOnHover;
 
   @override
   Widget build(BuildContext context) {
@@ -31,27 +28,17 @@ class PromptModeSwitchButton extends StatelessWidget {
       );
     }
 
-    final icon = Icon(fixed ? Icons.push_pin : Icons.shuffle);
-    final label = Text(
-      context.tr(fixed ? 'prompt_mode_fixed' : 'prompt_mode_random'),
+    final label = context.tr(
+      fixed ? 'prompt_mode_fixed' : 'prompt_mode_random',
     );
-    if (expandOnHover) {
-      return HoverExpandableFab(
-        heroTag: heroTag,
-        buttonKey: const Key('prompt-mode-switch'),
-        onPressed: onPressed,
-        tooltip: context.tr('prompt_mode_switch_tooltip'),
-        icon: icon,
-        label: label,
-      );
-    }
     return FloatingActionButton.extended(
       key: const Key('prompt-mode-switch'),
       heroTag: heroTag,
       onPressed: onPressed,
-      tooltip: context.tr('prompt_mode_switch_tooltip'),
-      icon: icon,
-      label: label,
+      tooltip: label,
+      isExtended: false,
+      icon: Icon(fixed ? Icons.push_pin : Icons.shuffle),
+      label: Text(label),
     );
   }
 }

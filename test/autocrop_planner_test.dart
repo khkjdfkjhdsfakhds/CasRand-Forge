@@ -90,6 +90,13 @@ void main() {
     expect(areaCapForSize(1728, 1728), areaCapWallpaper);
   });
 
+  test('automatic focus only applies above the normal free image area', () {
+    expect(autocropAppliesToImage(832, 1216), isFalse);
+    expect(autocropAppliesToImage(1024, 1024), isFalse);
+    expect(autocropAppliesToImage(1025, 1024), isTrue);
+    expect(autocropAppliesToImage(1600, 2400), isTrue);
+  });
+
   test('context margin snaps to the 8-px grid within 32..96', () {
     expect(normalizeContextPx(0), 32);
     expect(normalizeContextPx(33), 32);
@@ -231,9 +238,9 @@ void main() {
     expect(plan, isNull);
   });
 
-  test('a wider budget admits a frame the normal cap refuses', () {
-    // 1500x1500 exceeds the normal cap even without a context margin, but
-    // fits the wallpaper tier.
+  test('focused inpainting keeps the same 1 MP cap at larger size tiers', () {
+    // A larger general generation size must not make one Focus frame exceed
+    // the official 1 MP selection ceiling.
     final cells = gridWithMaskRect(
       imageWidth: 3000,
       imageHeight: 3000,
@@ -248,14 +255,15 @@ void main() {
       ),
       isNull,
     );
-    final plan = planFocusInpaint(
-      imageWidth: 3000,
-      imageHeight: 3000,
-      cells: cells,
-      maxArea: areaCapWallpaper,
-    )!;
-    expectValidPlan(plan,
-        imageWidth: 3000, imageHeight: 3000, cap: areaCapWallpaper);
+    expect(
+      planFocusInpaint(
+        imageWidth: 3000,
+        imageHeight: 3000,
+        cells: cells,
+        maxArea: areaCapWallpaper,
+      ),
+      isNull,
+    );
   });
 
   test('a region without room for a margin still gets a frame', () {
@@ -295,6 +303,50 @@ void main() {
         reason: 'a tall mask needs a tall frame');
     final bbox = maskBBoxFromCells(cells, 1600, 2400)!;
     expect(plan.outer.contains(bbox), isTrue);
+  });
+
+  test('near-maximum candidates follow mask plus context instead of square',
+      () {
+    final cells = gridWithMaskRect(
+      imageWidth: 1600,
+      imageHeight: 2400,
+      maskRect: const Rectangle(700, 400, 120, 1200),
+    );
+    final plan = planFocusInpaint(
+      imageWidth: 1600,
+      imageHeight: 2400,
+      cells: cells,
+      maxArea: areaCapNormal,
+    )!;
+
+    final bbox = maskBBoxFromCells(cells, 1600, 2400)!;
+    final expandedAspect =
+        (bbox.w + defaultContextPx * 2) / (bbox.h + defaultContextPx * 2);
+    final chosenError =
+        (log(plan.outer.w / plan.outer.h) - log(expandedAspect)).abs();
+    final squareError = log(expandedAspect).abs();
+
+    expect(plan.outer.h, greaterThan(plan.outer.w));
+    expect(chosenError, lessThan(squareError),
+        reason: 'the chosen frame follows the expanded mask better than 1:1');
+    expect(plan.outer.area, greaterThanOrEqualTo(areaCapNormal * 0.9));
+  });
+
+  test('a compact near-square region keeps the stable square frame', () {
+    final cells = gridWithMaskRect(
+      imageWidth: 1800,
+      imageHeight: 1800,
+      maskRect: const Rectangle(700, 700, 240, 260),
+    );
+    final plan = planFocusInpaint(
+      imageWidth: 1800,
+      imageHeight: 1800,
+      cells: cells,
+      maxArea: areaCapNormal,
+    )!;
+
+    expect(plan.outer.w, plan.outer.h);
+    expect(plan.outer.w, 1024);
   });
 
   test('inner region is the outer frame minus the context margin', () {
@@ -560,6 +612,45 @@ void main() {
   });
 
   group('planManualFocusInpaint', () {
+    test('manual focus keeps a visible non-repainted context band', () {
+      final cells = gridWithMaskRect(
+        imageWidth: 2000,
+        imageHeight: 2000,
+        maskRect: const Rectangle(700, 700, 100, 100),
+      );
+      final plan = planManualFocusInpaint(
+        imageWidth: 2000,
+        imageHeight: 2000,
+        cells: cells,
+        frame: const CropRect(x: 512, y: 512, w: 512, h: 512),
+        maxArea: areaCapNormal,
+        contextPx: 80,
+      )!;
+
+      expect(plan.contextPx, 80);
+      expect(plan.inner, const CropRect(x: 592, y: 592, w: 352, h: 352));
+      expect(
+          plan.inner.contains(maskBBoxFromCells(cells, 2000, 2000)!), isTrue);
+    });
+
+    test('a mask entirely inside the context band is not repainted', () {
+      final cells = gridWithMaskRect(
+        imageWidth: 2000,
+        imageHeight: 2000,
+        maskRect: const Rectangle(520, 520, 40, 40),
+      );
+      final plan = planManualFocusInpaint(
+        imageWidth: 2000,
+        imageHeight: 2000,
+        cells: cells,
+        frame: const CropRect(x: 512, y: 512, w: 512, h: 512),
+        maxArea: areaCapNormal,
+        contextPx: 64,
+      );
+
+      expect(plan, isNull);
+    });
+
     test('a small frame is enlarged to fill the budget, like Autocrop', () {
       final cells = gridWithMaskRect(
         imageWidth: 2000,
@@ -580,7 +671,7 @@ void main() {
       expect(plan.requestHeight, 1024);
     });
 
-    test('an oversized frame is scaled down to fit, unlike Autocrop', () {
+    test('an oversized manual frame is capped at the 1 MP ceiling', () {
       final cells = gridWithMaskRect(
         imageWidth: 2400,
         imageHeight: 2400,
@@ -594,13 +685,10 @@ void main() {
         maxArea: areaCapNormal,
       );
       expect(plan, isNotNull);
-      expect(plan!.scale, lessThan(1.0));
+      expect(plan!.outer.area, lessThanOrEqualTo(areaCapNormal));
+      expect(plan.outer.w, plan.outer.h);
       expect(plan.requestWidth * plan.requestHeight,
           lessThanOrEqualTo(areaCapNormal));
-      expect(plan.requestWidth % sizeStep, 0);
-      expect(plan.requestHeight % sizeStep, 0);
-      expect(plan.contentWidth % latentGrid, 0);
-      expect(plan.contentHeight % latentGrid, 0);
     });
 
     test('the frame is snapped to the latent grid and clipped to the image',

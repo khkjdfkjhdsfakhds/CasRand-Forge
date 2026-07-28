@@ -2,17 +2,22 @@ import 'dart:convert';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_command/flutter_command.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get_it/get_it.dart';
 import 'package:image/image.dart' as img;
 import 'package:nai_casrand/data/models/command_status.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
+import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
+import 'package:nai_casrand/ui/core/widgets/fullscreen_image_view.dart';
+import 'package:nai_casrand/ui/generation_page/widgets/generated_image_view.dart';
+import 'package:nai_casrand/ui/generation_page/widgets/info_card.dart';
 import 'package:nai_casrand/ui/enhance_page/view_models/enhance_page_viewmodel.dart';
 import 'package:nai_casrand/ui/enhance_page/widgets/enhance_page_view.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
@@ -113,6 +118,15 @@ void main() {
     );
   }
 
+  test('Magnitude 2 uses strength 0.4 and noise 0.0', () {
+    final config = GetIt.I<PayloadConfig>().enhanceConfig;
+
+    config.setPresetIndex(1);
+
+    expect(config.strength, 0.4);
+    expect(config.noise, 0.0);
+  });
+
   testWidgets('without a source image workspace and controls stay visible', (
     tester,
   ) async {
@@ -170,6 +184,31 @@ void main() {
     expect(config.showIndividualSettings, isTrue);
     expect(config.strength, config.individualStrength);
     expect(config.noise, config.individualNoise);
+  });
+
+  testWidgets(
+      'the current Enhance image can be deleted without hiding controls',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final config = GetIt.I<PayloadConfig>().enhanceConfig;
+    config.setImage(solidPng(512, 512));
+
+    await tester.pumpWidget(
+      localizedApp(EnhancePageView(viewmodel: EnhancePageViewmodel())),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('enhance-remove-image')));
+    await tester.pumpAndSettle();
+
+    expect(config.hasImage, isFalse);
+    expect(find.byKey(const Key('enhance-preset-slider')), findsOneWidget);
+    expect(
+      tester
+          .widget<FilledButton>(find.byKey(const Key('enhance-run')))
+          .onPressed,
+      isNull,
+    );
   });
 
   testWidgets('a small source offers 1x, 1.5x and 2x', (
@@ -270,6 +309,43 @@ void main() {
     );
     expect(payloadConfig.enhanceConfig.scale, 1.5);
     expect(payloadConfig.enhanceConfig.presetIndex, 4);
+  });
+
+  testWidgets('Enhance result opens fullscreen without metadata details', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final bytes = solidPng(64, 64);
+    final content = InfoCardContent(
+      title: 'enhanced.png',
+      info: 'metadata detail should stay hidden',
+      additionalInfo: const {'seed': 42},
+      imageBytes: bytes,
+    );
+    final generationViewmodel = GetIt.I<GenerationPageViewmodel>();
+    generationViewmodel.lastEnhanceCommand = Command.createAsyncNoParam(
+      () async => content,
+      initialValue: content,
+    );
+
+    await tester.pumpWidget(
+      localizedApp(EnhancePageView(viewmodel: EnhancePageViewmodel())),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(GeneratedImageView), findsOneWidget);
+    await tester.tap(find.byKey(const Key('transform-result-zoom-target')));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(FullscreenImageView), findsOneWidget);
+    expect(find.byKey(const Key('fullscreen-image-viewer')), findsOneWidget);
+    expect(find.byType(InfoDetailPage), findsNothing);
+    expect(find.text('metadata detail should stay hidden'), findsNothing);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.byType(FullscreenImageView), findsNothing);
   });
 
   testWidgets('use base image pulls the Img2Img base over', (tester) async {
