@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:adaptive_theme/adaptive_theme.dart';
 import 'package:image/image.dart' as img;
@@ -185,10 +186,17 @@ void main() {
       expect(find.byType(CheckboxListTile), findsNothing);
       expect(tester.getTopLeft(setup).dy,
           lessThan(tester.getTopLeft(metadata).dy));
-      expect(tester.getTopLeft(metadata).dy,
-          lessThan(tester.getTopLeft(output).dy));
-      expect(
-          tester.getTopLeft(output).dy, lessThan(tester.getTopLeft(prefix).dy));
+      if (Platform.isMacOS || Platform.isWindows) {
+        expect(output, findsOneWidget);
+        expect(tester.getTopLeft(metadata).dy,
+            lessThan(tester.getTopLeft(output).dy));
+        expect(tester.getTopLeft(output).dy,
+            lessThan(tester.getTopLeft(prefix).dy));
+      } else {
+        expect(output, findsNothing);
+        expect(tester.getTopLeft(metadata).dy,
+            lessThan(tester.getTopLeft(prefix).dy));
+      }
       expect(tester.getTopLeft(prefix).dy,
           lessThan(tester.getTopLeft(remember).dy));
       expect(
