@@ -55,6 +55,62 @@ void main() {
     expect(config.getPrmpts().toPrompt(), isEmpty);
   });
 
+  test('comment lines are saved but removed from generated entries', () {
+    final config = PromptConfig(
+      selectionMethod: 'all',
+      shuffled: false,
+      strs: [
+        'red hair\n# private note\nblue eyes',
+        '   # comment-only entry',
+        '\n  \n',
+        'green eyes # real inline hash',
+      ],
+      prompts: [],
+    );
+
+    expect(
+      config.getPrmpts().toPrompt(),
+      'red hair\nblue eyes, green eyes # real inline hash',
+    );
+    expect(config.usableEntryCount, 2);
+    expect(config.strs, contains('   # comment-only entry'));
+
+    final restored = PromptConfig.fromJson(config.toJson());
+    expect(restored.strs, config.strs);
+    expect(restored.getPrmpts().toPrompt(), config.getPrmpts().toPrompt());
+  });
+
+  test('every string selection method ignores comment-only and blank entries',
+      () {
+    PromptConfig config(String method) => PromptConfig(
+          selectionMethod: method,
+          shuffled: false,
+          prob: 1,
+          num: 10,
+          strs: const ['# note', '', 'first', '   # hidden', 'second'],
+          prompts: [],
+        );
+
+    expect(config('all').getPrmpts().toPrompt(), 'first, second');
+    expect(config('multiple_prob').getPrmpts().toPrompt(), 'first, second');
+    expect(
+      config('multiple_num').getPrmpts().toPrompt().split(', '),
+      unorderedEquals(['first', 'second']),
+    );
+
+    final single = config('single');
+    for (var i = 0; i < 20; i++) {
+      expect(single.getPrmpts().toPrompt(), isIn(['first', 'second']));
+    }
+
+    final sequential = config('single_sequential');
+    sequential.num = 1;
+    expect(
+      List.generate(3, (_) => sequential.getPrmpts().toPrompt()),
+      ['first', 'second', 'first'],
+    );
+  });
+
   test('payload reset includes root, saved, and character prompt configs', () {
     PromptConfig sequential(String first, String second) => PromptConfig(
           selectionMethod: 'single_sequential',

@@ -94,8 +94,10 @@ class GeneratePayloadUseCase {
     );
 
     // Get prompt
-    final basePromptResult =
-        rootPromptConfig.getPrmpts().replaceVariables(pattern, savedConfigList);
+    final filterEntryComments = payloadConfig.promptMode != PromptMode.fixed;
+    final basePromptResult = rootPromptConfig
+        .getPrmpts(filterEntryComments: filterEntryComments)
+        .replaceVariables(pattern, savedConfigList);
     final basePair = PromptCommentPair(
       prompt: basePromptResult.toPrompt(),
       comment: basePromptResult.toComment(),
@@ -168,7 +170,7 @@ class GeneratePayloadUseCase {
       });
     }
     final negativePromptResult = negativePromptConfig
-        .getPrmpts()
+        .getPrmpts(filterEntryComments: filterEntryComments)
         .replaceVariables(pattern, savedConfigList);
     final negativePair = PromptCommentPair(
       prompt: negativePromptResult.toPrompt(),

@@ -60,8 +60,8 @@ class PromptConfigViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setStrs(String value) {
-    config.strs = value.split('\n').where((str) => str.isNotEmpty).toList();
+  void setEntries(List<String> value) {
+    config.strs = List.of(value);
     notifyListeners();
   }
 

@@ -200,6 +200,29 @@ class PromptConfig {
     };
   }
 
+  static bool isCommentLine(String line) => line.trimLeft().startsWith('#');
+
+  static String? promptTextForEntry(String entry) {
+    final promptLines = entry
+        .split(RegExp(r'\r?\n'))
+        .where((line) => !isCommentLine(line))
+        .toList(growable: false);
+    if (!promptLines.any((line) => line.trim().isNotEmpty)) return null;
+    return promptLines.join('\n');
+  }
+
+  static bool entryHasPrompt(String entry) => promptTextForEntry(entry) != null;
+
+  List<String> get usableEntries =>
+      strs.map(promptTextForEntry).whereType<String>().toList(growable: false);
+
+  int get usableEntryCount => usableEntries.length;
+
+  int? get firstUsableEntryIndex {
+    final index = strs.indexWhere(entryHasPrompt);
+    return index < 0 ? null : index;
+  }
+
   String addRandomBrackets(String s) {
     int n = randomBracketsLower +
         Random().nextInt(randomBracketsUpper - randomBracketsLower + 1);
@@ -216,11 +239,11 @@ class PromptConfig {
     return bracketString[0] + s + bracketString[1];
   }
 
-  NestedPrompt getPrmpts() {
+  NestedPrompt getPrmpts({bool filterEntryComments = true}) {
     List<dynamic> chosenPrompts = [];
     List<dynamic> promptsToChoose = [];
     if (type == 'str') {
-      promptsToChoose = List.from(strs);
+      promptsToChoose = List.from(filterEntryComments ? usableEntries : strs);
     } else if (type == 'config') {
       promptsToChoose = List.from(prompts.where((p) => p.enabled));
     }
@@ -275,7 +298,8 @@ class PromptConfig {
       return NestedPromptList(
           title: comment,
           children: chosenPrompts
-              .map((p) => (p as PromptConfig).getPrmpts())
+              .map((p) => (p as PromptConfig)
+                  .getPrmpts(filterEntryComments: filterEntryComments))
               .toList());
     } else {
       throw UnimplementedError();

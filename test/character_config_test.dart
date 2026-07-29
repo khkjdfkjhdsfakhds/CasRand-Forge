@@ -39,6 +39,54 @@ void main() {
     expect(config.positivePromptConfig.strs.single, 'girl, red hair');
   });
 
+  test('gender prefix skips leading comment-only and blank entries', () {
+    final config = CharacterConfig.fromEmpty()
+      ..positivePromptConfig.strs = [
+        '# character notes',
+        '   ',
+        '# notes inside the entry\nportrait',
+      ];
+
+    config.setGender(CharacterConfig.genderFemale);
+
+    expect(config.positivePromptConfig.strs, [
+      '# character notes',
+      '   ',
+      '# notes inside the entry\ngirl, portrait',
+    ]);
+
+    config.setGender(CharacterConfig.genderOther);
+    expect(config.positivePromptConfig.strs, [
+      '# character notes',
+      '   ',
+      '# notes inside the entry\nportrait',
+    ]);
+  });
+
+  test('gender prefix finds the first usable nested string config', () {
+    final notes = PromptConfig(
+      shuffled: false,
+      strs: ['# notes only'],
+      prompts: [],
+    );
+    final prompt = PromptConfig(
+      shuffled: false,
+      strs: ['portrait'],
+      prompts: [],
+    );
+    final config = CharacterConfig.fromEmpty()
+      ..positivePromptConfig = PromptConfig(
+        type: 'config',
+        strs: [],
+        prompts: [notes, prompt],
+      );
+
+    config.setGender(CharacterConfig.genderFemale);
+
+    expect(notes.strs, ['# notes only']);
+    expect(prompt.strs, ['girl, portrait']);
+  });
+
   test('switching Female or Male to Other removes only binary prefixes', () {
     final cases = {
       'girl, red hair': 'red hair',

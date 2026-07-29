@@ -111,22 +111,42 @@ class CharacterConfig {
     gender = value;
     if (value == genderOther) {
       if (previousGender == genderFemale || previousGender == genderMale) {
-        final target = _findFirstStringConfig(positivePromptConfig);
-        if (target != null && target.strs.isNotEmpty) {
-          target.strs[0] = _removeBinaryGenderPrefix(target.strs.first);
+        final target = _findFirstUsableStringConfig(positivePromptConfig);
+        final index = target?.firstUsableEntryIndex;
+        if (target != null && index != null) {
+          target.strs[index] = _mapFirstPromptLine(
+            target.strs[index],
+            _removeBinaryGenderPrefix,
+          );
         }
       }
       return;
     }
 
-    final target = _findFirstStringConfig(positivePromptConfig) ??
+    final target = _findFirstUsableStringConfig(positivePromptConfig) ??
+        _findFirstStringConfig(positivePromptConfig) ??
         _insertFirstStringConfig(positivePromptConfig);
     final prefix = value == genderFemale ? 'girl' : 'boy';
-    if (target.strs.isEmpty) {
+    final index = target.firstUsableEntryIndex;
+    if (index == null) {
       target.strs.add('$prefix,');
       return;
     }
-    target.strs[0] = _replaceGenderPrefix(target.strs.first, prefix);
+    target.strs[index] = _mapFirstPromptLine(
+      target.strs[index],
+      (line) => _replaceGenderPrefix(line, prefix),
+    );
+  }
+
+  static PromptConfig? _findFirstUsableStringConfig(PromptConfig config) {
+    if (config.type == 'str' && config.firstUsableEntryIndex != null) {
+      return config;
+    }
+    for (final child in config.prompts) {
+      final result = _findFirstUsableStringConfig(child);
+      if (result != null) return result;
+    }
+    return null;
   }
 
   static PromptConfig? _findFirstStringConfig(PromptConfig config) {
@@ -164,6 +184,19 @@ class CharacterConfig {
       caseSensitive: false,
     );
     return content.replaceFirst(leadingBinaryGender, '').trimLeft();
+  }
+
+  static String _mapFirstPromptLine(
+    String content,
+    String Function(String) transform,
+  ) {
+    final lines = content.split('\n');
+    final index = lines.indexWhere(
+      (line) => !PromptConfig.isCommentLine(line) && line.trim().isNotEmpty,
+    );
+    if (index < 0) return content;
+    lines[index] = transform(lines[index]);
+    return lines.join('\n');
   }
 
   static PromptConfig _negativePromptConfigFromLegacy(String value) {

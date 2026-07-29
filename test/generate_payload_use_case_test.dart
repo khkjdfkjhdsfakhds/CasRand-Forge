@@ -47,6 +47,41 @@ void main() {
     expect(result.payload['parameters']['v4_prompt']['use_coords'], isFalse);
   });
 
+  test('fixed base and negative prompts keep line-leading hashes verbatim', () {
+    final config = PayloadConfig(
+      rootPromptConfig: PromptConfig(
+        shuffled: false,
+        strs: ['random prompt'],
+        prompts: [],
+      ),
+      negativePromptConfig: PromptConfig(
+        shuffled: false,
+        strs: ['random negative'],
+        prompts: [],
+      ),
+      characterConfigList: [],
+      savedPromptConfigList: [],
+      paramConfig: ParamConfig(),
+      settings: Settings.fromJson({}),
+      overridePrompt: '# literal fixed prompt\nblue eyes',
+      useOverridePrompt: true,
+      useCharacterPromptWithOverride: false,
+    );
+    config.fixedProfile.negativePromptConfig = PayloadConfig.fixedPromptConfig(
+      '# literal fixed negative\nbad hands',
+      negative: true,
+    );
+
+    final result = GeneratePayloadUseCase(payloadConfig: config)();
+    final parameters = result.payload['parameters'] as Map<String, dynamic>;
+
+    expect(result.payload['input'], '# literal fixed prompt\nblue eyes');
+    expect(
+      parameters['negative_prompt'],
+      '# literal fixed negative\nbad hands',
+    );
+  });
+
   test('imported V4 coordinates survive override prompt with no characters',
       () {
     final config = PayloadConfig(
