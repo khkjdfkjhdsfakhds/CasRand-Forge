@@ -229,6 +229,7 @@ class _PromptEntryEditorDialogState extends State<_PromptEntryEditorDialog> {
           onChanged: (value) => _entries = value,
           helpText: context.tr('prompt_entry_editor_help'),
           insertLineBreakLabel: context.tr('insert_prompt_line_break'),
+          nextEntryLabel: context.tr('next_prompt_entry'),
           commentLabel: context.tr('prompt_entry_comment'),
         ),
       ),

@@ -10,6 +10,7 @@ class PromptEntryEditor extends StatefulWidget {
     required this.onChanged,
     required this.helpText,
     required this.insertLineBreakLabel,
+    required this.nextEntryLabel,
     required this.commentLabel,
   });
 
@@ -17,6 +18,7 @@ class PromptEntryEditor extends StatefulWidget {
   final ValueChanged<List<String>> onChanged;
   final String helpText;
   final String insertLineBreakLabel;
+  final String nextEntryLabel;
   final String commentLabel;
 
   @override
@@ -398,14 +400,23 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
             },
           ),
         ),
-        Align(
-          alignment: Alignment.centerRight,
-          child: TextButton.icon(
-            key: const Key('insert-prompt-line-break'),
-            onPressed: _insertLineBreak,
-            icon: const Icon(Icons.keyboard_return, size: 18),
-            label: Text(widget.insertLineBreakLabel),
-          ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            TextButton.icon(
+              key: const Key('insert-prompt-line-break'),
+              onPressed: _insertLineBreak,
+              icon: const Icon(Icons.keyboard_return, size: 18),
+              label: Text(widget.insertLineBreakLabel),
+            ),
+            const SizedBox(width: 8),
+            TextButton.icon(
+              key: const Key('next-prompt-entry'),
+              onPressed: () => _splitAtSelection(_activeIndex),
+              icon: const Icon(Icons.arrow_forward, size: 18),
+              label: Text(widget.nextEntryLabel),
+            ),
+          ],
         ),
       ],
     );

@@ -64,6 +64,7 @@
     "edit_cascaded_config_str_notice": "Enter prompts to be picked, one line for each prompt",
     "prompt_entry_editor_help": "Enter: new entry · Shift+Enter: line break · A line beginning with # is a saved comment",
     "insert_prompt_line_break": "Insert line break",
+    "next_prompt_entry": "Next entry",
     "prompt_entry_comment": "Comment",
     "cascaded_configs": "Nested Configs",
     "cascaded_strings": "String Values",

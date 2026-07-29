@@ -21,6 +21,7 @@ void main() {
                 onChanged: onChanged,
                 helpText: 'Editor help',
                 insertLineBreakLabel: 'Insert line break',
+                nextEntryLabel: 'Next entry',
                 commentLabel: 'Comment',
               ),
             ),
@@ -139,6 +140,37 @@ void main() {
 
     expect(entries, ['red \n\nhair']);
     expect(find.byType(TextField), findsOneWidget);
+  });
+
+  testWidgets('next entry button splits at the caret and focuses the new entry',
+      (
+    tester,
+  ) async {
+    var entries = <String>[];
+    await pumpEditor(
+      tester,
+      entries: const ['red hair'],
+      onChanged: (value) => entries = value,
+    );
+
+    final first = controllerFor(tester, 0);
+    await tester.tap(find.byKey(const Key('prompt-entry-field-0')));
+    first.selection = const TextSelection.collapsed(offset: 4);
+    await tester.tap(find.byKey(const Key('next-prompt-entry')));
+    await tester.pump();
+
+    expect(entries, ['red ', 'hair']);
+    expect(find.byType(TextField), findsNWidgets(2));
+    expect(controllerFor(tester, 1).selection.baseOffset, 0);
+    expect(
+      tester
+          .widget<TextField>(
+            find.byKey(const Key('prompt-entry-field-1')),
+          )
+          .focusNode!
+          .hasFocus,
+      isTrue,
+    );
   });
 
   testWidgets('pasted newlines become entry boundaries', (tester) async {
