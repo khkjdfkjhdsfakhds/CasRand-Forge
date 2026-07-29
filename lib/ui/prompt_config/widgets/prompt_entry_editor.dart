@@ -400,8 +400,10 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
             },
           ),
         ),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.end,
+        Wrap(
+          alignment: WrapAlignment.end,
+          spacing: 8,
+          runSpacing: 4,
           children: [
             TextButton.icon(
               key: const Key('insert-prompt-line-break'),
@@ -409,7 +411,6 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
               icon: const Icon(Icons.keyboard_return, size: 18),
               label: Text(widget.insertLineBreakLabel),
             ),
-            const SizedBox(width: 8),
             TextButton.icon(
               key: const Key('next-prompt-entry'),
               onPressed: () => _splitAtSelection(_activeIndex),

@@ -1,15 +1,19 @@
 import 'package:flutter/foundation.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
 
+AppDestination? _destinationForId(Object? value) {
+  for (final destination in AppDestination.values) {
+    if (destination.persistenceId == value) return destination;
+  }
+  return null;
+}
+
 class NavigationConfiguration extends ChangeNotifier {
   static const currentSchemaVersion = 1;
 
-  static const defaultDestinations = [
-    AppDestination.generation,
-    AppDestination.config,
-    AppDestination.more,
-    AppDestination.settings,
-  ];
+  static final defaultDestinations = AppDestination.values
+      .where((destination) => destination.isMandatory)
+      .toList(growable: false);
 
   final int schemaVersion;
   final List<AppDestination> _destinations;
@@ -32,11 +36,12 @@ class NavigationConfiguration extends ChangeNotifier {
 
     final parsed = <AppDestination>[];
     for (final value in json['navigation_destinations'] as List) {
-      final destination = _destinationById[value];
+      final destination = _destinationForId(value);
       if (destination != null && !parsed.contains(destination)) {
         parsed.add(destination);
       }
     }
+
     for (final destination in defaultDestinations) {
       if (!parsed.contains(destination)) parsed.add(destination);
     }
@@ -50,12 +55,22 @@ class NavigationConfiguration extends ChangeNotifier {
   Map<String, dynamic> toJson() => {
         'navigation_schema_version': schemaVersion,
         'navigation_destinations': destinations
-            .map((destination) => _idByDestination[destination]!)
+            .map((destination) => destination.persistenceId)
             .toList(growable: false),
       };
 
   bool contains(AppDestination destination) =>
       _destinations.contains(destination);
+
+  /// Replaces loaded navigation data without invalidating listeners held by
+  /// the application shell.
+  void replaceWith(NavigationConfiguration other) {
+    if (listEquals(_destinations, other._destinations)) return;
+    _destinations
+      ..clear()
+      ..addAll(other._destinations);
+    notifyListeners();
+  }
 
   bool addFavorite(AppDestination destination) {
     if (destination.isMandatory || _destinations.contains(destination)) {
@@ -103,41 +118,4 @@ class NavigationConfiguration extends ChangeNotifier {
     if (newIndex > oldIndex) newIndex--;
     return move(oldIndex, newIndex);
   }
-
-  static const _destinationById = <Object?, AppDestination>{
-    'image_generation': AppDestination.generation,
-    'generation_config': AppDestination.config,
-    'more': AppDestination.more,
-    'settings': AppDestination.settings,
-    'image_to_image': AppDestination.imageToImage,
-    'vibe_reference': AppDestination.vibeReference,
-    'enhance': AppDestination.enhance,
-    'director_tools': AppDestination.directorTools,
-  };
-
-  static const _idByDestination = <AppDestination, String>{
-    AppDestination.generation: 'image_generation',
-    AppDestination.config: 'generation_config',
-    AppDestination.more: 'more',
-    AppDestination.settings: 'settings',
-    AppDestination.imageToImage: 'image_to_image',
-    AppDestination.vibeReference: 'vibe_reference',
-    AppDestination.enhance: 'enhance',
-    AppDestination.directorTools: 'director_tools',
-  };
-}
-
-extension AppDestinationNavigationProperties on AppDestination {
-  bool get isMandatory => switch (this) {
-        AppDestination.generation ||
-        AppDestination.config ||
-        AppDestination.more ||
-        AppDestination.settings =>
-          true,
-        AppDestination.imageToImage ||
-        AppDestination.vibeReference ||
-        AppDestination.enhance ||
-        AppDestination.directorTools =>
-          false,
-      };
 }

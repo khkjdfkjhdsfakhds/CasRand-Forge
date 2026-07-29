@@ -354,7 +354,12 @@ class PayloadConfig {
           ? _negativePromptConfigFromJson(negativePromptConfigJson)
           : _negativePromptConfigFromLegacy(randomParamConfig.negativePrompt),
     );
-    settings = Settings.fromJson(jsonData['settings'] ?? {});
+    final loadedSettings = Settings.fromJson(jsonData['settings'] ?? {});
+    final liveNavigation = settings.navigation;
+    final loadedNavigation = loadedSettings.navigation;
+    loadedSettings.navigation = liveNavigation;
+    settings = loadedSettings;
+    liveNavigation.replaceWith(loadedNavigation);
     final fixedJson = jsonData['fixed_profile'];
     fixedProfile = fixedJson is Map<String, dynamic>
         ? GenerationProfile.fromJson(fixedJson)

@@ -153,6 +153,13 @@ void main() {
       onChanged: (value) => entries = value,
     );
 
+    expect(
+      tester.getCenter(find.byKey(const Key('next-prompt-entry'))).dx,
+      greaterThan(
+        tester.getCenter(find.byKey(const Key('insert-prompt-line-break'))).dx,
+      ),
+    );
+
     final first = controllerFor(tester, 0);
     await tester.tap(find.byKey(const Key('prompt-entry-field-0')));
     first.selection = const TextSelection.collapsed(offset: 4);

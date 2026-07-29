@@ -64,4 +64,37 @@ void main() {
     expect(config.strs, ['first', 'second', '# saved note']);
     expect(find.text('String Values: 2 items'), findsOneWidget);
   });
+
+  testWidgets('prompt entry actions fit a phone-size dialog', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AlertDialog(
+            content: SizedBox(
+              width: 262,
+              height: 624,
+              child: PromptEntryEditor(
+                initialEntries: const ['one'],
+                onChanged: (_) {},
+                helpText: 'Editor help',
+                insertLineBreakLabel: 'Insert line break',
+                nextEntryLabel: 'Next entry',
+                commentLabel: 'Comment',
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Insert line break'), findsOneWidget);
+    expect(find.text('Next entry'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }

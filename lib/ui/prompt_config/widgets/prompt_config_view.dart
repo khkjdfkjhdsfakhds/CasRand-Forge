@@ -218,11 +218,13 @@ class _PromptEntryEditorDialogState extends State<_PromptEntryEditorDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final availableHeight = MediaQuery.sizeOf(context).height - 220;
+    final mediaSize = MediaQuery.sizeOf(context);
+    final availableWidth = mediaSize.width - 128;
+    final availableHeight = mediaSize.height - 220;
     return AlertDialog(
       title: Text('${context.tr('edit')}${context.tr('cascaded_strings')}'),
       content: SizedBox(
-        width: 620,
+        width: availableWidth.clamp(240, 620),
         height: availableHeight.clamp(180, 680),
         child: PromptEntryEditor(
           initialEntries: _entries,

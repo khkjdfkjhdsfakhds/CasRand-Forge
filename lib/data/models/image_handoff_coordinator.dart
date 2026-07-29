@@ -21,6 +21,8 @@ typedef ImagePreviewCreator = Future<Uint8List> Function(
   ImageDimensions dimensions,
 );
 
+typedef _TargetImageState = ({Object config, int revision});
+
 enum ImageHandoffAction { imageToImage, inpaint, enhance, directorTools }
 
 enum ImageHandoffPhase { idle, preparing, failure }
@@ -201,12 +203,14 @@ class ImageHandoffCoordinator extends ChangeNotifier {
     _prompt = prompt;
     _model = model;
     _error = null;
+    final targetImageState = _targetImageState(action);
     navigate();
     notifyListeners();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _prepareAndCommit(
         requestGeneration: requestGeneration,
+        targetImageState: targetImageState,
         action: action,
         bytes: bytes,
       );
@@ -216,18 +220,27 @@ class ImageHandoffCoordinator extends ChangeNotifier {
 
   Future<void> _prepareAndCommit({
     required int requestGeneration,
+    required _TargetImageState targetImageState,
     required ImageHandoffAction action,
     required Uint8List bytes,
   }) async {
     try {
       final dimensions = await _readDimensions(bytes);
       if (requestGeneration != _generation) return;
+      if (!_targetImageStateMatches(action, targetImageState)) {
+        _finishSuperseded(requestGeneration);
+        return;
+      }
 
       Uint8List? previewBytes;
       if (action == ImageHandoffAction.imageToImage ||
           action == ImageHandoffAction.inpaint) {
         previewBytes = await _createPreview(bytes, dimensions);
         if (requestGeneration != _generation) return;
+        if (!_targetImageStateMatches(action, targetImageState)) {
+          _finishSuperseded(requestGeneration);
+          return;
+        }
       }
 
       switch (action) {
@@ -279,9 +292,45 @@ class ImageHandoffCoordinator extends ChangeNotifier {
       notifyListeners();
     } catch (error) {
       if (requestGeneration != _generation) return;
+      if (!_targetImageStateMatches(action, targetImageState)) {
+        _finishSuperseded(requestGeneration);
+        return;
+      }
       _phase = ImageHandoffPhase.failure;
       _error = error;
       notifyListeners();
     }
+  }
+
+  _TargetImageState _targetImageState(ImageHandoffAction action) =>
+      switch (action) {
+        ImageHandoffAction.imageToImage || ImageHandoffAction.inpaint => (
+            config: payloadConfig.i2iConfig,
+            revision: payloadConfig.i2iConfig.imageRevision,
+          ),
+        ImageHandoffAction.enhance => (
+            config: payloadConfig.enhanceConfig,
+            revision: payloadConfig.enhanceConfig.imageRevision,
+          ),
+        ImageHandoffAction.directorTools => (
+            config: payloadConfig.directorToolConfig,
+            revision: payloadConfig.directorToolConfig.imageRevision,
+          ),
+      };
+
+  bool _targetImageStateMatches(
+    ImageHandoffAction action,
+    _TargetImageState expected,
+  ) {
+    final current = _targetImageState(action);
+    return identical(current.config, expected.config) &&
+        current.revision == expected.revision;
+  }
+
+  void _finishSuperseded(int requestGeneration) {
+    if (requestGeneration != _generation) return;
+    _phase = ImageHandoffPhase.idle;
+    _error = null;
+    notifyListeners();
   }
 }

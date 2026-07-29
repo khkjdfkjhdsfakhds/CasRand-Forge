@@ -3,6 +3,30 @@ import 'package:nai_casrand/data/models/navigation_configuration.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
 
 void main() {
+  test('destination metadata is complete and persistence IDs are unique', () {
+    expect(
+      AppDestination.values.map((destination) => destination.persistenceId),
+      hasLength(
+        AppDestination.values
+            .map((destination) => destination.persistenceId)
+            .toSet()
+            .length,
+      ),
+    );
+    for (final destination in AppDestination.values) {
+      expect(destination.persistenceId, isNotEmpty);
+      expect(destination.labelKey, isNotEmpty);
+      expect(destination.shortLabelKey, isNotEmpty);
+      expect(destination.descriptionKey, isNotEmpty);
+    }
+    expect(
+      NavigationConfiguration.defaultDestinations,
+      AppDestination.values
+          .where((destination) => destination.isMandatory)
+          .toList(growable: false),
+    );
+  });
+
   test('new navigation starts with the four mandatory destinations in order',
       () {
     final configuration = NavigationConfiguration.fromJson({});

@@ -67,6 +67,11 @@ class I2IConfig with ChangeNotifier {
   /// invalidate decoded images or Autocrop tiles.
   int planRevision = 0;
 
+  /// Incremented only when the source image changes, so delayed handoffs can
+  /// detect a newer local import without treating parameter edits as a cancel.
+  int _imageRevision = 0;
+  int get imageRevision => _imageRevision;
+
   I2IConfig({
     String? imageB64,
     this.strength = 0.7,
@@ -141,6 +146,7 @@ class I2IConfig with ChangeNotifier {
     manualFocusFrame = null;
     sizeMode = I2iSizeMode.automatic;
     requestSize = automaticI2iRequestSize(width, height);
+    _imageRevision++;
     revision++;
     planRevision++;
     notifyListeners();
@@ -157,6 +163,7 @@ class I2IConfig with ChangeNotifier {
     manualFocusFrame = null;
     width = 0;
     height = 0;
+    _imageRevision++;
     revision++;
     planRevision++;
     notifyListeners();

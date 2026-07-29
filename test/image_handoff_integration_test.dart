@@ -259,6 +259,199 @@ void main() {
   );
 
   testWidgets(
+    'a local I2I import supersedes a pending result handoff',
+    (tester) async {
+      final prepared = Completer<ImageDimensions>();
+      final payload = GetIt.I<PayloadConfig>();
+      var preparationStarted = false;
+      final coordinator = ImageHandoffCoordinator(
+        payloadConfig: payload,
+        navigation: GetIt.I<NavigationRequest>(),
+        readDimensions: (_) {
+          preparationStarted = true;
+          return prepared.future;
+        },
+      );
+      final resultBytes = _solidPng(64, 96);
+      final localBytes = _solidPng(48, 72);
+
+      await tester.pumpWidget(const SizedBox());
+      expect(coordinator.useAsBaseImage(resultBytes), isTrue);
+      tester.binding.scheduleFrame();
+      await tester.pump();
+      expect(preparationStarted, isTrue);
+      payload.i2iConfig.setImage(localBytes);
+      await tester.runAsync(() async {
+        prepared.complete(const ImageDimensions(width: 64, height: 96));
+        await prepared.future;
+        await Future<void>.delayed(Duration.zero);
+      });
+      await tester.pumpAndSettle();
+
+      expect(payload.i2iConfig.imageBytes, same(localBytes));
+      expect(coordinator.phase, ImageHandoffPhase.idle);
+    },
+  );
+
+  testWidgets(
+    'a local Enhance import supersedes a pending result handoff',
+    (tester) async {
+      final prepared = Completer<ImageDimensions>();
+      final payload = GetIt.I<PayloadConfig>();
+      var preparationStarted = false;
+      final coordinator = ImageHandoffCoordinator(
+        payloadConfig: payload,
+        navigation: GetIt.I<NavigationRequest>(),
+        readDimensions: (_) {
+          preparationStarted = true;
+          return prepared.future;
+        },
+      );
+      final resultBytes = _solidPng(64, 96);
+      final localBytes = _solidPng(48, 72);
+      payload
+        ..useOverridePrompt = true
+        ..overridePrompt = 'keep local profile';
+
+      await tester.pumpWidget(const SizedBox());
+      expect(
+        coordinator.sendToEnhance(
+          resultBytes,
+          metadata: const {'input': 'stale result profile'},
+        ),
+        isTrue,
+      );
+      tester.binding.scheduleFrame();
+      await tester.pump();
+      expect(preparationStarted, isTrue);
+      payload.enhanceConfig.setImage(localBytes);
+      await tester.runAsync(() async {
+        prepared.complete(const ImageDimensions(width: 64, height: 96));
+        await prepared.future;
+        await Future<void>.delayed(Duration.zero);
+      });
+      await tester.pumpAndSettle();
+
+      expect(payload.enhanceConfig.imageBytes, same(localBytes));
+      expect(payload.overridePrompt, 'keep local profile');
+      expect(coordinator.phase, ImageHandoffPhase.idle);
+    },
+  );
+
+  testWidgets(
+    'a local Director import supersedes a pending result handoff',
+    (tester) async {
+      final prepared = Completer<ImageDimensions>();
+      final payload = GetIt.I<PayloadConfig>();
+      var preparationStarted = false;
+      final coordinator = ImageHandoffCoordinator(
+        payloadConfig: payload,
+        navigation: GetIt.I<NavigationRequest>(),
+        readDimensions: (_) {
+          preparationStarted = true;
+          return prepared.future;
+        },
+      );
+      final resultBytes = _solidPng(64, 96);
+      final localBytes = _solidPng(48, 72);
+
+      await tester.pumpWidget(const SizedBox());
+      expect(coordinator.sendToDirectorTools(resultBytes), isTrue);
+      tester.binding.scheduleFrame();
+      await tester.pump();
+      expect(preparationStarted, isTrue);
+      payload.directorToolConfig.setImage(localBytes);
+      await tester.runAsync(() async {
+        prepared.complete(const ImageDimensions(width: 64, height: 96));
+        await prepared.future;
+        await Future<void>.delayed(Duration.zero);
+      });
+      await tester.pumpAndSettle();
+
+      expect(payload.directorToolConfig.imageBytes, same(localBytes));
+      expect(coordinator.phase, ImageHandoffPhase.idle);
+    },
+  );
+
+  testWidgets(
+    'a failed old handoff cannot offer retry after a local import',
+    (tester) async {
+      final prepared = Completer<ImageDimensions>();
+      final payload = GetIt.I<PayloadConfig>();
+      var preparationStarted = false;
+      final coordinator = ImageHandoffCoordinator(
+        payloadConfig: payload,
+        navigation: GetIt.I<NavigationRequest>(),
+        readDimensions: (_) {
+          preparationStarted = true;
+          return prepared.future;
+        },
+      );
+      final resultBytes = _solidPng(64, 96);
+      final localBytes = _solidPng(48, 72);
+
+      await tester.pumpWidget(const SizedBox());
+      expect(coordinator.useAsBaseImage(resultBytes), isTrue);
+      tester.binding.scheduleFrame();
+      await tester.pump();
+      expect(preparationStarted, isTrue);
+      payload.i2iConfig.setImage(localBytes);
+      await tester.runAsync(() async {
+        prepared.completeError(const FormatException('old image failed'));
+        try {
+          await prepared.future;
+        } on FormatException {
+          // The coordinator consumes this old failure as a superseded request.
+        }
+        await Future<void>.delayed(Duration.zero);
+      });
+      await tester.pumpAndSettle();
+
+      expect(payload.i2iConfig.imageBytes, same(localBytes));
+      expect(coordinator.phase, ImageHandoffPhase.idle);
+      expect(coordinator.error, isNull);
+      expect(coordinator.retry(), isFalse);
+    },
+  );
+
+  testWidgets(
+    'resetting transient configs supersedes a pending result handoff',
+    (tester) async {
+      final prepared = Completer<ImageDimensions>();
+      final payload = GetIt.I<PayloadConfig>();
+      var preparationStarted = false;
+      final coordinator = ImageHandoffCoordinator(
+        payloadConfig: payload,
+        navigation: GetIt.I<NavigationRequest>(),
+        readDimensions: (_) {
+          preparationStarted = true;
+          return prepared.future;
+        },
+      );
+      final originalConfig = payload.i2iConfig;
+      final resultBytes = _solidPng(64, 96);
+
+      await tester.pumpWidget(const SizedBox());
+      expect(coordinator.useAsBaseImage(resultBytes), isTrue);
+      tester.binding.scheduleFrame();
+      await tester.pump();
+      expect(preparationStarted, isTrue);
+      payload.resetTransientConfigs();
+      expect(payload.i2iConfig, isNot(same(originalConfig)));
+      await tester.runAsync(() async {
+        prepared.complete(const ImageDimensions(width: 64, height: 96));
+        await prepared.future;
+        await Future<void>.delayed(Duration.zero);
+      });
+      await tester.pumpAndSettle();
+
+      expect(payload.i2iConfig.hasImage, isFalse);
+      expect(coordinator.phase, ImageHandoffPhase.idle);
+      expect(coordinator.retry(), isFalse);
+    },
+  );
+
+  testWidgets(
     'duplicate use as base clicks produce one image preparation',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(390, 800));

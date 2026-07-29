@@ -39,6 +39,8 @@ class EnhanceConfig with ChangeNotifier {
   Uint8List? _imageBytes;
   int width = 0;
   int height = 0;
+  int _imageRevision = 0;
+  int get imageRevision => _imageRevision;
 
   /// Magnification applied to the source image size.
   double scale;
@@ -110,6 +112,7 @@ class EnhanceConfig with ChangeNotifier {
     if (options.isNotEmpty) {
       scale = options.last;
     }
+    _imageRevision++;
     notifyListeners();
   }
 
@@ -117,6 +120,7 @@ class EnhanceConfig with ChangeNotifier {
     _imageBytes = null;
     width = 0;
     height = 0;
+    _imageRevision++;
     notifyListeners();
   }
 

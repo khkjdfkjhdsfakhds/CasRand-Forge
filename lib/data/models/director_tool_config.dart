@@ -65,6 +65,8 @@ class DirectorToolType {
 class DirectorToolConfig with ChangeNotifier {
   Uint8List? _imageBytes;
   String? _imageB64Cache;
+  int _imageRevision = 0;
+  int get imageRevision => _imageRevision;
 
   int width = 0;
   int height = 0;
@@ -118,6 +120,7 @@ class DirectorToolConfig with ChangeNotifier {
     this.height = height;
     _imageBytes = bytes;
     _imageB64Cache = null;
+    _imageRevision++;
     notifyListeners();
   }
 
@@ -126,6 +129,7 @@ class DirectorToolConfig with ChangeNotifier {
     _imageB64Cache = null;
     width = 0;
     height = 0;
+    _imageRevision++;
     notifyListeners();
   }
 

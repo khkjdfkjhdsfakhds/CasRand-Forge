@@ -3,89 +3,34 @@ import 'package:nai_casrand/data/models/navigation_request.dart';
 
 class NavigationDestinationDefinition {
   final AppDestination destination;
-  final String labelKey;
-  final String shortLabelKey;
-  final String descriptionKey;
   final IconData icon;
 
   const NavigationDestinationDefinition({
     required this.destination,
-    required this.labelKey,
-    required this.shortLabelKey,
-    required this.descriptionKey,
     required this.icon,
   });
+
+  String get labelKey => destination.labelKey;
+  String get shortLabelKey => destination.shortLabelKey;
+  String get descriptionKey => destination.descriptionKey;
 }
 
-const navigationDestinationCatalog = <NavigationDestinationDefinition>[
-  NavigationDestinationDefinition(
-    destination: AppDestination.generation,
-    labelKey: 'generation',
-    shortLabelKey: 'navigation_short_generation',
-    descriptionKey: 'navigation_description_generation',
-    icon: Icons.create,
-  ),
-  NavigationDestinationDefinition(
-    destination: AppDestination.config,
-    labelKey: 'prompt_config',
-    shortLabelKey: 'navigation_short_config',
-    descriptionKey: 'navigation_description_config',
-    icon: Icons.tune,
-  ),
-  NavigationDestinationDefinition(
-    destination: AppDestination.more,
-    labelKey: 'navigation_more',
-    shortLabelKey: 'navigation_short_more',
-    descriptionKey: 'navigation_description_more',
-    icon: Icons.apps,
-  ),
-  NavigationDestinationDefinition(
-    destination: AppDestination.settings,
-    labelKey: 'settings',
-    shortLabelKey: 'navigation_short_settings',
-    descriptionKey: 'navigation_description_settings',
-    icon: Icons.settings,
-  ),
-  NavigationDestinationDefinition(
-    destination: AppDestination.imageToImage,
-    labelKey: 'i2i_inpaint',
-    shortLabelKey: 'navigation_short_i2i',
-    descriptionKey: 'navigation_description_i2i',
-    icon: Icons.brush,
-  ),
-  NavigationDestinationDefinition(
-    destination: AppDestination.vibeReference,
-    labelKey: 'vibe_transfer',
-    shortLabelKey: 'navigation_short_reference',
-    descriptionKey: 'navigation_description_reference',
-    icon: Icons.auto_awesome_motion_outlined,
-  ),
-  NavigationDestinationDefinition(
-    destination: AppDestination.enhance,
-    labelKey: 'enhance_section',
-    shortLabelKey: 'navigation_short_enhance',
-    descriptionKey: 'navigation_description_enhance',
-    icon: Icons.auto_awesome,
-  ),
-  NavigationDestinationDefinition(
-    destination: AppDestination.directorTools,
-    labelKey: 'director_tool',
-    shortLabelKey: 'navigation_short_director',
-    descriptionKey: 'navigation_description_director',
-    icon: Icons.auto_fix_high,
-  ),
-];
-
-const optionalNavigationDestinations = <AppDestination>[
-  AppDestination.imageToImage,
-  AppDestination.vibeReference,
-  AppDestination.enhance,
-  AppDestination.directorTools,
-];
+final optionalNavigationDestinations = AppDestination.values
+    .where((destination) => !destination.isMandatory)
+    .toList(growable: false);
 
 NavigationDestinationDefinition navigationDefinition(
   AppDestination destination,
-) =>
-    navigationDestinationCatalog.firstWhere(
-      (definition) => definition.destination == destination,
-    );
+) {
+  final icon = switch (destination.icon) {
+    AppDestinationIcon.create => Icons.create,
+    AppDestinationIcon.tune => Icons.tune,
+    AppDestinationIcon.apps => Icons.apps,
+    AppDestinationIcon.brush => Icons.brush,
+    AppDestinationIcon.reference => Icons.auto_awesome_motion_outlined,
+    AppDestinationIcon.enhance => Icons.auto_awesome,
+    AppDestinationIcon.directorTools => Icons.auto_fix_high,
+    AppDestinationIcon.settings => Icons.settings,
+  };
+  return NavigationDestinationDefinition(destination: destination, icon: icon);
+}

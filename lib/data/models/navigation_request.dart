@@ -2,14 +2,95 @@ import 'package:flutter/foundation.dart';
 
 /// Top-level destinations, in navigation order.
 enum AppDestination {
-  generation,
-  config,
-  more,
-  imageToImage,
-  vibeReference,
+  generation(
+    persistenceId: 'image_generation',
+    mandatory: true,
+    labelKey: 'generation',
+    shortLabelKey: 'navigation_short_generation',
+    descriptionKey: 'navigation_description_generation',
+    icon: AppDestinationIcon.create,
+  ),
+  config(
+    persistenceId: 'generation_config',
+    mandatory: true,
+    labelKey: 'prompt_config',
+    shortLabelKey: 'navigation_short_config',
+    descriptionKey: 'navigation_description_config',
+    icon: AppDestinationIcon.tune,
+  ),
+  more(
+    persistenceId: 'more',
+    mandatory: true,
+    labelKey: 'navigation_more',
+    shortLabelKey: 'navigation_short_more',
+    descriptionKey: 'navigation_description_more',
+    icon: AppDestinationIcon.apps,
+  ),
+  imageToImage(
+    persistenceId: 'image_to_image',
+    labelKey: 'i2i_inpaint',
+    shortLabelKey: 'navigation_short_i2i',
+    descriptionKey: 'navigation_description_i2i',
+    icon: AppDestinationIcon.brush,
+  ),
+  vibeReference(
+    persistenceId: 'vibe_reference',
+    labelKey: 'vibe_transfer',
+    shortLabelKey: 'navigation_short_reference',
+    descriptionKey: 'navigation_description_reference',
+    icon: AppDestinationIcon.reference,
+  ),
+  enhance(
+    persistenceId: 'enhance',
+    labelKey: 'enhance_section',
+    shortLabelKey: 'navigation_short_enhance',
+    descriptionKey: 'navigation_description_enhance',
+    icon: AppDestinationIcon.enhance,
+  ),
+  directorTools(
+    persistenceId: 'director_tools',
+    labelKey: 'director_tool',
+    shortLabelKey: 'navigation_short_director',
+    descriptionKey: 'navigation_description_director',
+    icon: AppDestinationIcon.directorTools,
+  ),
+  settings(
+    persistenceId: 'settings',
+    mandatory: true,
+    labelKey: 'settings',
+    shortLabelKey: 'navigation_short_settings',
+    descriptionKey: 'navigation_description_settings',
+    icon: AppDestinationIcon.settings,
+  );
+
+  final String persistenceId;
+  final bool mandatory;
+  final String labelKey;
+  final String shortLabelKey;
+  final String descriptionKey;
+  final AppDestinationIcon icon;
+
+  const AppDestination({
+    required this.persistenceId,
+    this.mandatory = false,
+    required this.labelKey,
+    required this.shortLabelKey,
+    required this.descriptionKey,
+    required this.icon,
+  });
+
+  bool get isMandatory => mandatory;
+}
+
+enum AppDestinationIcon {
+  create,
+  tune,
+  apps,
+  brush,
+  reference,
   enhance,
   directorTools,
-  settings;
+  settings,
 }
 
 /// What the Img2Img page should open with after a jump.

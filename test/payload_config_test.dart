@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
+import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
@@ -70,6 +71,44 @@ void main() {
       const [GenerationSize(width: 1024, height: 1024)],
     );
     expect(restored.i2iConfig.sizeMode, I2iSizeMode.manual);
+  });
+
+  test('loading a config keeps one live navigation authority', () {
+    final config = PayloadConfig.fromJson(legacyConfigJson('legacy'));
+    final navigation = config.settings.navigation;
+    var notifications = 0;
+    navigation.addListener(() => notifications++);
+    final imported = legacyConfigJson('imported');
+    imported['settings'] = {
+      ...Settings.fromJson({}).toJson(),
+      'navigation_schema_version': 1,
+      'navigation_destinations': const [
+        'settings',
+        'more',
+        'image_to_image',
+        'generation_config',
+        'image_generation',
+      ],
+    };
+
+    config.loadJson(imported);
+
+    expect(config.settings.navigation, same(navigation));
+    expect(navigation.destinations, [
+      AppDestination.settings,
+      AppDestination.more,
+      AppDestination.imageToImage,
+      AppDestination.config,
+      AppDestination.generation,
+    ]);
+    expect(notifications, 1);
+
+    navigation.addFavorite(AppDestination.enhance);
+    final savedSettings = config.toJson()['settings'] as Map<String, dynamic>;
+    expect(
+      savedSettings['navigation_destinations'],
+      contains('enhance'),
+    );
   });
 
   test('I2I random-seed override persists without changing profile seeds', () {
