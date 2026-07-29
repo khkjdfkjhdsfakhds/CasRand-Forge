@@ -1,10 +1,12 @@
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/core/constants/image_formats.dart';
 import 'package:nai_casrand/data/models/i2i_config.dart';
+import 'package:nai_casrand/data/models/image_handoff_coordinator.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/data/use_cases/anlas_cost.dart';
 import 'package:nai_casrand/data/use_cases/autocrop_planner.dart';
@@ -20,13 +22,23 @@ import 'package:nai_casrand/ui/i2i_page/widgets/inpaint_mask_overlay.dart';
 import 'package:nai_casrand/ui/i2i_page/widgets/mask_editor_view.dart';
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 
+typedef InpaintImagePreparer = Future<void> Function(
+  BuildContext context,
+  Uint8List bytes,
+);
+
 /// The 图生图 / 局部重绘 destination: base image, img2img parameters and
 /// inpainting (mask, Autocrop or a hand-drawn focus frame) in one place,
 /// with its own generate button.
 class I2iPageView extends StatefulWidget {
   final I2iPageViewmodel viewmodel;
+  final InpaintImagePreparer? inpaintImagePreparer;
 
-  const I2iPageView({super.key, required this.viewmodel});
+  const I2iPageView({
+    super.key,
+    required this.viewmodel,
+    this.inpaintImagePreparer,
+  });
 
   @override
   State<I2iPageView> createState() => _I2iPageViewState();
@@ -34,10 +46,16 @@ class I2iPageView extends StatefulWidget {
 
 class _I2iPageViewState extends State<I2iPageView> {
   final ScrollController _scrollController = ScrollController();
+  late final NavigationRequest _navigation;
+  int _entryGeneration = 0;
   String? _focusPreviewKey;
   Future<FocusInpaintBatch?>? _focusPreviewFuture;
 
   I2iPageViewmodel get viewmodel => widget.viewmodel;
+  ImageHandoffCoordinator? get _handoff =>
+      GetIt.I.isRegistered<ImageHandoffCoordinator>()
+          ? GetIt.I<ImageHandoffCoordinator>()
+          : null;
 
   Future<FocusInpaintBatch?>? _focusPreviewFor(I2IConfig config) {
     final automaticFocusActive = config.autocropEnabled &&
@@ -64,30 +82,60 @@ class _I2iPageViewState extends State<I2iPageView> {
   @override
   void initState() {
     super.initState();
+    _navigation = GetIt.I<NavigationRequest>();
+    _navigation.i2iEntryRevision.addListener(_scheduleApplyEntryMode);
     // Act on how the page was entered ("use as base image", "inpaint").
-    WidgetsBinding.instance.addPostFrameCallback((_) => _applyEntryMode());
+    _scheduleApplyEntryMode();
   }
 
   @override
   void dispose() {
+    _navigation.i2iEntryRevision.removeListener(_scheduleApplyEntryMode);
     _scrollController.dispose();
     super.dispose();
   }
 
-  Future<void> _applyEntryMode() async {
-    if (!mounted) return;
-    final mode = GetIt.I<NavigationRequest>().takeI2iEntryMode();
+  void _scheduleApplyEntryMode() {
+    final generation = ++_entryGeneration;
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _applyEntryMode(generation),
+    );
+  }
+
+  Future<void> _applyEntryMode(int generation) async {
+    if (!mounted || generation != _entryGeneration) return;
+    final mode = _navigation.takeI2iEntryMode();
     if (mode == I2iEntryMode.inpaint && viewmodel.config.hasImage) {
+      final originalBytes = viewmodel.config.imageBytes!;
+      final displayBytes = viewmodel.config.displayImageBytes!;
+      final prepareImage = widget.inpaintImagePreparer ?? _precacheInpaintImage;
+      await prepareImage(context, displayBytes);
+      if (!mounted ||
+          generation != _entryGeneration ||
+          !identical(viewmodel.config.imageBytes, originalBytes)) {
+        return;
+      }
       await _openMaskEditor(context);
     }
+  }
+
+  Future<void> _precacheInpaintImage(
+    BuildContext context,
+    Uint8List bytes,
+  ) async {
+    await precacheImage(MemoryImage(bytes), context);
   }
 
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: viewmodel,
+      listenable: Listenable.merge([
+        viewmodel,
+        if (_handoff != null) _handoff!,
+      ]),
       builder: (context, _) {
         return Scaffold(
+          key: const Key('i2i-page-frame'),
           body: Column(
             children: [
               _buildPrimaryAction(context),
@@ -111,7 +159,17 @@ class _I2iPageViewState extends State<I2iPageView> {
   Widget _buildBaseImageCard(BuildContext context) {
     final config = viewmodel.config;
     final Widget preview;
-    if (config.hasImage) {
+    final handoffAction = _activeI2iHandoffAction;
+    if (handoffAction != null &&
+        (_handoff?.isPreparing(handoffAction) ?? false)) {
+      preview = _buildHandoffLoading(handoffAction);
+    } else if (handoffAction != null &&
+        (_handoff?.hasFailed(handoffAction) ?? false)) {
+      preview = _buildHandoffFailure(
+        context,
+        handoffAction,
+      );
+    } else if (config.hasImage) {
       preview = LayoutBuilder(
         builder: (context, constraints) {
           final aspectRatio = config.width / config.height;
@@ -130,7 +188,7 @@ class _I2iPageViewState extends State<I2iPageView> {
                 fit: StackFit.expand,
                 children: [
                   Image.memory(
-                    config.imageBytes!,
+                    config.displayImageBytes!,
                     fit: BoxFit.fill,
                     filterQuality: FilterQuality.medium,
                     gaplessPlayback: true,
@@ -286,8 +344,10 @@ class _I2iPageViewState extends State<I2iPageView> {
             ),
             imageWorkspace,
             const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 8,
+              runSpacing: 4,
               children: [
                 TextButton.icon(
                   key: const Key('i2i-import-image-button'),
@@ -303,6 +363,61 @@ class _I2iPageViewState extends State<I2iPageView> {
                     label: Text(tr('i2i_remove_image')),
                   ),
               ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  ImageHandoffAction? get _activeI2iHandoffAction {
+    final action = _handoff?.action;
+    return action == ImageHandoffAction.imageToImage ||
+            action == ImageHandoffAction.inpaint
+        ? action
+        : null;
+  }
+
+  Widget _buildHandoffLoading(ImageHandoffAction action) {
+    return SizedBox(
+      key: Key('image-handoff-loading-${action.name}'),
+      height: 180,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(height: 12),
+            Text(tr('image_handoff_preparing')),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHandoffFailure(
+    BuildContext context,
+    ImageHandoffAction action,
+  ) {
+    return SizedBox(
+      key: Key('image-handoff-error-${action.name}'),
+      height: 180,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.broken_image_outlined,
+              color: Theme.of(context).colorScheme.error,
+            ),
+            const SizedBox(height: 8),
+            Text(tr('image_handoff_failed')),
+            const SizedBox(height: 8),
+            FilledButton.tonalIcon(
+              key: Key('image-handoff-retry-${action.name}'),
+              onPressed: _handoff?.retry,
+              icon: const Icon(Icons.refresh),
+              label: Text(tr('retry')),
             ),
           ],
         ),
@@ -662,6 +777,7 @@ class _I2iPageViewState extends State<I2iPageView> {
     final result = await MaskEditorView.open(
       context,
       imageBytes: config.imageBytes!,
+      displayImageBytes: config.displayImageBytes,
       imageWidth: config.width,
       imageHeight: config.height,
       initialBaseMaskBytes: config.maskBaseBytes,

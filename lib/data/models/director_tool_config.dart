@@ -106,8 +106,16 @@ class DirectorToolConfig with ChangeNotifier {
 
   void setImage(Uint8List bytes) {
     final size = ImageSizeGetter.getSize(MemoryInput(bytes));
-    width = size.width;
-    height = size.height;
+    setPreparedImage(bytes, width: size.width, height: size.height);
+  }
+
+  void setPreparedImage(
+    Uint8List bytes, {
+    required int width,
+    required int height,
+  }) {
+    this.width = width;
+    this.height = height;
     _imageBytes = bytes;
     _imageB64Cache = null;
     notifyListeners();

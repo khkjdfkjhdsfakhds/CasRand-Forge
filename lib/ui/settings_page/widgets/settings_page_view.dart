@@ -80,7 +80,6 @@ class _SettingsPageViewState extends State<SettingsPageView> {
             _buildRememberSequentialProgressTile(),
             _buildPromptModeConfirmationTile(),
             const Divider(),
-            _buildNavigationVisibilityCard(),
             _buildSavedConfigTile(context),
             _buildRestoreInitialSettingsTile(context),
             _buildThemeModeTile(context),
@@ -115,62 +114,6 @@ class _SettingsPageViewState extends State<SettingsPageView> {
         child: content,
       ),
       floatingActionButton: buttons,
-    );
-  }
-
-  Widget _buildNavigationVisibilityCard() {
-    final settings = viewmodel.settings;
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      child: Column(
-        children: [
-          ListTile(
-            leading: const Icon(Icons.view_sidebar_outlined),
-            title: Text(tr('navigation_visibility')),
-            subtitle: Text(tr('navigation_visibility_hint')),
-          ),
-          SwitchListTile(
-            key: const Key('show-image-to-image-page'),
-            secondary: const Icon(Icons.brush),
-            title: Text(tr('i2i_inpaint')),
-            value: settings.showImageToImagePage,
-            onChanged: (value) => viewmodel.setNavigationPageVisible(
-              AppDestination.imageToImage,
-              value,
-            ),
-          ),
-          SwitchListTile(
-            key: const Key('show-vibe-reference-page'),
-            secondary: const Icon(Icons.auto_awesome_motion_outlined),
-            title: Text(tr('vibe_transfer')),
-            value: settings.showVibeReferencePage,
-            onChanged: (value) => viewmodel.setNavigationPageVisible(
-              AppDestination.vibeReference,
-              value,
-            ),
-          ),
-          SwitchListTile(
-            key: const Key('show-enhance-page'),
-            secondary: const Icon(Icons.auto_awesome),
-            title: Text(tr('enhance_section')),
-            value: settings.showEnhancePage,
-            onChanged: (value) => viewmodel.setNavigationPageVisible(
-              AppDestination.enhance,
-              value,
-            ),
-          ),
-          SwitchListTile(
-            key: const Key('show-director-tools-page'),
-            secondary: const Icon(Icons.auto_fix_high),
-            title: Text(tr('director_tool')),
-            value: settings.showDirectorToolsPage,
-            onChanged: (value) => viewmodel.setNavigationPageVisible(
-              AppDestination.directorTools,
-              value,
-            ),
-          ),
-        ],
-      ),
     );
   }
 

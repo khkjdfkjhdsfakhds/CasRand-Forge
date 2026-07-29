@@ -30,6 +30,7 @@ class MaskStroke {
 class I2IConfig with ChangeNotifier {
   // Base image
   Uint8List? _imageBytes;
+  Uint8List? _previewImageBytes;
   String? _imageB64Cache;
   int width = 0;
   int height = 0;
@@ -83,6 +84,8 @@ class I2IConfig with ChangeNotifier {
   }
 
   Uint8List? get imageBytes => _imageBytes;
+  Uint8List? get previewImageBytes => _previewImageBytes;
+  Uint8List? get displayImageBytes => _previewImageBytes ?? _imageBytes;
   Uint8List? get maskBytes => _maskBytes;
   Uint8List? get maskBaseBytes => _maskBaseBytes;
 
@@ -116,9 +119,19 @@ class I2IConfig with ChangeNotifier {
 
   void setImage(Uint8List bytes) {
     final size = ImageSizeGetter.getSize(MemoryInput(bytes));
-    width = size.width;
-    height = size.height;
+    setPreparedImage(bytes, width: size.width, height: size.height);
+  }
+
+  void setPreparedImage(
+    Uint8List bytes, {
+    required int width,
+    required int height,
+    Uint8List? previewBytes,
+  }) {
+    this.width = width;
+    this.height = height;
     _imageBytes = bytes;
+    _previewImageBytes = previewBytes;
     _imageB64Cache = null;
     // Mask and focus frame coordinates are bound to the previous image.
     _maskBytes = null;
@@ -135,6 +148,7 @@ class I2IConfig with ChangeNotifier {
 
   void removeImage() {
     _imageBytes = null;
+    _previewImageBytes = null;
     _imageB64Cache = null;
     _maskBytes = null;
     _maskB64Cache = null;

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/core/constants/image_formats.dart';
 import 'package:nai_casrand/data/models/director_tool_config.dart';
+import 'package:nai_casrand/data/models/image_handoff_coordinator.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
 import 'package:nai_casrand/ui/core/utils/platform_support.dart';
 import 'package:nai_casrand/ui/core/widgets/editable_list_tile.dart';
@@ -19,13 +20,22 @@ class DirectorPageView extends StatelessWidget {
 
   GenerationPageViewmodel get generationViewmodel =>
       GetIt.I<GenerationPageViewmodel>();
+  ImageHandoffCoordinator? get handoff =>
+      GetIt.I.isRegistered<ImageHandoffCoordinator>()
+          ? GetIt.I<ImageHandoffCoordinator>()
+          : null;
 
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: Listenable.merge([viewmodel, generationViewmodel]),
+      listenable: Listenable.merge([
+        viewmodel,
+        generationViewmodel,
+        if (handoff != null) handoff!,
+      ]),
       builder: (context, _) {
         return Scaffold(
+          key: const Key('directorTools-page-frame'),
           body: Column(
             children: [
               _buildPrimaryAction(context),
@@ -83,6 +93,12 @@ class DirectorPageView extends StatelessWidget {
   }
 
   Widget _buildWorkspace(BuildContext context) {
+    if (handoff?.isPreparing(ImageHandoffAction.directorTools) ?? false) {
+      return _buildHandoffLoading();
+    }
+    if (handoff?.hasFailed(ImageHandoffAction.directorTools) ?? false) {
+      return _buildHandoffFailure(context);
+    }
     final config = viewmodel.config;
     final command = generationViewmodel.lastDirectorCommand;
     final workspace = ImageTransformWorkspace(
@@ -143,6 +159,54 @@ class DirectorPageView extends StatelessWidget {
       onDropOver: (_) => DropOperation.copy,
       onPerformDrop: (event) => _handleDrop(context, event),
       child: keyed,
+    );
+  }
+
+  Widget _buildHandoffLoading() {
+    return Card(
+      key: const Key('image-handoff-loading-directorTools'),
+      child: SizedBox(
+        height: 220,
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(),
+              const SizedBox(height: 12),
+              Text(tr('image_handoff_preparing')),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHandoffFailure(BuildContext context) {
+    return Card(
+      key: const Key('image-handoff-error-directorTools'),
+      child: SizedBox(
+        height: 220,
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.broken_image_outlined,
+                color: Theme.of(context).colorScheme.error,
+              ),
+              const SizedBox(height: 8),
+              Text(tr('image_handoff_failed')),
+              const SizedBox(height: 8),
+              FilledButton.tonalIcon(
+                key: const Key('image-handoff-retry-directorTools'),
+                onPressed: handoff?.retry,
+                icon: const Icon(Icons.refresh),
+                label: Text(tr('retry')),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 

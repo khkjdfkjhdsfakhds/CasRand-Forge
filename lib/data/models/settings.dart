@@ -1,6 +1,7 @@
 import 'package:adaptive_theme/adaptive_theme.dart';
 import 'package:nai_casrand/core/constants/settings.dart';
 import 'package:nai_casrand/data/models/api_token_config.dart';
+import 'package:nai_casrand/data/models/navigation_configuration.dart';
 
 import '../../core/constants/defaults.dart';
 
@@ -16,12 +17,8 @@ class Settings {
   /// mode restores the 0.55-style grid with the prompt beside the image.
   String resultDisplayMode;
 
-  // Optional top-level workspaces. Image Generation, Generation Config and
-  // Settings are deliberately mandatory and therefore have no switches.
-  bool showImageToImagePage;
-  bool showVibeReferencePage;
-  bool showEnhancePage;
-  bool showDirectorToolsPage;
+  /// Ordered main-navigation authority shared by phone and desktop.
+  NavigationConfiguration navigation;
 
   /// Manual prompt-mode changes ask for confirmation unless the user opted
   /// out. Automatic metadata/Enhance activation still reports the new mode.
@@ -83,16 +80,14 @@ class Settings {
     required this.generationPageColumnCount,
     required this.themeMode,
     this.resultDisplayMode = 'classic',
-    this.showImageToImagePage = true,
-    this.showVibeReferencePage = true,
-    this.showEnhancePage = true,
-    this.showDirectorToolsPage = true,
+    NavigationConfiguration? navigation,
     this.confirmPromptModeSwitch = true,
     this.subscriptionTier = 0,
     this.subscriptionActive = false,
     this.subscriptionStatusKnown = false,
     List<ApiTokenConfig>? apiTokens,
-  }) : apiTokens = apiTokens ?? [];
+  })  : navigation = navigation ?? NavigationConfiguration.fromJson({}),
+        apiTokens = apiTokens ?? [];
 
   /// Tokens that generation should use, in order. Falls back to the legacy
   /// [apiKey] when no explicit token entries exist.
@@ -132,10 +127,7 @@ class Settings {
               ? 'waterfall'
               : 'classic')
           : 'classic',
-      showImageToImagePage: json['show_image_to_image_page'] ?? true,
-      showVibeReferencePage: json['show_vibe_reference_page'] ?? true,
-      showEnhancePage: json['show_enhance_page'] ?? true,
-      showDirectorToolsPage: json['show_director_tools_page'] ?? true,
+      navigation: NavigationConfiguration.fromJson(json),
       confirmPromptModeSwitch: json['confirm_prompt_mode_switch'] ?? true,
       subscriptionTier: json['subscription_tier'] ?? 0,
       outputFolderPath: json['output_folder'] ?? '',
@@ -164,10 +156,7 @@ class Settings {
       'api_tokens': apiTokens.map((entry) => entry.toJson()).toList(),
       'result_display_mode': resultDisplayMode,
       'classic_grid_default_migrated': true,
-      'show_image_to_image_page': showImageToImagePage,
-      'show_vibe_reference_page': showVibeReferencePage,
-      'show_enhance_page': showEnhancePage,
-      'show_director_tools_page': showDirectorToolsPage,
+      ...navigation.toJson(),
       'confirm_prompt_mode_switch': confirmPromptModeSwitch,
       'subscription_tier': subscriptionTier,
       'output_folder': outputFolderPath,
