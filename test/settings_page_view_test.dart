@@ -344,25 +344,19 @@ void main() {
     );
   });
 
-  testWidgets('optional navigation pages can be hidden and are persisted', (
+  testWidgets('legacy navigation visibility controls are retired', (
     tester,
   ) async {
     await tester.pumpWidget(localizedSettingsPage());
     await tester.pumpAndSettle();
 
-    final toggle = find.byKey(const Key('show-enhance-page'));
-    expect(toggle, findsOneWidget);
-    expect(GetIt.I<PayloadConfig>().settings.showEnhancePage, isTrue);
-
-    await tester.ensureVisible(toggle);
-    await tester.tap(toggle);
-    await tester.pump();
-
-    expect(GetIt.I<PayloadConfig>().settings.showEnhancePage, isFalse);
+    expect(find.byKey(const Key('show-image-to-image-page')), findsNothing);
+    expect(find.byKey(const Key('show-vibe-reference-page')), findsNothing);
+    expect(find.byKey(const Key('show-enhance-page')), findsNothing);
+    expect(find.byKey(const Key('show-director-tools-page')), findsNothing);
+    expect(find.byKey(const Key('api-proxy-settings-tile')), findsOneWidget);
     expect(
-      GetIt.I<PayloadConfig>().settings.toJson()['show_enhance_page'],
-      isFalse,
-    );
+        find.byKey(const Key('restore-initial-settings-tile')), findsOneWidget);
   });
 
   testWidgets('restore entry is below saved configs and requires a choice', (

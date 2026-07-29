@@ -640,6 +640,38 @@ void main() {
     expect(config.manualFocusFrame, isNull);
   });
 
+  testWidgets('base image preview decodes the lightweight handoff image', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final config = GetIt.I<PayloadConfig>().i2iConfig;
+    final originalBytes = solidPng(1472, 1472);
+    final previewBytes = solidPng(256, 256);
+    config.setPreparedImage(
+      originalBytes,
+      width: 1472,
+      height: 1472,
+      previewBytes: previewBytes,
+    );
+
+    await tester.pumpWidget(
+      localizedApp(I2iPageView(viewmodel: I2iPageViewmodel())),
+    );
+    await tester.pumpAndSettle();
+
+    final image = tester.widget<Image>(
+      find
+          .descendant(
+            of: find.byKey(const Key('i2i-image-preview-stack')),
+            matching: find.byType(Image),
+          )
+          .first,
+    );
+    expect((image.image as MemoryImage).bytes, same(previewBytes));
+    expect(config.imageBytes, same(originalBytes));
+  });
+
   testWidgets('display mode switch changes the result card widget', (
     tester,
   ) async {

@@ -95,6 +95,7 @@ class _EditorSnapshot {
 /// optional hand-drawn focus frame that overrides Autocrop.
 class MaskEditorView extends StatefulWidget {
   final Uint8List imageBytes;
+  final Uint8List? displayImageBytes;
   final int imageWidth;
   final int imageHeight;
   final Uint8List? initialBaseMaskBytes;
@@ -106,6 +107,7 @@ class MaskEditorView extends StatefulWidget {
   const MaskEditorView({
     super.key,
     required this.imageBytes,
+    this.displayImageBytes,
     required this.imageWidth,
     required this.imageHeight,
     this.initialBaseMaskBytes,
@@ -118,6 +120,7 @@ class MaskEditorView extends StatefulWidget {
   static Future<MaskEditorResult?> open(
     BuildContext context, {
     required Uint8List imageBytes,
+    Uint8List? displayImageBytes,
     required int imageWidth,
     required int imageHeight,
     Uint8List? initialBaseMaskBytes,
@@ -130,6 +133,7 @@ class MaskEditorView extends StatefulWidget {
         fullscreenDialog: true,
         builder: (context) => MaskEditorView(
           imageBytes: imageBytes,
+          displayImageBytes: displayImageBytes,
           imageWidth: imageWidth,
           imageHeight: imageHeight,
           initialBaseMaskBytes: initialBaseMaskBytes,
@@ -156,7 +160,6 @@ class _MaskEditorViewState extends State<MaskEditorView> {
   Uint8List? _baseMaskBytes;
   ui.Image? _baseMaskImage;
   bool _isImporting = false;
-
   Rect? _focusFrame;
   Offset? _frameDragStart;
   late int _contextPx;
@@ -368,7 +371,7 @@ class _MaskEditorViewState extends State<MaskEditorView> {
               width: displayW,
               height: displayH,
               child: Image.memory(
-                widget.imageBytes,
+                widget.displayImageBytes ?? widget.imageBytes,
                 fit: BoxFit.fill,
                 filterQuality: FilterQuality.medium,
                 gaplessPlayback: true,

@@ -1,10 +1,8 @@
-import 'dart:typed_data';
-
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
+import 'package:nai_casrand/data/models/image_handoff_coordinator.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
-import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/use_cases/anlas_cost.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
@@ -19,7 +17,7 @@ class ResultActions {
   ResultActions({required this.content});
 
   PayloadConfig get _payloadConfig => GetIt.I<PayloadConfig>();
-  NavigationRequest get _navigation => GetIt.I<NavigationRequest>();
+  ImageHandoffCoordinator get _handoff => GetIt.I<ImageHandoffCoordinator>();
 
   bool get hasImage => content.imageBytes != null;
 
@@ -42,30 +40,6 @@ class ResultActions {
     return steps is int ? steps : null;
   }
 
-  /// Imports the complete generation snapshot into the independent fixed
-  /// profile. The random profile is not touched.
-  void _carryGenerationProfile() {
-    final rawModel = content.additionalInfo['model'];
-    _payloadConfig.importMetadataToFixedProfile(
-      content.additionalInfo,
-      prompt: sourcePrompt,
-      model: rawModel is String ? rawModel : null,
-    );
-  }
-
-  /// Loads the image into the Img2Img config and jumps to that page.
-  void _sendToI2i(BuildContext context, {required I2iEntryMode mode}) {
-    final bytes = content.imageBytes;
-    if (bytes == null) return;
-    final replacing = _payloadConfig.i2iConfig.hasImage;
-    _payloadConfig.i2iConfig.setImage(Uint8List.fromList(bytes));
-    _payloadConfig.noteI2iImported(
-      replacing: replacing,
-      explicitUse: true,
-    );
-    _navigation.goToI2i(mode);
-  }
-
   /// Closes the detail page (and any viewer above it) so the navigation
   /// shell, already switched to the target destination, becomes visible.
   void _returnToShell(BuildContext context) {
@@ -73,13 +47,15 @@ class ResultActions {
   }
 
   void useAsBaseImage(BuildContext context) {
-    _sendToI2i(context, mode: I2iEntryMode.baseImage);
+    final bytes = content.imageBytes;
+    if (bytes == null || !_handoff.useAsBaseImage(bytes)) return;
     showInfoBar(context, tr('action_use_as_base_done'));
     _returnToShell(context);
   }
 
   void sendToInpaint(BuildContext context) {
-    _sendToI2i(context, mode: I2iEntryMode.inpaint);
+    final bytes = content.imageBytes;
+    if (bytes == null || !_handoff.sendToInpaint(bytes)) return;
     showInfoBar(context, tr('action_inpaint_done'));
     _returnToShell(context);
   }
@@ -87,18 +63,22 @@ class ResultActions {
   void sendToEnhance(BuildContext context) {
     final bytes = content.imageBytes;
     if (bytes == null) return;
-    _payloadConfig.enhanceConfig.setImage(Uint8List.fromList(bytes));
-    _carryGenerationProfile();
-    _navigation.goTo(AppDestination.enhance);
+    final rawModel = content.additionalInfo['model'];
+    if (!_handoff.sendToEnhance(
+      bytes,
+      metadata: content.additionalInfo,
+      prompt: sourcePrompt,
+      model: rawModel is String ? rawModel : null,
+    )) {
+      return;
+    }
     showInfoBar(context, tr('action_enhance_fixed_mode_done'));
     _returnToShell(context);
   }
 
   void sendToDirectorTools(BuildContext context) {
     final bytes = content.imageBytes;
-    if (bytes == null) return;
-    _payloadConfig.directorToolConfig.setImage(Uint8List.fromList(bytes));
-    _navigation.goTo(AppDestination.directorTools);
+    if (bytes == null || !_handoff.sendToDirectorTools(bytes)) return;
     showInfoBar(context, tr('action_director_done'));
     _returnToShell(context);
   }

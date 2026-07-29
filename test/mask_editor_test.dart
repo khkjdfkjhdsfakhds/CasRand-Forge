@@ -210,6 +210,56 @@ void main() {
     expect(saved!.focusFrame, const CropRect(x: 40, y: 32, w: 160, h: 128));
   });
 
+  testWidgets('preview bytes do not change original-image brush coordinates', (
+    tester,
+  ) async {
+    final originalBytes = Uint8List.fromList(
+      img.encodePng(img.Image(width: 64, height: 64, numChannels: 3)),
+    );
+    final previewBytes = Uint8List.fromList(
+      img.encodePng(img.Image(width: 16, height: 16, numChannels: 3)),
+    );
+    MaskEditorResult? saved;
+
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(
+        builder: (context) => FilledButton(
+          key: const Key('open-editor'),
+          onPressed: () async {
+            saved = await MaskEditorView.open(
+              context,
+              imageBytes: originalBytes,
+              displayImageBytes: previewBytes,
+              imageWidth: 1472,
+              imageHeight: 1472,
+              initialStrokes: const [],
+            );
+          },
+          child: const Text('Open'),
+        ),
+      ),
+    ));
+    await tester.tap(find.byKey(const Key('open-editor')));
+    await tester.pumpAndSettle();
+
+    final displayed = tester.widget<Image>(find.byType(Image));
+    expect((displayed.image as MemoryImage).bytes, same(previewBytes));
+    final canvas = find.byKey(const Key('mask-editor-canvas'));
+    await tester.dragFrom(tester.getCenter(canvas), const Offset(1, 0));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('mask-editor-done')));
+    await tester.pump();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 300)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(saved, isNotNull);
+    expect(saved!.strokes, hasLength(1));
+    expect(saved!.strokes.single.points.first.dx, closeTo(736, 2));
+    expect(saved!.strokes.single.points.first.dy, closeTo(736, 2));
+  });
+
   testWidgets('Square Brush control changes the shape stored on a stroke', (
     tester,
   ) async {

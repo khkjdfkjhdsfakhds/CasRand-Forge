@@ -9,6 +9,7 @@ import 'package:get_it/get_it.dart';
 import 'package:image/image.dart' as img;
 import 'package:nai_casrand/data/models/command_status.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
+import 'package:nai_casrand/data/models/image_handoff_coordinator.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
@@ -79,25 +80,34 @@ void main() {
     await GetIt.instance.reset();
     GetIt.instance.registerSingleton(CommandStatus());
     GetIt.instance.registerSingleton(NavigationRequest());
+    final payloadConfig = PayloadConfig(
+      rootPromptConfig: PromptConfig(strs: [], prompts: []),
+      negativePromptConfig: PromptConfig(
+        shuffled: false,
+        strs: ['negative'],
+        prompts: [],
+      ),
+      characterConfigList: [],
+      savedPromptConfigList: [],
+      paramConfig: ParamConfig(
+        sizes: const [GenerationSize(width: 832, height: 1216)],
+        randomSeed: true,
+        seed: 42,
+      ),
+      settings: Settings.fromJson({}),
+      overridePrompt: '',
+      useOverridePrompt: false,
+      useCharacterPromptWithOverride: false,
+    );
+    GetIt.instance.registerSingleton(payloadConfig);
     GetIt.instance.registerSingleton(
-      PayloadConfig(
-        rootPromptConfig: PromptConfig(strs: [], prompts: []),
-        negativePromptConfig: PromptConfig(
-          shuffled: false,
-          strs: ['negative'],
-          prompts: [],
-        ),
-        characterConfigList: [],
-        savedPromptConfigList: [],
-        paramConfig: ParamConfig(
-          sizes: const [GenerationSize(width: 832, height: 1216)],
-          randomSeed: true,
-          seed: 42,
-        ),
-        settings: Settings.fromJson({}),
-        overridePrompt: '',
-        useOverridePrompt: false,
-        useCharacterPromptWithOverride: false,
+      ImageHandoffCoordinator(
+        payloadConfig: payloadConfig,
+        navigation: GetIt.I<NavigationRequest>(),
+        readDimensions: (bytes) async {
+          final image = img.decodeImage(bytes)!;
+          return ImageDimensions(width: image.width, height: image.height);
+        },
       ),
     );
   });
@@ -398,7 +408,7 @@ void main() {
     await tester.ensureVisible(button);
     await tester.pumpAndSettle();
     await tester.tap(button);
-    await tester.pump();
+    await tester.pumpAndSettle();
 
     // Enhance has its own source image; the Img2Img base stays untouched.
     expect(payloadConfig.enhanceConfig.hasImage, isTrue);

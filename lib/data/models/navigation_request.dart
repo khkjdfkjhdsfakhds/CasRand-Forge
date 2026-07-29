@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 enum AppDestination {
   generation,
   config,
+  more,
   imageToImage,
   vibeReference,
   enhance,
@@ -27,13 +28,13 @@ class NavigationRequest {
   final ValueNotifier<AppDestination?> requestedDestination =
       ValueNotifier(null);
 
-  /// Incremented when optional workspace visibility changes, so the shell can
-  /// rebuild its dynamic rail/bar without coupling it to the settings page.
-  final ValueNotifier<int> visibilityRevision = ValueNotifier(0);
-
   /// Incremented when the welcome notice asks the Settings page to open the
   /// combined API and proxy editor immediately after navigation.
   final ValueNotifier<int> apiProxySettingsRevision = ValueNotifier(0);
+
+  /// Incremented for every Img2Img entry request, including requests for the
+  /// already-visible destination.
+  final ValueNotifier<int> i2iEntryRevision = ValueNotifier(0);
 
   bool _openApiProxySettingsOnArrival = false;
 
@@ -47,16 +48,13 @@ class NavigationRequest {
   void goToI2i(I2iEntryMode mode) {
     i2iEntryMode = mode;
     requestedDestination.value = AppDestination.imageToImage;
+    i2iEntryRevision.value++;
   }
 
   void goToApiProxySettings() {
     _openApiProxySettingsOnArrival = true;
     requestedDestination.value = AppDestination.settings;
     apiProxySettingsRevision.value++;
-  }
-
-  void notifyVisibilityChanged() {
-    visibilityRevision.value++;
   }
 
   /// Reads the entry mode once and resets it, so re-visiting the Img2Img page

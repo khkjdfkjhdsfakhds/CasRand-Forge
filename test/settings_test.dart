@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nai_casrand/data/models/api_token_config.dart';
+import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/data/models/settings.dart';
 
 void main() {
@@ -180,6 +181,31 @@ void main() {
     expect(effective, hasLength(1));
     expect(effective.single.token, 'pst-legacy');
     expect(settings.resultDisplayMode, 'classic');
+  });
+
+  test('legacy page visibility does not seed navigation favorites', () {
+    final settings = Settings.fromJson({
+      'show_image_to_image_page': true,
+      'show_vibe_reference_page': true,
+      'show_enhance_page': true,
+      'show_director_tools_page': true,
+      'proxy': '127.0.0.1:8080',
+      'generation_count': 7,
+    });
+
+    expect(settings.navigation.destinations, [
+      AppDestination.generation,
+      AppDestination.config,
+      AppDestination.more,
+      AppDestination.settings,
+    ]);
+    expect(settings.proxy, '127.0.0.1:8080');
+    expect(settings.generationCount, 7);
+    final saved = settings.toJson();
+    expect(saved.containsKey('show_image_to_image_page'), isFalse);
+    expect(saved.containsKey('show_vibe_reference_page'), isFalse);
+    expect(saved.containsKey('show_enhance_page'), isFalse);
+    expect(saved.containsKey('show_director_tools_page'), isFalse);
   });
 
   test('effective tokens skip disabled and empty entries', () {
