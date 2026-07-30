@@ -8,7 +8,7 @@ class PromptEntryEditor extends StatefulWidget {
     super.key,
     required this.initialEntries,
     required this.onChanged,
-    required this.helpText,
+    required this.helpItems,
     required this.insertLineBreakLabel,
     required this.nextEntryLabel,
     required this.commentLabel,
@@ -16,7 +16,7 @@ class PromptEntryEditor extends StatefulWidget {
 
   final List<String> initialEntries;
   final ValueChanged<List<String>> onChanged;
-  final String helpText;
+  final List<String> helpItems;
   final String insertLineBreakLabel;
   final String nextEntryLabel;
   final String commentLabel;
@@ -353,11 +353,20 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          widget.helpText,
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
+        Wrap(
+          key: const Key('prompt-entry-help'),
+          spacing: 24,
+          runSpacing: 6,
+          children: [
+            for (var index = 0; index < widget.helpItems.length; index++)
+              Text(
+                widget.helpItems[index],
+                key: Key('prompt-entry-help-$index'),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
               ),
+          ],
         ),
         const SizedBox(height: 8),
         Expanded(
@@ -411,11 +420,10 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
               icon: const Icon(Icons.keyboard_return, size: 18),
               label: Text(widget.insertLineBreakLabel),
             ),
-            TextButton.icon(
+            TextButton(
               key: const Key('next-prompt-entry'),
               onPressed: () => _splitAtSelection(_activeIndex),
-              icon: const Icon(Icons.arrow_forward, size: 18),
-              label: Text(widget.nextEntryLabel),
+              child: Text(widget.nextEntryLabel),
             ),
           ],
         ),
@@ -450,6 +458,13 @@ class _PromptEntryDivider extends StatelessWidget {
           fontWeight: FontWeight.w600,
           letterSpacing: 0.4,
         );
+    final numberStyle = labelStyle?.copyWith(
+      color: Theme.of(context).colorScheme.outline,
+      fontSize: 9,
+      fontWeight: FontWeight.w500,
+      letterSpacing: 0,
+    );
+    final isNumber = number != null;
     final label = number == null
         ? Row(
             mainAxisSize: MainAxisSize.min,
@@ -459,7 +474,11 @@ class _PromptEntryDivider extends StatelessWidget {
               Text(commentLabel, style: labelStyle),
             ],
           )
-        : Text('$number', style: labelStyle);
+        : Text(
+            '$number',
+            key: Key('prompt-entry-number-$number'),
+            style: numberStyle,
+          );
 
     return ExcludeSemantics(
       child: Padding(
@@ -468,13 +487,17 @@ class _PromptEntryDivider extends StatelessWidget {
           children: [
             Expanded(child: Divider(color: color, height: 1)),
             Container(
-              margin: const EdgeInsets.symmetric(horizontal: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-              decoration: BoxDecoration(
-                color: color.withAlpha(45),
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(color: color),
-              ),
+              margin: EdgeInsets.symmetric(horizontal: isNumber ? 5 : 8),
+              padding: isNumber
+                  ? EdgeInsets.zero
+                  : const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              decoration: isNumber
+                  ? null
+                  : BoxDecoration(
+                      color: color.withAlpha(45),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: color),
+                    ),
               child: IconTheme(
                 data: IconThemeData(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,

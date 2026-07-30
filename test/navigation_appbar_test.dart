@@ -41,10 +41,10 @@ void main() {
     GetIt.I.registerSingleton(CommandStatus());
     final configService = ConfigService()
       ..packageInfo = PackageInfo(
-        appName: 'CasRand Forge',
+        appName: 'NAI CasRand Forge',
         packageName: 'nai_casrand',
-        version: '0.9.4',
-        buildNumber: '34',
+        version: '0.9.5',
+        buildNumber: '59',
       );
     GetIt.I.registerSingleton<ConfigService>(configService);
   });
@@ -53,7 +53,10 @@ void main() {
     await GetIt.I.reset();
   });
 
-  Widget localizedApp({required VoidCallback onRestore}) {
+  Widget localizedApp({
+    required VoidCallback onRestore,
+    Widget? body,
+  }) {
     return EasyLocalization(
       key: UniqueKey(),
       supportedLocales: const [Locale('en')],
@@ -68,9 +71,12 @@ void main() {
           supportedLocales: context.supportedLocales,
           locale: context.locale,
           home: Scaffold(
-            appBar: NavigationAppBar(
-              onRestoreWelcomeMessage: onRestore,
-            ),
+            appBar: body == null
+                ? NavigationAppBar(
+                    onRestoreWelcomeMessage: onRestore,
+                  )
+                : null,
+            body: body,
           ),
         ),
       ),
@@ -86,9 +92,13 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(find.text('NAI CasRand Forge'), findsOneWidget);
+
     await tester.tap(find.byKey(const Key('app-help-button')));
     await tester.pumpAndSettle();
 
+    expect(find.text('NAI CasRand Forge'), findsNWidgets(2));
+    expect(find.text('0.9.5'), findsOneWidget);
     expect(
       find.text('https://github.com/khkjdfkjhdsfakhds/CasRand-Forge'),
       findsOneWidget,
@@ -118,6 +128,51 @@ void main() {
             widget.image is AssetImage &&
             (widget.image as AssetImage).assetName == path,
       );
+
+  testWidgets('header keeps 0.9.1 content without a colored strip', (
+    tester,
+  ) async {
+    await tester.pumpWidget(localizedApp(onRestore: () {}));
+    await tester.pumpAndSettle();
+
+    final appBarFinder = find.byType(AppBar);
+    final appBar = tester.widget<AppBar>(appBarFinder);
+    final context = tester.element(appBarFinder);
+    final icon = assetImage('assets/appicon.png');
+
+    expect(appBar.preferredSize.height, kToolbarHeight);
+    expect(appBar.backgroundColor, Theme.of(context).colorScheme.surface);
+    expect(appBar.surfaceTintColor, Colors.transparent);
+    expect(appBar.shadowColor, Colors.transparent);
+    expect(appBar.elevation, 0);
+    expect(appBar.scrolledUnderElevation, 0);
+    expect(find.text('NAI CasRand Forge'), findsOneWidget);
+    expect(find.byKey(const Key('app-help-button')), findsOneWidget);
+    expect(tester.getSize(icon).height, 40);
+  });
+
+  testWidgets('generation status stays inside the restored header', (
+    tester,
+  ) async {
+    await tester.pumpWidget(localizedApp(onRestore: () {}));
+    await tester.pumpAndSettle();
+
+    final commandStatus = GetIt.I<CommandStatus>();
+    commandStatus.isGenerationActive.value = true;
+    await tester.pump();
+    expect(find.text('Generating images...'), findsOneWidget);
+
+    commandStatus.isWaitingForNextGeneration.value = true;
+    await tester.pump();
+    expect(
+      find.text('Waiting before the next image to reduce 429 errors...'),
+      findsOneWidget,
+    );
+    expect(
+      tester.getSize(find.byKey(const ValueKey('navigation-app-bar'))).height,
+      kToolbarHeight,
+    );
+  });
 
   Future<void> openDonationDialog(WidgetTester tester) async {
     await tester.tap(find.byKey(const Key('app-help-button')));
@@ -185,5 +240,15 @@ void main() {
     final alipayRect = tester.getRect(alipay);
     expect(alipayRect.top, greaterThanOrEqualTo(0));
     expect(alipayRect.bottom, lessThanOrEqualTo(600));
+  });
+
+  testWidgets('title keeps the 0.9.1 debug settings gesture', (tester) async {
+    await tester.pumpWidget(localizedApp(onRestore: () {}));
+    await tester.pumpAndSettle();
+
+    final titleButton = tester.widget<InkWell>(
+      find.byKey(const Key('app-title-button')),
+    );
+    expect(titleButton.onTap, isNotNull);
   });
 }

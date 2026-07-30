@@ -1,6 +1,6 @@
 {
-    "name": "CasRand Forge",
-    "short_name": "CasRand Forge",
+    "name": "NAI CasRand Forge",
+    "short_name": "NAI CasRand Forge",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

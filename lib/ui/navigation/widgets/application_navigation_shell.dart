@@ -11,6 +11,7 @@ class ApplicationNavigationShell extends StatefulWidget {
   final Map<AppDestination, Widget> pages;
   final ValueChanged<AppDestination>? onDestinationOpened;
   final VoidCallback? onConfigurationChanged;
+  final PreferredSizeWidget? appBar;
   final double desktopBreakpoint;
 
   const ApplicationNavigationShell({
@@ -20,6 +21,7 @@ class ApplicationNavigationShell extends StatefulWidget {
     required this.pages,
     this.onDestinationOpened,
     this.onConfigurationChanged,
+    this.appBar,
     this.desktopBreakpoint = 640,
   });
 
@@ -30,8 +32,11 @@ class ApplicationNavigationShell extends StatefulWidget {
 
 class _ApplicationNavigationShellState
     extends State<ApplicationNavigationShell> {
-  static const _phoneEntryExtent = 88.0;
-  static const _desktopEntryExtent = 56.0;
+  static const _phoneEntryMinExtent = 88.0;
+  static const _desktopRailWidth = 80.0;
+  static const _desktopEntryExtent = 64.0;
+  static const _desktopIndicatorWidth = 56.0;
+  static const _desktopIndicatorHeight = 32.0;
 
   final ScrollController _phoneController = ScrollController();
   final ScrollController _desktopController = ScrollController();
@@ -48,6 +53,7 @@ class _ApplicationNavigationShellState
   bool _desktopCanScrollForward = false;
   bool _phoneHintPlayed = false;
   bool _desktopLayout = false;
+  double _phoneEntryExtent = _phoneEntryMinExtent;
 
   AppDestination get _selectedNavigationDestination =>
       widget.configuration.contains(_contentDestination)
@@ -204,21 +210,36 @@ class _ApplicationNavigationShellState
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Theme.of(context).colorScheme.surface,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final desktop = constraints.maxWidth >= widget.desktopBreakpoint;
-          _desktopLayout = desktop;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _updateOverflow(
-              desktop ? _desktopController : _phoneController,
-              desktop,
-            );
-          });
-          return desktop ? _buildDesktop() : _buildPhone();
-        },
-      ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final desktop = constraints.maxWidth >= widget.desktopBreakpoint;
+        _desktopLayout = desktop;
+        if (!desktop && widget.configuration.destinations.isNotEmpty) {
+          final destinationCount = widget.configuration.destinations.length;
+          final fillWidth = constraints.maxWidth / destinationCount;
+          if (destinationCount ==
+              NavigationConfiguration.defaultDestinations.length) {
+            _phoneEntryExtent = fillWidth;
+          } else {
+            _phoneEntryExtent = fillWidth < _phoneEntryMinExtent
+                ? _phoneEntryMinExtent
+                : fillWidth;
+          }
+        }
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _updateOverflow(
+            desktop ? _desktopController : _phoneController,
+            desktop,
+          );
+        });
+        return Scaffold(
+          appBar: widget.appBar,
+          body: Material(
+            color: Theme.of(context).colorScheme.surface,
+            child: desktop ? _buildDesktop() : _buildPhone(),
+          ),
+        );
+      },
     );
   }
 
@@ -273,50 +294,64 @@ class _ApplicationNavigationShellState
     final navigation = ListView(
       key: const ValueKey('desktop-navigation-scroll'),
       controller: _desktopController,
+      padding: const EdgeInsets.only(top: 8),
       children: widget.configuration.destinations
           .map((destination) => _entry(destination, phone: false))
           .toList(growable: false),
     );
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         SizedBox(
-          width: 152,
-          child: Stack(
+          width: _desktopRailWidth,
+          child: Column(
             children: [
-              Positioned.fill(
-                child: _desktopOverflow
-                    ? Scrollbar(
-                        key: const ValueKey('desktop-navigation-scrollbar'),
-                        controller: _desktopController,
-                        thumbVisibility: true,
-                        child: navigation,
-                      )
-                    : navigation,
+              Expanded(
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: _desktopOverflow
+                          ? Scrollbar(
+                              key: const ValueKey(
+                                'desktop-navigation-scrollbar',
+                              ),
+                              controller: _desktopController,
+                              thumbVisibility: true,
+                              child: navigation,
+                            )
+                          : navigation,
+                    ),
+                    if (_desktopCanScrollBack)
+                      const PositionedDirectional(
+                        start: 0,
+                        end: 0,
+                        top: 0,
+                        child: IgnorePointer(
+                          child: _OverflowCue(
+                            key: ValueKey(
+                              'desktop-navigation-overflow-cue-start',
+                            ),
+                            icon: Icons.keyboard_arrow_up,
+                          ),
+                        ),
+                      ),
+                    if (_desktopCanScrollForward)
+                      const PositionedDirectional(
+                        start: 0,
+                        end: 0,
+                        bottom: 0,
+                        child: IgnorePointer(
+                          child: _OverflowCue(
+                            key: ValueKey(
+                              'desktop-navigation-overflow-cue-end',
+                            ),
+                            icon: Icons.keyboard_arrow_down,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
               ),
-              if (_desktopCanScrollBack)
-                const PositionedDirectional(
-                  start: 0,
-                  end: 0,
-                  top: 0,
-                  child: IgnorePointer(
-                    child: _OverflowCue(
-                      key: ValueKey('desktop-navigation-overflow-cue-start'),
-                      icon: Icons.keyboard_arrow_up,
-                    ),
-                  ),
-                ),
-              if (_desktopCanScrollForward)
-                const PositionedDirectional(
-                  start: 0,
-                  end: 0,
-                  bottom: 0,
-                  child: IgnorePointer(
-                    child: _OverflowCue(
-                      key: ValueKey('desktop-navigation-overflow-cue-end'),
-                      icon: Icons.keyboard_arrow_down,
-                    ),
-                  ),
-                ),
             ],
           ),
         ),
@@ -331,6 +366,7 @@ class _ApplicationNavigationShellState
     final label = context.tr(
       phone ? definition.shortLabelKey : definition.labelKey,
     );
+    final colorScheme = Theme.of(context).colorScheme;
     return Semantics(
       key: _entryKeys[destination],
       selected: selected,
@@ -345,11 +381,12 @@ class _ApplicationNavigationShellState
             key: ValueKey('navigation-${destination.name}-indicator'),
             width: phone ? _phoneEntryExtent : null,
             height: phone ? 72 : _desktopEntryExtent,
-            constraints: BoxConstraints(minWidth: phone ? 0 : 136),
-            color: selected
-                ? Theme.of(context).colorScheme.secondaryContainer
-                : null,
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            constraints: BoxConstraints(
+              minWidth: phone ? 0 : _desktopRailWidth,
+            ),
+            padding: phone
+                ? const EdgeInsets.symmetric(horizontal: 8, vertical: 6)
+                : EdgeInsets.zero,
             child: phone
                 ? Column(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -364,18 +401,47 @@ class _ApplicationNavigationShellState
                       ),
                     ],
                   )
-                : Row(
+                : Column(
                     children: [
-                      const SizedBox(width: 8),
-                      Icon(definition.icon),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          label,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
+                      Container(
+                        key: ValueKey(
+                          'navigation-${destination.name}-selection-indicator',
+                        ),
+                        width: _desktopIndicatorWidth,
+                        height: _desktopIndicatorHeight,
+                        decoration: selected
+                            ? BoxDecoration(
+                                color: colorScheme.secondaryContainer,
+                                borderRadius: BorderRadius.circular(
+                                  _desktopIndicatorHeight / 2,
+                                ),
+                              )
+                            : null,
+                        alignment: Alignment.center,
+                        child: Icon(
+                          definition.icon,
+                          size: 24,
+                          color: selected
+                              ? colorScheme.onSecondaryContainer
+                              : colorScheme.onSurfaceVariant,
                         ),
                       ),
+                      const SizedBox(height: 4),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: Text(
+                          label,
+                          maxLines: 1,
+                          softWrap: false,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context)
+                              .textTheme
+                              .labelMedium
+                              ?.copyWith(color: colorScheme.onSurface),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
                     ],
                   ),
           ),

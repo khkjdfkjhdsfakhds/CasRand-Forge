@@ -81,7 +81,12 @@ void main() {
               child: PromptEntryEditor(
                 initialEntries: const ['one'],
                 onChanged: (_) {},
-                helpText: 'Editor help',
+                helpItems: const [
+                  'Enter: new entry',
+                  'Shift+Enter: line break within entry',
+                  'Line starts with #: comment only, not part of the prompt. '
+                      'Use it for notes or labels.',
+                ],
                 insertLineBreakLabel: 'Insert line break',
                 nextEntryLabel: 'Next entry',
                 commentLabel: 'Comment',

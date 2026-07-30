@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:get_it/get_it.dart';
 import 'package:blinking_text/blinking_text.dart';
+import 'package:nai_casrand/core/constants/app_identity.dart';
 import 'package:nai_casrand/data/models/command_status.dart';
 import 'package:nai_casrand/data/services/config_service.dart';
 import 'package:nai_casrand/ui/navigation/widgets/debug_settings_view.dart';
@@ -11,134 +12,43 @@ import 'package:url_launcher/url_launcher.dart';
 
 enum AppState { idle, generating, waitingForNextGeneration }
 
-class NavigationAppBar extends StatefulWidget implements PreferredSizeWidget {
-  final CommandStatus commandStatus = GetIt.instance();
+void showDebugSettingsDialog(BuildContext context) {
+  showDialog<void>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('Debug Settings'),
+      content: DebugSettingsView(),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(),
+          child: Text(tr('confirm')),
+        ),
+      ],
+    ),
+  );
+}
+
+class AppHelpButton extends StatelessWidget {
   final VoidCallback onRestoreWelcomeMessage;
 
-  NavigationAppBar({
+  const AppHelpButton({
     super.key,
     required this.onRestoreWelcomeMessage,
   });
 
   @override
-  NavigationAppBarState createState() => NavigationAppBarState();
-
-  @override
-  Size get preferredSize =>
-      const Size.fromHeight(kToolbarHeight); // 默认的AppBar高度
-}
-
-class NavigationAppBarState extends State<NavigationAppBar>
-    with SingleTickerProviderStateMixin {
-  late final _iconAnimationController = AnimationController(
-    duration: const Duration(seconds: 3), // 控制旋转速度
-    vsync: this,
-  );
-  late final _animation = CurvedAnimation(
-    parent: _iconAnimationController,
-    curve: Curves.linear,
-  );
-  AppState _state = AppState.idle;
-
-  @override
-  void initState() {
-    super.initState();
-
-    // 在生成状态变化时改变样式
-    widget.commandStatus.isGenerationActive.addListener(refreshDisplay);
-    widget.commandStatus.isWaitingForNextGeneration.addListener(refreshDisplay);
-    refreshDisplay(); // 初始化状态
-  }
-
-  void refreshDisplay() {
-    AppState newState;
-    if (widget.commandStatus.isWaitingForNextGeneration.value) {
-      newState = AppState.waitingForNextGeneration;
-    } else if (widget.commandStatus.isGenerationActive.value) {
-      newState = AppState.generating;
-    } else {
-      newState = AppState.idle;
-    }
-    setState(() => _state = newState);
-  }
-
-  @override
   Widget build(BuildContext context) {
-    Widget title;
-    switch (_state) {
-      case AppState.idle:
-        title = Text(
-          context.tr('appbar_idle'),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        );
-        _iconAnimationController.stop();
-        break;
-      case AppState.generating:
-        title = BlinkText(
-          context.tr('appbar_regular'),
-          beginColor: Theme.of(context).textTheme.titleMedium?.color,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        );
-        _iconAnimationController.repeat();
-        break;
-      case AppState.waitingForNextGeneration:
-        title = BlinkText(
-          context.tr('appbar_generation_interval'),
-          beginColor: Theme.of(context).textTheme.titleMedium?.color,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        );
-        _iconAnimationController.stop();
-        break;
-    }
-    Widget icon = RotationTransition(
-        turns: _animation,
-        child: Image.asset(
-          'assets/appicon.png',
-          filterQuality: FilterQuality.medium,
-          height: widget.preferredSize.height - 16.0,
-        ));
-    final titleBar = Row(
-      children: [
-        InkWell(
-          child: icon,
-          onTap: () => _iconAnimationController
-              .animateTo(Random().nextDouble())
-              .whenComplete(refreshDisplay),
-        ),
-        const SizedBox(width: 8.0),
-        Expanded(
-          child: InkWell(
-            onTap: () => _showDebugDialog(context),
-            child: Align(alignment: Alignment.centerLeft, child: title),
-          ),
-        ),
-        IconButton(
-          key: const Key('app-help-button'),
-          onPressed: () => _showAppInfoDialog(context),
-          icon: const Icon(Icons.help_outline),
-        ),
-      ],
+    return IconButton(
+      tooltip: MaterialLocalizations.of(context).aboutListTileTitle(
+        appDisplayName,
+      ),
+      onPressed: () => _showAppInfoDialog(context),
+      icon: const Icon(Icons.help_outline),
     );
-    return AppBar(
-      title: titleBar,
-    );
-  }
-
-  @override
-  void dispose() {
-    widget.commandStatus.isGenerationActive.removeListener(refreshDisplay);
-    widget.commandStatus.isWaitingForNextGeneration
-        .removeListener(refreshDisplay);
-    _iconAnimationController.dispose();
-    super.dispose();
   }
 
   void _showAppInfoDialog(BuildContext context) {
     final packageInfo = GetIt.instance<ConfigService>().packageInfo;
-    const appName = 'CasRand Forge';
     final appVersion = packageInfo.version;
     final iconImage = Image.asset(
       'assets/appicon.png',
@@ -148,15 +58,16 @@ class NavigationAppBarState extends State<NavigationAppBar>
     );
 
     showAboutDialog(
-        context: context,
-        applicationName: appName,
-        applicationVersion: appVersion,
-        applicationIcon: iconImage,
-        children: [
-          _buildLinkTile(),
-          _buildDonationLink(context),
-          _buildRestoreWelcomeMessageTile(context),
-        ]);
+      context: context,
+      applicationName: appDisplayName,
+      applicationVersion: appVersion,
+      applicationIcon: iconImage,
+      children: [
+        _buildLinkTile(),
+        _buildDonationLink(context),
+        _buildRestoreWelcomeMessageTile(context),
+      ],
+    );
   }
 
   Widget _buildRestoreWelcomeMessageTile(BuildContext context) {
@@ -168,7 +79,7 @@ class NavigationAppBarState extends State<NavigationAppBar>
       onTap: () {
         Navigator.of(context).pop();
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          widget.onRestoreWelcomeMessage();
+          onRestoreWelcomeMessage();
         });
       },
     );
@@ -206,7 +117,6 @@ class NavigationAppBarState extends State<NavigationAppBar>
             final viewportHeight = viewportConstraints.maxHeight.isFinite
                 ? viewportConstraints.maxHeight
                 : mediaSize.height;
-            // 24 px dialog inset + 16 px content padding on each side.
             final availableWidth = max(0.0, viewportWidth - 80);
             final contentWidth = min(640.0, availableWidth);
             final useRow = contentWidth >= 520;
@@ -319,20 +229,136 @@ class NavigationAppBarState extends State<NavigationAppBar>
       },
     );
   }
+}
 
-  void _showDebugDialog(BuildContext context) {
-    showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-              title: const Text('Debug Settings'),
-              content: DebugSettingsView(),
-              actions: [
-                TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: Text(
-                      tr('confirm'),
-                    ))
-              ],
-            ));
+class NavigationAppBar extends StatefulWidget implements PreferredSizeWidget {
+  final CommandStatus commandStatus = GetIt.instance();
+  final VoidCallback onRestoreWelcomeMessage;
+
+  NavigationAppBar({
+    super.key,
+    required this.onRestoreWelcomeMessage,
+  });
+
+  @override
+  NavigationAppBarState createState() => NavigationAppBarState();
+
+  @override
+  Size get preferredSize =>
+      const Size.fromHeight(kToolbarHeight); // 默认的AppBar高度
+}
+
+class NavigationAppBarState extends State<NavigationAppBar>
+    with SingleTickerProviderStateMixin {
+  late final _iconAnimationController = AnimationController(
+    duration: const Duration(seconds: 3), // 控制旋转速度
+    vsync: this,
+  );
+  late final _animation = CurvedAnimation(
+    parent: _iconAnimationController,
+    curve: Curves.linear,
+  );
+  AppState _state = AppState.idle;
+
+  @override
+  void initState() {
+    super.initState();
+
+    // 在生成状态变化时改变样式
+    widget.commandStatus.isGenerationActive.addListener(refreshDisplay);
+    widget.commandStatus.isWaitingForNextGeneration.addListener(refreshDisplay);
+    refreshDisplay(); // 初始化状态
+  }
+
+  void refreshDisplay() {
+    AppState newState;
+    if (widget.commandStatus.isWaitingForNextGeneration.value) {
+      newState = AppState.waitingForNextGeneration;
+    } else if (widget.commandStatus.isGenerationActive.value) {
+      newState = AppState.generating;
+    } else {
+      newState = AppState.idle;
+    }
+    setState(() => _state = newState);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    Widget title;
+    switch (_state) {
+      case AppState.idle:
+        title = const Text(
+          appDisplayName,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        );
+        _iconAnimationController.stop();
+        break;
+      case AppState.generating:
+        title = BlinkText(
+          context.tr('appbar_regular'),
+          beginColor: Theme.of(context).textTheme.titleMedium?.color,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        );
+        _iconAnimationController.repeat();
+        break;
+      case AppState.waitingForNextGeneration:
+        title = BlinkText(
+          context.tr('appbar_generation_interval'),
+          beginColor: Theme.of(context).textTheme.titleMedium?.color,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        );
+        _iconAnimationController.stop();
+        break;
+    }
+    Widget icon = RotationTransition(
+        turns: _animation,
+        child: Image.asset(
+          'assets/appicon.png',
+          filterQuality: FilterQuality.medium,
+          height: widget.preferredSize.height - 16.0,
+        ));
+    final titleBar = Row(
+      children: [
+        InkWell(
+          child: icon,
+          onTap: () => _iconAnimationController
+              .animateTo(Random().nextDouble())
+              .whenComplete(refreshDisplay),
+        ),
+        const SizedBox(width: 8.0),
+        Expanded(
+          child: InkWell(
+            key: const Key('app-title-button'),
+            onTap: () => showDebugSettingsDialog(context),
+            child: Align(alignment: Alignment.centerLeft, child: title),
+          ),
+        ),
+        AppHelpButton(
+          key: const Key('app-help-button'),
+          onRestoreWelcomeMessage: widget.onRestoreWelcomeMessage,
+        ),
+      ],
+    );
+    return AppBar(
+      key: const ValueKey('navigation-app-bar'),
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      surfaceTintColor: Colors.transparent,
+      shadowColor: Colors.transparent,
+      elevation: 0,
+      scrolledUnderElevation: 0,
+      title: titleBar,
+    );
+  }
+
+  @override
+  void dispose() {
+    widget.commandStatus.isGenerationActive.removeListener(refreshDisplay);
+    widget.commandStatus.isWaitingForNextGeneration
+        .removeListener(refreshDisplay);
+    _iconAnimationController.dispose();
+    super.dispose();
   }
 }

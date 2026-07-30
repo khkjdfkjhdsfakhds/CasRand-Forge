@@ -19,7 +19,12 @@ void main() {
               child: PromptEntryEditor(
                 initialEntries: entries,
                 onChanged: onChanged,
-                helpText: 'Editor help',
+                helpItems: const [
+                  'Enter: new entry',
+                  'Shift+Enter: line break within entry',
+                  'Line starts with #: comment only, not part of the prompt. '
+                      'Use it for notes or labels.',
+                ],
                 insertLineBreakLabel: 'Insert line break',
                 nextEntryLabel: 'Next entry',
                 commentLabel: 'Comment',
@@ -81,6 +86,15 @@ void main() {
         matching: find.text('Comment'),
       ),
       findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(const Key('prompt-entry-number-1')),
+          )
+          .style
+          ?.fontSize,
+      9,
     );
   });
 
@@ -159,6 +173,20 @@ void main() {
         tester.getCenter(find.byKey(const Key('insert-prompt-line-break'))).dx,
       ),
     );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('next-prompt-entry')),
+        matching: find.byType(Icon),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('insert-prompt-line-break')),
+        matching: find.byIcon(Icons.keyboard_return),
+      ),
+      findsOneWidget,
+    );
 
     final first = controllerFor(tester, 0);
     await tester.tap(find.byKey(const Key('prompt-entry-field-0')));
@@ -178,6 +206,33 @@ void main() {
           .hasFocus,
       isTrue,
     );
+  });
+
+  testWidgets('help instructions are visually separated without dot markers', (
+    tester,
+  ) async {
+    await pumpEditor(
+      tester,
+      entries: const ['one'],
+      onChanged: (_) {},
+    );
+
+    expect(find.textContaining('·'), findsNothing);
+    expect(find.text('Enter: new entry'), findsOneWidget);
+    expect(find.text('Shift+Enter: line break within entry'), findsOneWidget);
+    expect(
+      find.text(
+        'Line starts with #: comment only, not part of the prompt. '
+        'Use it for notes or labels.',
+      ),
+      findsOneWidget,
+    );
+
+    final help = tester.widget<Wrap>(
+      find.byKey(const Key('prompt-entry-help')),
+    );
+    expect(help.spacing, 24);
+    expect(help.runSpacing, 6);
   });
 
   testWidgets('pasted newlines become entry boundaries', (tester) async {

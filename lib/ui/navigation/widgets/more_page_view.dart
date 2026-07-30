@@ -24,57 +24,21 @@ class MorePageView extends StatelessWidget {
       animation: configuration,
       builder: (context, _) => SingleChildScrollView(
         key: const ValueKey('more-page'),
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
         child: Column(
+          key: const ValueKey('more-page-content'),
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              context.tr('navigation_current'),
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 8),
-            ReorderableListView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              buildDefaultDragHandles: false,
-              itemCount: configuration.destinations.length,
-              onReorderItem: (oldIndex, newIndex) {
-                if (configuration.move(oldIndex, newIndex)) {
-                  _persistChange();
-                }
-              },
-              itemBuilder: (context, index) {
-                final destination = configuration.destinations[index];
-                final definition = navigationDefinition(destination);
-                return ListTile(
-                  key: ValueKey('more-current-${destination.name}'),
-                  minTileHeight: 56,
-                  leading: Icon(definition.icon),
-                  title: Text(context.tr(definition.labelKey)),
-                  trailing: ReorderableDragStartListener(
-                    index: index,
-                    child: Semantics(
-                      key: ValueKey('more-reorder-${destination.name}'),
-                      button: true,
-                      label: context.tr(
-                        'navigation_reorder',
-                        namedArgs: {
-                          'destination': context.tr(definition.labelKey),
-                        },
-                      ),
-                      child: const SizedBox.square(
-                        dimension: 48,
-                        child: Icon(Icons.drag_handle),
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-            const SizedBox(height: 20),
-            Text(
               context.tr('navigation_all_functions'),
               style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              context.tr('navigation_all_functions_hint'),
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
             ),
             const SizedBox(height: 8),
             ...optionalNavigationDestinations.map((destination) {
@@ -141,12 +105,14 @@ class MorePageView extends StatelessWidget {
                           }
                           _persistChange();
                           ScaffoldMessenger.of(context)
-                            ..hideCurrentSnackBar()
+                            ..clearSnackBars()
                             ..showSnackBar(
                               SnackBar(
                                 content: Text(
                                   context.tr('navigation_favorite_removed'),
                                 ),
+                                duration: const Duration(seconds: 2),
+                                persist: false,
                                 action: SnackBarAction(
                                   label: context.tr('undo'),
                                   onPressed: () {
@@ -166,6 +132,57 @@ class MorePageView extends StatelessWidget {
                 ),
               );
             }),
+            const SizedBox(height: 24),
+            Text(
+              context.tr('navigation_current'),
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              context.tr('navigation_current_hint'),
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            ReorderableListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              buildDefaultDragHandles: false,
+              itemCount: configuration.destinations.length,
+              onReorderItem: (oldIndex, newIndex) {
+                if (configuration.move(oldIndex, newIndex)) {
+                  _persistChange();
+                }
+              },
+              itemBuilder: (context, index) {
+                final destination = configuration.destinations[index];
+                final definition = navigationDefinition(destination);
+                return ListTile(
+                  key: ValueKey('more-current-${destination.name}'),
+                  minTileHeight: 56,
+                  leading: Icon(definition.icon),
+                  title: Text(context.tr(definition.labelKey)),
+                  trailing: ReorderableDragStartListener(
+                    index: index,
+                    child: Semantics(
+                      key: ValueKey('more-reorder-${destination.name}'),
+                      button: true,
+                      label: context.tr(
+                        'navigation_reorder',
+                        namedArgs: {
+                          'destination': context.tr(definition.labelKey),
+                        },
+                      ),
+                      child: const SizedBox.square(
+                        dimension: 48,
+                        child: Icon(Icons.drag_handle),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
           ],
         ),
       ),

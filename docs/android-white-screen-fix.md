@@ -18,7 +18,7 @@ Error registering plugin super_native_extensions
 java.lang.UnsatisfiedLinkError: dlopen failed: library "libsuper_native_extensions.so" not found
 ```
 
-These libraries are pulled in by `super_drag_and_drop` / `super_clipboard` through `super_native_extensions`. CasRand Forge only needs these features for desktop-style drag-and-drop and native image transfer. Android should continue to use tap/file-picker flows instead.
+These libraries are pulled in by `super_drag_and_drop` / `super_clipboard` through `super_native_extensions`. NAI CasRand Forge only needs these features for desktop-style drag-and-drop and native image transfer. Android should continue to use tap/file-picker flows instead.
 
 The default Flutter Android plugin registrant catches `Exception`, but `UnsatisfiedLinkError` is an `Error`, so the missing optional native library can abort plugin registration and leave the app stuck before `runApp` completes. Even after making registration tolerant, constructing `DropRegion` on Android can trigger the same missing-library path.
 

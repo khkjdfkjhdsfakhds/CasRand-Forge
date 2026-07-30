@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:get_it/get_it.dart';
+import 'package:nai_casrand/core/constants/app_identity.dart';
 import 'package:nai_casrand/ui/config_page/widgets/config_page_view.dart';
 import 'package:nai_casrand/ui/config_page/view_models/config_page_viewmodel.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
@@ -70,15 +71,6 @@ class NavigationViewState extends State<NavigationView> {
 
   @override
   Widget build(BuildContext context) {
-    final appBar = NavigationAppBar(
-      onRestoreWelcomeMessage: _restoreWelcomeMessage,
-    );
-    final body = Scaffold(
-      appBar: appBar,
-      body: MetadataDropArea(
-        childBuilder: (context) => getBody(),
-      ),
-    );
     return PopScope(
         canPop: false,
         onPopInvokedWithResult: (didPop, result) {
@@ -95,7 +87,9 @@ class NavigationViewState extends State<NavigationView> {
             SystemNavigator.pop(); // 双击，退出应用
           }
         },
-        child: body);
+        child: MetadataDropArea(
+          childBuilder: (context) => getBody(),
+        ));
   }
 
   void _restoreWelcomeMessage() {
@@ -119,6 +113,9 @@ class NavigationViewState extends State<NavigationView> {
         widget.viewModel.changeIndex(destination.index);
       },
       onConfigurationChanged: _saveNavigationConfiguration,
+      appBar: NavigationAppBar(
+        onRestoreWelcomeMessage: _restoreWelcomeMessage,
+      ),
     );
   }
 
@@ -126,17 +123,21 @@ class NavigationViewState extends State<NavigationView> {
     final dontShowAgainVersion =
         GetIt.I<PayloadConfig>().settings.welcomeMessageVersion;
     final packageInfo = GetIt.instance<ConfigService>().packageInfo;
-    const appName = 'CasRand Forge';
     final appVersion = packageInfo.version;
     if (appVersion == dontShowAgainVersion) return;
     showDialog(
         context: context,
         builder: (dialogContext) {
           return AlertDialog(
-            title:
-                Text('${tr('welcome_message_title')} - $appName $appVersion'),
+            title: Text(
+              '${tr('welcome_message_title')} - '
+              '$appDisplayName $appVersion',
+            ),
             content: MarkdownBody(
-              data: tr('welcome_message_markdown'),
+              data: tr(
+                'welcome_message_markdown',
+                namedArgs: {'appName': appDisplayName},
+              ),
               onTapLink: (text, href, title) {
                 if (href == null) return;
                 if (href == '#jump_to_api_proxy_settings') {

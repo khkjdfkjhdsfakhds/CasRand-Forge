@@ -1,6 +1,7 @@
 import 'package:adaptive_theme/adaptive_theme.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:nai_casrand/core/constants/app_identity.dart';
 import 'package:nai_casrand/data/models/command_status.dart';
 import 'package:nai_casrand/data/models/image_handoff_coordinator.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
@@ -97,6 +98,7 @@ class MyApp extends StatelessWidget {
       dark: buildAppTheme(Brightness.dark),
       initial: config.settings.theme,
       builder: (theme, darkTheme) => MaterialApp(
+        title: appDisplayName,
         theme: theme,
         localizationsDelegates: context.localizationDelegates,
         supportedLocales: context.supportedLocales,

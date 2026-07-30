@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "CasRand Forge contributors" "\0"
-            VALUE "FileDescription", "CasRand Forge Beta" "\0"
+            VALUE "FileDescription", "NAI CasRand Forge" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "CasRand Forge Beta" "\0"
+            VALUE "InternalName", "NAI CasRand Forge" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2024 Exception0x0194; 2026 CasRand Forge contributors. GPL-3.0 licensed." "\0"
-            VALUE "OriginalFilename", "CasRandForgeBeta.exe" "\0"
-            VALUE "ProductName", "CasRand Forge Beta" "\0"
+            VALUE "OriginalFilename", "NAICasRandForge.exe" "\0"
+            VALUE "ProductName", "NAI CasRand Forge" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

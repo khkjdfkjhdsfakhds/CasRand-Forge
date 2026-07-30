@@ -1,6 +1,6 @@
-# CasRand Forge
+# NAI CasRand Forge
 
-CasRand Forge 是 [NAI CasRand](https://github.com/Exception0x0194/NAI-Generator-Flutter) 的社区跨平台 Fork。项目保留原有的级联随机 Prompt 与 NovelAI 图像生成能力，并持续完善 macOS、Windows 和 Android 支持。
+NAI CasRand Forge 是 [NAI CasRand](https://github.com/Exception0x0194/NAI-Generator-Flutter) 的社区跨平台 Fork。项目保留原有的级联随机 Prompt 与 NovelAI 图像生成能力，并持续完善 macOS、Windows 和 Android 支持。
 
 ## 下载与平台状态
 
@@ -12,19 +12,19 @@ CasRand Forge 是 [NAI CasRand](https://github.com/Exception0x0194/NAI-Generator
 
 macOS 用户推荐下载 DMG，将 App 拖入“应用程序”。本项目的公开 macOS 构建使用临时签名且尚未经过 Apple 公证；首次打开时若 macOS 提示无法验证开发者，请在 Finder 中右键应用并选择“打开”。Windows 用户解压完整 ZIP 后运行 `CasRandForgeBeta.exe`。Android Beta 使用测试签名，后续若签名变化，可能需要先卸载旧 Beta 再安装新版。
 
-0.9.4 在 GitHub 上作为正式版发布，但三个平台继续沿用当前 Beta 应用名称和应用标识，以保留现有配置身份与安装兼容性。
+已发布的 0.9.4 成品仍沿用当时的 Beta 应用名称和应用标识；后续版本的软件名称改为 NAI CasRand Forge，同时继续保留应用标识，以延续现有配置和安装兼容性。
 
 本 Fork 使用独立的应用标识；macOS Beta 也能与稳定版及原版并存。GitHub Release 标签同时提供自动生成的源码 ZIP 和 TAR。
 
 ## 简介
 
-CasRand Forge 是一个按照指定模式生成随机提示词（prompt），并将其和其他生成参数发送至 API 以获取生成图片的软件。对于不同种类的需求，如：
+NAI CasRand Forge 是一个按照指定模式生成随机提示词（prompt），并将其和其他生成参数发送至 API 以获取生成图片的软件。对于不同种类的需求，如：
 
 - 我想从很多喜欢的风格中找到/统计出一个最合适的搭配；
 - 我想得到某个/某些角色在不同场景下的图片；
 - 不说没用的哥们就是想要各种姿势的涩图🥵
 
-在合适的设置下，CasRand Forge 可以满足上述需求。
+在合适的设置下，NAI CasRand Forge 可以满足上述需求。
 
 ### 界面展示
 
@@ -105,7 +105,7 @@ CasRand Forge 是一个按照指定模式生成随机提示词（prompt），并
 
 - **设置参数**
 
-    CasRand Forge 由级联的配置定义随机抽取的模式和内容。每一项 prompt 设置（`Config`）都具有多个可设置的内容，包括：
+    NAI CasRand Forge 由级联的配置定义随机抽取的模式和内容。每一项 prompt 设置（`Config`）都具有多个可设置的内容，包括：
 
     | 属性           | 作用                                                              | 内容                                                 |
     | -------------- | ----------------------------------------------------------------- | ---------------------------------------------------- |
@@ -124,7 +124,7 @@ CasRand Forge 是一个按照指定模式生成随机提示词（prompt），并
 
 - **默认设置**
 
-    在每次启动时，CasRand Forge 将读取一个较简单的默认 prompt 生成配置。
+    在每次启动时，NAI CasRand Forge 将读取一个较简单的默认 prompt 生成配置。
 
 <div style="margin-left: 40px;"><details>
 
@@ -181,7 +181,7 @@ CasRand Forge 是一个按照指定模式生成随机提示词（prompt），并
 
 ## 开源许可与致谢
 
-CasRand Forge 继承原项目的 [GNU GPL-3.0](LICENSE) 许可。原项目由 [Exception0x0194](https://github.com/Exception0x0194) 开发；本 Fork 保留原许可证、版权与权利说明。NovelAI 是 Anlatan 的商标，本项目与 NovelAI/Anlatan 没有官方隶属关系。
+NAI CasRand Forge 继承原项目的 [GNU GPL-3.0](LICENSE) 许可。原项目由 [Exception0x0194](https://github.com/Exception0x0194) 开发；本 Fork 保留原许可证、版权与权利说明。NovelAI 是 Anlatan 的商标，本项目与 NovelAI/Anlatan 没有官方隶属关系。
 
 ## 支持作者
 

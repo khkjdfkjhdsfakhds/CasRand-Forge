@@ -30,6 +30,7 @@ void main() {
     required NavigationRequest request,
     VoidCallback? onConfigurationChanged,
     ValueChanged<AppDestination>? onDestinationOpened,
+    PreferredSizeWidget? appBar,
   }) {
     return EasyLocalization(
       key: UniqueKey(),
@@ -50,6 +51,7 @@ void main() {
               navigationRequest: request,
               onConfigurationChanged: onConfigurationChanged,
               onDestinationOpened: onDestinationOpened,
+              appBar: appBar,
               pages: {
                 for (final destination in AppDestination.values)
                   if (destination != AppDestination.more)
@@ -202,6 +204,59 @@ void main() {
       tester.getSemantics(reorder).label,
       contains('Reorder Image Generation'),
     );
+    expect(
+      tester.getTopLeft(find.text('All functions')).dy,
+      lessThan(tester.getTopLeft(find.text('Current navigation')).dy),
+    );
+    expect(
+      find.text(
+        'Tap a function card to open it. Use the button on the right to '
+        'show or hide it in the main navigation.',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.text(
+        'Image Generation, Generation Config, More and Settings are required '
+        'and cannot be removed. Drag any item to reorder it.',
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('removal notification auto-dismisses while undo is available', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final configuration = NavigationConfiguration.fromJson({});
+
+    await tester.pumpWidget(
+      app(configuration: configuration, request: NavigationRequest()),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('navigation-more')));
+    await tester.pumpAndSettle();
+
+    final favorite = find.byKey(
+      const ValueKey('more-favorite-imageToImage'),
+    );
+    await tester.ensureVisible(favorite);
+    await tester.tap(favorite);
+    await tester.pumpAndSettle();
+    await tester.tap(favorite);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 750));
+
+    expect(find.text('Undo'), findsOneWidget);
+    final notification = tester.widget<SnackBar>(find.byType(SnackBar));
+    expect(notification.persist, isFalse);
+    expect(notification.duration, const Duration(seconds: 2));
+
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pump();
+    await tester.pumpAndSettle();
+    expect(find.text('Undo'), findsNothing);
   });
 
   testWidgets('drag handle reorders every navigation entry and persists', (
@@ -222,10 +277,12 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('navigation-more')));
     await tester.pumpAndSettle();
 
-    await tester.drag(
-      find.byKey(const ValueKey('more-reorder-generation')),
-      const Offset(0, 120),
+    final generationHandle = find.byKey(
+      const ValueKey('more-reorder-generation'),
     );
+    await tester.ensureVisible(generationHandle);
+    await tester.pumpAndSettle();
+    await tester.drag(generationHandle, const Offset(0, 120));
     await tester.pumpAndSettle();
 
     expect(configuration.destinations, [
@@ -486,6 +543,205 @@ void main() {
     );
   });
 
+  testWidgets('desktop navigation matches the compact Material 3 rail', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      app(
+        configuration: allDestinations(),
+        request: NavigationRequest(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final generationEntry = find.byKey(
+      const ValueKey('navigation-generation-indicator'),
+    );
+    final selectedIndicator = find.byKey(
+      const ValueKey('navigation-generation-selection-indicator'),
+    );
+    final unselectedIndicator = find.byKey(
+      const ValueKey('navigation-config-selection-indicator'),
+    );
+    final longLabel = tester.widget<Text>(
+      find.text('Vibe Transfer / Precise Reference'),
+    );
+
+    expect(tester.getSize(generationEntry), const Size(80, 64));
+    expect(tester.getTopLeft(generationEntry).dy, 8);
+    expect(tester.getSize(selectedIndicator), const Size(56, 32));
+    expect(
+      tester.getCenter(selectedIndicator).dx,
+      closeTo(tester.getCenter(generationEntry).dx, 0.01),
+    );
+    expect(
+      tester.getTopLeft(find.text('Image Generation')).dy,
+      greaterThan(tester.getBottomLeft(selectedIndicator).dy),
+    );
+
+    final selectedDecoration = tester
+        .widget<Container>(selectedIndicator)
+        .decoration! as BoxDecoration;
+    expect(
+      selectedDecoration.color,
+      Theme.of(tester.element(selectedIndicator))
+          .colorScheme
+          .secondaryContainer,
+    );
+    expect(
+      selectedDecoration.borderRadius,
+      BorderRadius.circular(16),
+    );
+    expect(tester.widget<Container>(unselectedIndicator).decoration, isNull);
+
+    expect(longLabel.maxLines, 1);
+    expect(longLabel.softWrap, isFalse);
+    expect(longLabel.overflow, TextOverflow.ellipsis);
+    expect(
+      tester
+          .getSize(
+            find.descendant(
+              of: selectedIndicator,
+              matching: find.byType(Icon),
+            ),
+          )
+          .width,
+      24,
+    );
+    expect(
+      tester
+          .widget<Tooltip>(
+            find.ancestor(
+              of: find.text('Vibe Transfer / Precise Reference'),
+              matching: find.byType(Tooltip),
+            ),
+          )
+          .message,
+      'Vibe Transfer / Precise Reference',
+    );
+  });
+
+  testWidgets('desktop keeps the 0.9.1 header and recalculates body height', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      app(
+        configuration: NavigationConfiguration.fromJson({}),
+        request: NavigationRequest(),
+        appBar: AppBar(
+          key: const ValueKey('phone-app-bar'),
+          title: const Text('phone title'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final appBar = find.byKey(const ValueKey('phone-app-bar'));
+    final generationPage = find.byKey(
+      const ValueKey('page-generation'),
+    );
+    expect(appBar, findsOneWidget);
+    expect(tester.getBottomLeft(appBar).dy, 56);
+    expect(
+      tester
+          .getTopLeft(
+            find.byKey(
+              const ValueKey('navigation-generation-indicator'),
+            ),
+          )
+          .dy,
+      64,
+    );
+    expect(tester.getTopLeft(generationPage).dy, 56);
+    expect(tester.getSize(generationPage).height, 744);
+
+    await tester.tap(find.byKey(const ValueKey('navigation-more')));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.getTopLeft(find.byKey(const ValueKey('more-page-content'))).dy,
+      closeTo(64, 0.01),
+    );
+  });
+
+  testWidgets('phone keeps the app bar above the navigation content', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      app(
+        configuration: NavigationConfiguration.fromJson({}),
+        request: NavigationRequest(),
+        appBar: AppBar(
+          key: const ValueKey('phone-app-bar'),
+          title: const Text('phone title'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('phone-app-bar')), findsOneWidget);
+    expect(
+      tester.getBottomLeft(find.byKey(const ValueKey('phone-app-bar'))).dy,
+      56,
+    );
+    expect(
+      tester
+          .getBottomLeft(
+            find.byKey(
+              const ValueKey('navigation-generation-indicator'),
+            ),
+          )
+          .dy,
+      800,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('navigation-more')));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('wide touch layouts keep the app bar without native chrome', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      app(
+        configuration: NavigationConfiguration.fromJson({}),
+        request: NavigationRequest(),
+        appBar: AppBar(
+          key: const ValueKey('phone-app-bar'),
+          title: const Text('wide touch title'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('phone-app-bar')), findsOneWidget);
+    expect(
+      tester
+          .getTopLeft(
+            find.byKey(
+              const ValueKey('navigation-generation-indicator'),
+            ),
+          )
+          .dy,
+      64,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('navigation-more')));
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('navigation without overflow shows no cue or scrollbar', (
     tester,
   ) async {
@@ -513,6 +769,41 @@ void main() {
       findsNothing,
     );
   });
+
+  for (final width in [320.0, 390.0]) {
+    testWidgets('four phone destinations fill ${width}px width',
+        (tester) async {
+      await tester.binding.setSurfaceSize(Size(width, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      await tester.pumpWidget(
+        app(
+          configuration: NavigationConfiguration.fromJson({}),
+          request: NavigationRequest(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final indicators = [
+        for (final destination in const [
+          AppDestination.generation,
+          AppDestination.config,
+          AppDestination.more,
+          AppDestination.settings,
+        ])
+          tester.getRect(
+            find.byKey(
+              ValueKey('navigation-${destination.name}-indicator'),
+            ),
+          ),
+      ];
+      expect(indicators.first.left, closeTo(0, 0.01));
+      expect(indicators.last.right, closeTo(width, 0.01));
+      for (final indicator in indicators) {
+        expect(indicator.width, closeTo(width / 4, 0.01));
+      }
+    });
+  }
 
   for (final size in [const Size(390, 800), const Size(1200, 800)]) {
     testWidgets(
