@@ -255,6 +255,11 @@ class I2iRequestPlan {
 class I2iRequestBatch {
   final List<I2iRequestPlan> plans;
 
+  /// Original full-resolution source used to seed local focus-inpaint
+  /// compositing. Keeping it on the batch makes an in-flight request
+  /// independent from later edits to the mutable [I2IConfig].
+  final String? compositeBaseImageB64;
+
   /// Tiles must be sent one after another (overlapping frames).
   final bool serial;
 
@@ -262,6 +267,7 @@ class I2iRequestBatch {
 
   const I2iRequestBatch({
     required this.plans,
+    this.compositeBaseImageB64,
     required this.serial,
     required this.summary,
   });
@@ -414,6 +420,7 @@ class PrepareI2iRequestUseCase {
         .toList(growable: false);
     return I2iRequestBatch(
       plans: plans,
+      compositeBaseImageB64: batch.compositeBaseImageB64,
       serial: batch.serial,
       summary: batch.isSplit ? batch.summary : plans.first.summary,
     );
@@ -627,6 +634,7 @@ class PrepareI2iRequestUseCase {
 
   I2iRequestBatch _buildInpaintBatch(int targetWidth, int targetHeight) {
     final base = _requireBaseImage();
+    final compositeBaseImageB64 = base64Encode(_pngBytesForOriginal(base));
     final mask = config.hasMask ? _requireMaskImage() : null;
     MaskCellGrid? cells;
     if (mask != null) {
@@ -665,6 +673,7 @@ class PrepareI2iRequestUseCase {
         );
         return I2iRequestBatch(
           plans: [tile],
+          compositeBaseImageB64: compositeBaseImageB64,
           serial: true,
           summary: tile.summary,
         );
@@ -702,6 +711,7 @@ class PrepareI2iRequestUseCase {
         };
         return I2iRequestBatch(
           plans: plans,
+          compositeBaseImageB64: compositeBaseImageB64,
           serial: batch.serial,
           summary: batch.isSplit
               ? 'inpaint focus, $modeText into ${batch.tileCount} tiles '
@@ -825,13 +835,14 @@ class PrepareI2iRequestUseCase {
   Future<Uint8List> compositeInpaintResponse({
     required Uint8List responseBytes,
     required I2iRequestPlan plan,
+    String? compositeBaseImageB64,
   }) async {
     if (!plan.isInpaint) {
       throw ArgumentError('The request plan is not an infill request.');
     }
     final canvas = plan.composite == null
         ? _decodeRequestImage(plan)
-        : img.Image.from(_requireBaseImage());
+        : newCompositeCanvas(baseImageB64: compositeBaseImageB64);
     blendInpaintTileInto(
       canvas: canvas,
       responseBytes: responseBytes,
@@ -1031,8 +1042,18 @@ class PrepareI2iRequestUseCase {
     return output;
   }
 
-  /// A canvas seeded with the base image, ready for [blendInpaintTileInto].
-  img.Image newCompositeCanvas() => img.Image.from(_requireBaseImage());
+  /// A canvas seeded with the batch's immutable base image snapshot, ready for
+  /// [blendInpaintTileInto]. The config fallback keeps direct use-case callers
+  /// compatible, while generation always supplies the captured batch image.
+  img.Image newCompositeCanvas({String? baseImageB64}) {
+    if (baseImageB64 == null) return img.Image.from(_requireBaseImage());
+    final bytes = base64Decode(baseImageB64);
+    final decoded = img.decodePng(bytes) ?? img.decodeImage(bytes);
+    if (decoded == null) {
+      throw Exception('Failed to decode the inpaint composite base image.');
+    }
+    return img.Image.from(img.bakeOrientation(decoded));
+  }
 
   /// Encodes the finished canvas, re-embedding the response's stealth
   /// metadata so imports keep working.

@@ -53,7 +53,7 @@ jobs:
           AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)"
           test -n "$AAPT"
           BADGING="$("$AAPT" dump badging "$ASSET_NAME")"
-          grep -Fq "package: name='io.github.khkjdfkjhdsfakhds.casrandforge.beta' versionCode='59' versionName='0.9.5'" <<<"$BADGING"
+          grep -Fq "package: name='io.github.khkjdfkjhdsfakhds.casrandforge.beta' versionCode='60' versionName='0.9.5'" <<<"$BADGING"
           grep -Fq "application-label:'NAI CasRand Forge'" <<<"$BADGING"
 
       - name: Upload Android artifact

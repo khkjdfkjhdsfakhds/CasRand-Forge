@@ -312,6 +312,67 @@ class GeneratePayloadUseCase {
     );
   }
 
+  /// Applies one tile plan to an already-generated payload without consulting
+  /// mutable prompt/reference settings or advancing any random/sequential
+  /// prompt source. Used by split inpainting so every tile belongs to the same
+  /// immutable generation batch.
+  static Map<String, dynamic> applyI2iPlanToPayload(
+    Map<String, dynamic> basePayload,
+    I2iRequestPlan plan,
+  ) {
+    final payload = _deepCopyJsonMap(basePayload);
+    final parameters = payload['parameters'] as Map<String, dynamic>;
+    final seed = parameters['seed'] as int;
+    parameters
+      ..['width'] = plan.width
+      ..['height'] = plan.height
+      ..['image'] = plan.imageB64
+      ..['extra_noise_seed'] = (seed - 1) & 0xFFFFFFFF;
+
+    if (plan.isInpaint) {
+      payload
+        ..['action'] = 'infill'
+        ..['model'] = inpaintModelMapping[payload['model']] ?? payload['model'];
+      parameters
+        ..['mask'] = plan.maskB64
+        ..['add_original_image'] = false
+        ..['strength'] = 0.7
+        ..['noise'] = 0.2
+        ..['inpaintImg2ImgStrength'] = plan.strength;
+      if (plan.strength < 1) {
+        parameters['img2img'] = {
+          'strength': plan.strength,
+          'color_correct': true,
+        };
+      } else {
+        parameters.remove('img2img');
+      }
+    } else {
+      payload['action'] = 'img2img';
+      parameters
+        ..remove('mask')
+        ..remove('inpaintImg2ImgStrength')
+        ..remove('img2img')
+        ..['strength'] = plan.strength
+        ..['noise'] = plan.noise;
+    }
+    return payload;
+  }
+
+  static Map<String, dynamic> _deepCopyJsonMap(Map<String, dynamic> source) {
+    dynamic copy(dynamic value) {
+      if (value is Map) {
+        return value.map<String, dynamic>(
+          (key, item) => MapEntry(key.toString(), copy(item)),
+        );
+      }
+      if (value is List) return value.map(copy).toList(growable: false);
+      return value;
+    }
+
+    return copy(source) as Map<String, dynamic>;
+  }
+
   String _appendPromptSuffix(String prompt, String suffix) {
     var normalizedSuffix = suffix.trim();
     if (normalizedSuffix.isEmpty) return prompt;

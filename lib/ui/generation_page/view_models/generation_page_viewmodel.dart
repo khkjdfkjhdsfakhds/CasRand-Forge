@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -29,6 +30,7 @@ const infoCardContentListLength = 200;
 class _WorkerState {
   PayloadGenerationResult? cachedPayloadResult;
   I2iRequestBatch? cachedI2iBatch;
+  String? cachedRetryFingerprint;
   int cacheRetriesCount = 0;
   int consecutiveTransientFailures = 0;
   bool halted = false;
@@ -92,6 +94,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
 
   PayloadGenerationResult? _cachedPayloadResult;
   I2iRequestBatch? _cachedI2iBatch;
+  String? _cachedRetryFingerprint;
   int _cacheRetriesCount = 0;
   int _consecutiveTransientFailures = 0;
   bool _primaryWorkerHalted = false;
@@ -433,26 +436,27 @@ class GenerationPageViewmodel extends ChangeNotifier {
   }) async {
     const maxTileConcurrency = 4;
     final useCase = PrepareI2iRequestUseCase(config: payloadConfig.i2iConfig);
-    final canvas = useCase.newCompositeCanvas();
+    final canvas = useCase.newCompositeCanvas(
+      baseImageB64: batch.compositeBaseImageB64,
+    );
     Uint8List? lastResponse;
-    final baseParameters =
-        basePayloadResult.payload['parameters'] as Map<String, dynamic>;
-    final batchSeed = baseParameters['seed'] as int?;
-
-    Map<String, dynamic> payloadFor(I2iRequestPlan plan) {
-      return GeneratePayloadUseCase(
-        payloadConfig: payloadConfig,
-        i2iPlan: plan,
-        seedOverride: batchSeed,
-      )()
-          .payload;
-    }
+    // Freeze the full request semantics before the first network await. Every
+    // split tile inherits the first payload's prompt, model, references,
+    // sampler and seed; only its I2I image/mask/size fields differ.
+    final payloads = batch.plans
+        .map(
+          (plan) => GeneratePayloadUseCase.applyI2iPlanToPayload(
+            basePayloadResult.payload,
+            plan,
+          ),
+        )
+        .toList(growable: false);
 
     if (batch.serial) {
-      for (final plan in batch.plans) {
+      for (final (index, plan) in batch.plans.indexed) {
         // Re-plan against the canvas as it stands so later tiles build on the
         // already-repainted pixels.
-        final response = await sendPlan(payloadFor(plan));
+        final response = await sendPlan(payloads[index]);
         useCase.blendInpaintTileInto(
           canvas: canvas,
           responseBytes: response,
@@ -465,8 +469,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
           start < batch.plans.length;
           start += maxTileConcurrency) {
         final slice = batch.plans.skip(start).take(maxTileConcurrency).toList();
+        final payloadSlice = payloads.skip(start).take(maxTileConcurrency);
         final responses = await Future.wait(
-          slice.map((plan) => sendPlan(payloadFor(plan))),
+          payloadSlice.map(sendPlan),
         );
         for (final (index, response) in responses.indexed) {
           useCase.blendInpaintTileInto(
@@ -531,7 +536,10 @@ class GenerationPageViewmodel extends ChangeNotifier {
               : EncodeVibeUseCase.officialEndpoint,
         );
 
-        // Check whether cached payload exists, use cache if exists.
+        // Retry the exact random prompt/seed only while every input that can
+        // affect the request is still compatible with the cached payload.
+        // A failed request must never pin a removed/replaced reference image,
+        // I2I plan, model, prompt, seed, or generation parameter for later runs.
         if (presetBatch != null) {
           i2iBatch = presetBatch;
           payloadResult = GeneratePayloadUseCase(
@@ -541,27 +549,66 @@ class GenerationPageViewmodel extends ChangeNotifier {
             applyI2iAreaRandomSeed: false,
             promptSuffix: promptSuffix,
           )();
-        } else if (_getCachedPayload(workerIndex) != null &&
-            _getCacheRetries(workerIndex) < 3) {
-          payloadResult = _getCachedPayload(workerIndex)!;
-          i2iBatch = _getCachedBatch(workerIndex);
-          _setCacheRetries(workerIndex, _getCacheRetries(workerIndex) + 1);
         } else {
-          final i2iConfig = payloadConfig.i2iConfig;
-          if (payloadConfig.i2iEnabled && i2iConfig.hasImage) {
-            final target = i2iConfig.requestSize;
-            i2iBatch = await PrepareI2iRequestUseCase(
-              config: i2iConfig,
-            ).planBatch(targetWidth: target.width, targetHeight: target.height);
+          final currentFingerprint = _generationRetryFingerprint();
+          final cachedPayload = _getCachedPayload(workerIndex);
+          final canReuseCache = cachedPayload != null &&
+              _getCacheRetries(workerIndex) < 3 &&
+              _getCachedRetryFingerprint(workerIndex) == currentFingerprint;
+          if (canReuseCache) {
+            payloadResult = cachedPayload;
+            i2iBatch = _getCachedBatch(workerIndex);
+            _setCacheRetries(workerIndex, _getCacheRetries(workerIndex) + 1);
+          } else {
+            if (cachedPayload != null) {
+              _setCachedPayload(workerIndex, null, null);
+              _setCacheRetries(workerIndex, 0);
+            }
+
+            // I2I preparation may yield. If the user edits its image, mask,
+            // frame, size, or any other request input meanwhile, discard that
+            // obsolete plan and prepare again from the newest state.
+            while (true) {
+              vibeExtractionAnlas += await ensureVibeEncodings(
+                token: token,
+                endpoint: settings.debugApiEnabled
+                    ? EncodeVibeUseCase.endpointForDebugGenerationPath(endpoint)
+                    : EncodeVibeUseCase.officialEndpoint,
+              );
+              final buildFingerprint = _generationRetryFingerprint();
+              i2iBatch = null;
+              final i2iConfig = payloadConfig.i2iConfig;
+              if (payloadConfig.i2iEnabled && i2iConfig.hasImage) {
+                final target = i2iConfig.requestSize;
+                i2iBatch = await PrepareI2iRequestUseCase(
+                  config: i2iConfig,
+                ).planBatch(
+                  targetWidth: target.width,
+                  targetHeight: target.height,
+                );
+              }
+              if (buildFingerprint != _generationRetryFingerprint()) {
+                continue;
+              }
+              payloadResult = GeneratePayloadUseCase(
+                payloadConfig: payloadConfig,
+                i2iPlan: i2iBatch?.plans.first,
+                applyI2iAreaRandomSeed: i2iBatch != null,
+                random: _i2iSeedRandom,
+              )();
+              if (buildFingerprint != _generationRetryFingerprint()) {
+                continue;
+              }
+              _setCachedPayload(
+                workerIndex,
+                payloadResult,
+                i2iBatch,
+                retryFingerprint: buildFingerprint,
+              );
+              _setCacheRetries(workerIndex, 0);
+              break;
+            }
           }
-          payloadResult = GeneratePayloadUseCase(
-            payloadConfig: payloadConfig,
-            i2iPlan: i2iBatch?.plans.first,
-            applyI2iAreaRandomSeed: i2iBatch != null,
-            random: _i2iSeedRandom,
-          )();
-          _setCachedPayload(workerIndex, payloadResult, i2iBatch);
-          _setCacheRetries(workerIndex, 0);
         }
         _applyCurrentVibesToPayload(payloadResult);
 
@@ -605,6 +652,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
             ).compositeInpaintResponse(
               responseBytes: imageBytes,
               plan: plan!,
+              compositeBaseImageB64: i2iBatch?.compositeBaseImageB64,
             );
           }
         }
@@ -897,59 +945,83 @@ class GenerationPageViewmodel extends ChangeNotifier {
     required String token,
     String endpoint = EncodeVibeUseCase.officialEndpoint,
   }) async {
-    final config = payloadConfig;
-    final model = config.paramConfig.model;
-    if (!config.vibeEnabled || !model.contains('-4-')) return 0;
-    // Precise Reference takes the V4.5 reference payload slot. The normal
-    // setters keep the two features mutually exclusive, but this guard also
-    // protects migrated or transient state from spending 2 Anlas on an
-    // encoding that would not be sent.
-    if (config.preciseReferenceEnabled && model.contains('-4-5-')) return 0;
-
     var extractedCount = 0;
 
-    for (final vibe in config.vibeConfigListV4) {
-      if (vibe.encodingFor(model) != null) continue;
-      final imageBytes = vibe.imageBytes;
-      if (imageBytes == null || imageBytes.isEmpty) {
-        throw VibeEncodingException(
-          'The Vibe "${vibe.fileName}" has no encoding for $model and no '
-          'original image to extract again.',
-        );
+    // Encoding yields to the event loop. The user may remove A and add B while
+    // A is still being extracted, so keep preparing snapshots until the
+    // *current* list is fully ready. Results remain cached only on the exact
+    // Vibe object and model/information pair that started each extraction.
+    while (true) {
+      final config = payloadConfig;
+      final model = config.paramConfig.model;
+      if (!config.vibeEnabled || !model.contains('-4-')) {
+        return extractedCount * 2;
+      }
+      // Precise Reference takes the V4.5 reference payload slot. The normal
+      // setters keep the two features mutually exclusive, but this guard also
+      // protects migrated or transient state from spending 2 Anlas on an
+      // encoding that would not be sent.
+      if (config.preciseReferenceEnabled && model.contains('-4-5-')) {
+        return extractedCount * 2;
       }
 
-      final info = vibe.informationExtracted;
-      final cacheKey = '${identityHashCode(vibe)}|$model|'
-          '${info.toStringAsFixed(6)}';
-      var future = _vibeEncodingFutures[cacheKey];
-      var ownsExtraction = false;
-      if (future == null) {
-        ownsExtraction = true;
-        future = _encodeVibeUseCase(
-          imageBytes: imageBytes,
-          informationExtracted: info,
-          model: model,
-          token: token,
-          proxy: config.settings.proxy,
-          endpoint: endpoint,
-        );
-        _vibeEncodingFutures[cacheKey] = future;
-      }
-      try {
-        final encoding = await future;
-        if (ownsExtraction) extractedCount++;
-        vibe.cacheEncoding(
-          model: model,
-          informationExtracted: info,
-          encoding: encoding,
-        );
-      } finally {
-        if (identical(_vibeEncodingFutures[cacheKey], future)) {
-          _vibeEncodingFutures.remove(cacheKey);
+      final vibes = List.of(config.vibeConfigListV4);
+      for (final vibe in vibes) {
+        if (vibe.encodingFor(model) != null) continue;
+        final imageBytes = vibe.imageBytes;
+        if (imageBytes == null || imageBytes.isEmpty) {
+          throw VibeEncodingException(
+            'The Vibe "${vibe.fileName}" has no encoding for $model and no '
+            'original image to extract again.',
+          );
+        }
+
+        final info = vibe.informationExtracted;
+        final cacheKey = '${identityHashCode(vibe)}|$model|'
+            '${info.toStringAsFixed(6)}';
+        var future = _vibeEncodingFutures[cacheKey];
+        var ownsExtraction = false;
+        if (future == null) {
+          ownsExtraction = true;
+          future = _encodeVibeUseCase(
+            imageBytes: imageBytes,
+            informationExtracted: info,
+            model: model,
+            token: token,
+            proxy: config.settings.proxy,
+            endpoint: endpoint,
+          );
+          _vibeEncodingFutures[cacheKey] = future;
+        }
+        try {
+          final encoding = await future;
+          if (ownsExtraction) extractedCount++;
+          vibe.cacheEncoding(
+            model: model,
+            informationExtracted: info,
+            encoding: encoding,
+          );
+        } finally {
+          if (identical(_vibeEncodingFutures[cacheKey], future)) {
+            _vibeEncodingFutures.remove(cacheKey);
+          }
         }
       }
+
+      final currentConfig = payloadConfig;
+      final currentModel = currentConfig.paramConfig.model;
+      if (!currentConfig.vibeEnabled || !currentModel.contains('-4-')) {
+        return extractedCount * 2;
+      }
+      if (currentConfig.preciseReferenceEnabled &&
+          currentModel.contains('-4-5-')) {
+        return extractedCount * 2;
+      }
+      if (currentConfig.vibeConfigListV4
+          .every((vibe) => vibe.encodingFor(currentModel) != null)) {
+        return extractedCount * 2;
+      }
     }
-    return extractedCount * 2;
   }
 
   void _applyCurrentVibesToPayload(PayloadGenerationResult result) {
@@ -987,9 +1059,66 @@ class GenerationPageViewmodel extends ChangeNotifier {
         informationExtracted;
   }
 
+  String _generationRetryFingerprint() {
+    final config = payloadConfig;
+    final model = config.paramConfig.model;
+    return jsonEncode({
+      'prompt_mode': config.promptMode.name,
+      'active_profile': config.activeProfile.toJson(),
+      // The cached result also owns the prompt-derived suggested file name.
+      // Rebuild it when the user's file-name template changes.
+      'file_name_prefix_key': config.settings.fileNamePrefixKey,
+      'i2i': {
+        'enabled': config.i2iEnabled,
+        'config_id': identityHashCode(config.i2iConfig),
+        'revision': config.i2iConfig.revision,
+      },
+      'precise_reference': {
+        'enabled': config.preciseReferenceEnabled,
+        'items': config.preciseReferenceConfigList
+            .map((item) => {
+                  'config_id': identityHashCode(item),
+                  'image_id': identityHashCode(item.imageB64),
+                  'image_length': item.imageB64.length,
+                  'enabled': item.enabled,
+                  'type': item.type.name,
+                  'strength': item.strength,
+                  'fidelity': item.fidelity,
+                })
+            .toList(growable: false),
+      },
+      'vibe': {
+        'enabled': config.vibeEnabled,
+        'legacy': config.vibeConfigList
+            .map((item) => {
+                  'config_id': identityHashCode(item),
+                  'image_id': identityHashCode(item.imageB64),
+                  'image_length': item.imageB64.length,
+                  'information_extracted': item.infoExtracted,
+                  'strength': item.referenceStrength,
+                })
+            .toList(growable: false),
+        'v4': config.vibeConfigListV4
+            .map((item) => {
+                  'config_id': identityHashCode(item),
+                  'strength': item.referenceStrength,
+                  'information_extracted': item.informationExtracted,
+                  'encoding_id': identityHashCode(item.encodingFor(model)),
+                  'encoding_length': item.encodingFor(model)?.length,
+                })
+            .toList(growable: false),
+      },
+    });
+  }
+
   PayloadGenerationResult? _getCachedPayload(int workerIndex) {
     if (workerIndex == 0) return _cachedPayloadResult;
     return _extraWorkers[workerIndex]?.cachedPayloadResult;
+  }
+
+  String? _getCachedRetryFingerprint(int workerIndex) {
+    if (workerIndex == 0) return _cachedRetryFingerprint;
+    return _extraWorkers[workerIndex]?.cachedRetryFingerprint;
   }
 
   I2iRequestBatch? _getCachedBatch(int workerIndex) {
@@ -1000,17 +1129,20 @@ class GenerationPageViewmodel extends ChangeNotifier {
   void _setCachedPayload(
     int workerIndex,
     PayloadGenerationResult? result,
-    I2iRequestBatch? batch,
-  ) {
+    I2iRequestBatch? batch, {
+    String? retryFingerprint,
+  }) {
     if (workerIndex == 0) {
       _cachedPayloadResult = result;
       _cachedI2iBatch = batch;
+      _cachedRetryFingerprint = result == null ? null : retryFingerprint;
       return;
     }
     final state = _extraWorkers[workerIndex];
     if (state == null) return;
     state.cachedPayloadResult = result;
     state.cachedI2iBatch = batch;
+    state.cachedRetryFingerprint = result == null ? null : retryFingerprint;
   }
 
   int _getCacheRetries(int workerIndex) {
@@ -1092,23 +1224,39 @@ class GenerationPageViewmodel extends ChangeNotifier {
     if (currentCommand != null && currentCommand!.isExecuting.value) return;
     final config = payloadConfig.directorToolConfig;
     if (!config.hasImage) return;
-    commandStatus.generationTimestamp = DateTime.now();
+
+    // Capture one immutable request snapshot at the click boundary. Response
+    // handling must not be reclassified if the user prepares another tool or
+    // image while this request is in flight.
+    final payload = config.getPayload();
+    final toolType = config.type;
+    final toolName = config.displayName;
+    final sourceWidth = config.width;
+    final sourceHeight = config.height;
+    final settings = payloadConfig.settings;
+    final apiKey = settings.apiKey;
+    final proxy = settings.proxy;
+    final headers = payloadConfig.getHeadersForToken(apiKey);
+    final outputFolderPath = settings.outputFolderPath;
+    final metadataEraseEnabled = settings.metadataEraseEnabled;
+    final customMetadataEnabled = settings.customMetadataEnabled;
+    final customMetadataContent = settings.customMetadataContent;
+    final debugApiEnabled = settings.debugApiEnabled;
+    final requestTimestamp = DateTime.now();
+    commandStatus.generationTimestamp = requestTimestamp;
 
     var additionalResults = const <InfoCardContent>[];
     int? startingBalance;
     DateTime? startingBalanceTime;
     commandFunc() async {
-      final settings = payloadConfig.settings;
-      final payload = config.getPayload();
-      final toolName = config.displayName;
-      startingBalance = _lastAnlasBalances[settings.apiKey];
-      startingBalanceTime = _lastAnlasBalanceTimes[settings.apiKey];
+      startingBalance = _lastAnlasBalances[apiKey];
+      startingBalanceTime = _lastAnlasBalanceTimes[apiKey];
       try {
         final response = await _apiService.fetchData(
           ApiRequest(
             endpoint: augmentImageEndpoint,
-            proxy: settings.proxy,
-            headers: payloadConfig.getHeadersForToken(settings.apiKey),
+            proxy: proxy,
+            headers: headers,
             payload: payload,
           ),
         );
@@ -1118,59 +1266,54 @@ class GenerationPageViewmodel extends ChangeNotifier {
         );
         final unpacked = _imageService.processResponseImages(data);
         const backgroundVariants = ['Masked', 'Generated', 'Blend'];
-        if (config.type == 'bg-removal' &&
+        if (toolType == 'bg-removal' &&
             unpacked.length < backgroundVariants.length) {
           throw Exception(
             'Remove Background returned ${unpacked.length} image(s); expected 3.',
           );
         }
-        final responseImages = config.type == 'bg-removal'
+        final responseImages = toolType == 'bg-removal'
             ? unpacked.take(backgroundVariants.length).toList(growable: false)
             : [unpacked.first];
         // The request carries the source image inline; keep it out of the card.
         final info = Map<String, dynamic>.from(payload)..remove('image');
         final estimatedCost = estimateDirectorToolAnlas(
-          tool: config.type,
-          width: config.width,
-          height: config.height,
+          tool: toolType,
+          width: sourceWidth,
+          height: sourceHeight,
         );
         final results = <InfoCardContent>[];
         for (final (index, rawBytes) in responseImages.indexed) {
           var imageBytes = rawBytes;
-          if (settings.metadataEraseEnabled) {
-            final metadataString = settings.customMetadataEnabled
-                ? settings.customMetadataContent
-                : '';
+          if (metadataEraseEnabled) {
+            final metadataString =
+                customMetadataEnabled ? customMetadataContent : '';
             imageBytes = await _imageService.embedMetadata(
               imageBytes,
               metadataString,
             );
           }
-          final variant = config.type == 'bg-removal'
-              ? backgroundVariants[index]
-              : toolName;
+          final variant =
+              toolType == 'bg-removal' ? backgroundVariants[index] : toolName;
           final fileName = [
-            _fileService.generateTimestampString(
-              commandStatus.generationTimestamp,
-            ),
+            _fileService.generateTimestampString(requestTimestamp),
             commandStatus.currentGenerationCount.toString().padLeft(6, '0'),
-            config.type,
-            if (config.type == 'bg-removal') variant.toLowerCase(),
+            toolType,
+            if (toolType == 'bg-removal') variant.toLowerCase(),
             '${_fileService.generateRandomString()}.png',
           ].join('-');
           final imageFilePath = await _fileService.savePictureToFile(
             imageBytes,
             fileName,
-            settings.outputFolderPath,
+            outputFolderPath,
           );
           commandStatus.currentGenerationCount++;
           final resultInfo = <String, dynamic>{
             ...info,
-            if (config.type == 'bg-removal')
-              'background_removal_variant': variant,
+            if (toolType == 'bg-removal') 'background_removal_variant': variant,
           };
           final resultLabel =
-              config.type == 'bg-removal' ? '$toolName · $variant' : toolName;
+              toolType == 'bg-removal' ? '$toolName · $variant' : toolName;
           results.add(InfoCardContent(
             title: fileName,
             info:
@@ -1207,11 +1350,10 @@ class GenerationPageViewmodel extends ChangeNotifier {
       for (final result in additionalResults) {
         _addCompletedResult(result);
       }
-      if (command.value.imageBytes != null &&
-          !payloadConfig.settings.debugApiEnabled) {
+      if (command.value.imageBytes != null && !debugApiEnabled) {
         unawaited(_refreshSingleResultBalance(
           command: command,
-          token: payloadConfig.settings.apiKey,
+          token: apiKey,
           startingBalance: startingBalance,
           startingBalanceTime: startingBalanceTime,
         ));
@@ -1267,6 +1409,12 @@ class GenerationPageViewmodel extends ChangeNotifier {
     final enhance = payloadConfig.enhanceConfig;
     final bytes = enhance.imageBytes;
     if (bytes == null) return false;
+    final imageRevision = enhance.imageRevision;
+    final scale = enhance.scale;
+    final presetIndex = enhance.presetIndex;
+    final showIndividualSettings = enhance.showIndividualSettings;
+    final strength = enhance.strength;
+    final noise = enhance.noise;
     final target = enhance.targetSize;
 
     _isPreparingEnhance = true;
@@ -1275,8 +1423,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
       // A throwaway I2IConfig reuses the img2img plan builder without touching
       // the real Img2Img base image. Heavy pixel work runs off the UI isolate.
       final requestConfig = I2IConfig(
-        strength: enhance.strength,
-        noise: enhance.noise,
+        strength: strength,
+        noise: noise,
       );
       requestConfig.setImage(Uint8List.fromList(bytes));
       final plan = await PrepareI2iRequestUseCase(
@@ -1286,6 +1434,18 @@ class GenerationPageViewmodel extends ChangeNotifier {
         targetHeight: target.height,
       );
       if (plan == null) return false;
+      final currentEnhance = payloadConfig.enhanceConfig;
+      if (!identical(currentEnhance, enhance) ||
+          !currentEnhance.hasImage ||
+          currentEnhance.imageRevision != imageRevision ||
+          currentEnhance.scale != scale ||
+          currentEnhance.presetIndex != presetIndex ||
+          currentEnhance.showIndividualSettings != showIndividualSettings ||
+          currentEnhance.strength != strength ||
+          currentEnhance.noise != noise ||
+          currentEnhance.targetSize != target) {
+        return false;
+      }
 
       final random = Random.secure();
       final seed = (random.nextInt(1 << 16) << 16) | random.nextInt(1 << 16);
@@ -1405,6 +1565,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
       payloadConfig.resetSequentialState();
       _cachedPayloadResult = null;
       _cachedI2iBatch = null;
+      _cachedRetryFingerprint = null;
       _cacheRetriesCount = 0;
     }
     _clearExtraWorkers();
