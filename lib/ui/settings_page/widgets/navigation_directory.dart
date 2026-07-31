@@ -116,7 +116,6 @@ class NavigationDirectory extends StatelessWidget {
                       ],
                     ),
                   ),
-                  const Divider(height: 1),
                 ],
               );
             },

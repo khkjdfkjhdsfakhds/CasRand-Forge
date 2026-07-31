@@ -398,6 +398,14 @@ void main() {
       ),
       findsNWidgets(4),
     );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('navigation-directory-list')),
+        matching: find.byType(Divider),
+      ),
+      findsNothing,
+    );
+    expect(find.byType(Divider), findsNWidgets(2));
     expect(find.text('More'), findsNothing);
   });
 
