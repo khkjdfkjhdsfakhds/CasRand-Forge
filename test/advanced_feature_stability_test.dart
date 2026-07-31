@@ -336,9 +336,8 @@ I2iRequestBatch _smallSerialSplitBatch(Uint8List baseBytes) {
   final maskB64 = base64Encode(requestMask);
   final blendMaskB64 = base64Encode(latentMask);
 
-  I2iRequestPlan tile(int x, String label, Uint8List requestImage) =>
-      I2iRequestPlan(
-        imageB64: base64Encode(requestImage),
+  I2iRequestPlan tile(int x, String label) => I2iRequestPlan(
+        imageB64: base64Encode(baseBytes),
         maskB64: maskB64,
         blendMaskB64: blendMaskB64,
         width: 64,
@@ -359,8 +358,8 @@ I2iRequestBatch _smallSerialSplitBatch(Uint8List baseBytes) {
 
   return I2iRequestBatch(
     plans: [
-      tile(0, 'left tile', _solidPng(220, 30, 30)),
-      tile(32, 'right tile', _solidPng(30, 30, 220)),
+      tile(0, 'left tile'),
+      tile(16, 'overlapping right tile'),
     ],
     compositeBaseImageB64: baseImageB64,
     serial: true,
@@ -1293,6 +1292,13 @@ void main() {
       _parameters(second)['image'],
       isNot(_parameters(first)['image']),
     );
+    final secondSource = img.decodePng(
+      base64Decode(_parameters(second)['image'] as String),
+    )!;
+    final updatedContext = secondSource.getPixel(0, 32);
+    final untouchedContext = secondSource.getPixel(31, 32);
+    expect(updatedContext.g.toInt(), greaterThan(updatedContext.r.toInt()));
+    expect(untouchedContext.r.toInt(), greaterThan(untouchedContext.g.toInt()));
     viewmodel.dispose();
   });
 

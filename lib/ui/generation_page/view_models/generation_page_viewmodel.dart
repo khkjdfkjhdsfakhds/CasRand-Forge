@@ -27,6 +27,11 @@ import 'package:nai_casrand/data/use_cases/prepare_director_tool_request_use_cas
 import 'package:nai_casrand/ui/generation_page/view_models/generation_scheduler.dart';
 
 const infoCardContentListLength = 200;
+const _balanceSettlementRetryDelays = [
+  Duration(milliseconds: 300),
+  Duration(seconds: 1),
+  Duration(seconds: 2),
+];
 
 typedef PreparationFeedbackBarrier = Future<void> Function();
 typedef I2iBatchPreparer = Future<I2iRequestBatch?> Function({
@@ -194,6 +199,17 @@ class GenerationPageViewmodel extends ChangeNotifier {
   bool get _smActive =>
       !payloadConfig.paramConfig.model.contains('diffusion-4');
 
+  int get _pendingVibeEncodingAnlas {
+    final config = payloadConfig;
+    final model = config.paramConfig.model;
+    if (!config.vibeEnabled || !model.contains('-4-')) return 0;
+    if (config.preciseReferenceEnabled && model.contains('-4-5-')) return 0;
+    final pendingCount = config.vibeConfigListV4
+        .where((vibe) => vibe.canEncode && vibe.encodingFor(model) == null)
+        .length;
+    return pendingCount * 2;
+  }
+
   /// Recomputes [nextCostEstimate] when any relevant input changed. Cheap to
   /// call from build methods: a fingerprint short-circuits repeats, and the
   /// img2img planning that needs image decoding runs asynchronously.
@@ -219,6 +235,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
       paramConfig.steps,
       sm,
       smDyn,
+      paramConfig.model,
       payloadConfig.settings.subscriptionTier,
       payloadConfig.settings.subscriptionActive,
       payloadConfig.preciseReferenceEnabled
@@ -227,6 +244,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
               .length
           : 0,
       payloadConfig.vibeEnabled ? payloadConfig.vibeConfigListV4.length : 0,
+      _pendingVibeEncodingAnlas,
       paramConfig.nSamples,
     ].join('|');
     if (key == _costEstimateKey) return;
@@ -251,6 +269,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
         : 0;
     final vibeCount =
         payloadConfig.vibeEnabled ? payloadConfig.vibeConfigListV4.length : 0;
+    final vibeEncodingAnlas = _pendingVibeEncodingAnlas;
     // With several sizes one is picked at random per request; estimate the
     // most expensive so the display is an honest upper bound.
     final useI2i = payloadConfig.i2iEnabled && i2i.hasImage;
@@ -311,6 +330,13 @@ class GenerationPageViewmodel extends ChangeNotifier {
       }
     } catch (_) {
       estimate = null;
+    }
+    if (estimate != null && vibeEncodingAnlas > 0) {
+      estimate = AnlasCost(
+        anlas: estimate.anlas + vibeEncodingAnlas,
+        isFreeUnderOpus: false,
+        perImageAnlas: estimate.perImageAnlas,
+      );
     }
     if (epoch != _costEstimateEpoch) return;
     nextCostEstimate.value = estimate;
@@ -510,23 +536,16 @@ class GenerationPageViewmodel extends ChangeNotifier {
       baseImageB64: batch.compositeBaseImageB64,
     );
     Uint8List? lastResponse;
-    // Freeze the full request semantics before the first network await. Every
-    // split tile inherits the first payload's prompt, model, references,
-    // sampler and seed; only its I2I image/mask/size fields differ.
-    final payloads = batch.plans
-        .map(
-          (plan) => GeneratePayloadUseCase.applyI2iPlanToPayload(
-            basePayloadResult.payload,
-            plan,
-          ),
-        )
-        .toList(growable: false);
-
     if (batch.serial) {
       for (final (index, plan) in batch.plans.indexed) {
-        // Re-plan against the canvas as it stands so later tiles build on the
-        // already-repainted pixels.
-        final response = await sendPlan(payloads[index]);
+        final requestPlan = index == 0
+            ? plan
+            : useCase.rebaseFocusPlanOnCanvas(canvas: canvas, plan: plan);
+        final payload = GeneratePayloadUseCase.applyI2iPlanToPayload(
+          basePayloadResult.payload,
+          requestPlan,
+        );
+        final response = await sendPlan(payload);
         useCase.blendInpaintTileInto(
           canvas: canvas,
           responseBytes: response,
@@ -535,6 +554,16 @@ class GenerationPageViewmodel extends ChangeNotifier {
         lastResponse = response;
       }
     } else {
+      // Freeze all non-overlapping requests before the first await. They share
+      // prompt/model/reference/seed semantics and can safely run concurrently.
+      final payloads = batch.plans
+          .map(
+            (plan) => GeneratePayloadUseCase.applyI2iPlanToPayload(
+              basePayloadResult.payload,
+              plan,
+            ),
+          )
+          .toList(growable: false);
       for (var start = 0;
           start < batch.plans.length;
           start += maxTileConcurrency) {
@@ -979,10 +1008,11 @@ class GenerationPageViewmodel extends ChangeNotifier {
     required int? startingBalance,
     required DateTime? startingBalanceTime,
   }) async {
-    final info = await _accountService.fetchSubscription(
+    final estimatedCost = command.value.anlasCost ?? 0;
+    final info = await _fetchSettledSubscription(
       token: token,
-      proxy: payloadConfig.settings.proxy,
-      forceRefresh: true,
+      startingBalance: startingBalance,
+      estimatedCost: estimatedCost,
     );
     if (info == null) return;
     _recordSubscriptionInfo(token, info);
@@ -1033,40 +1063,70 @@ class GenerationPageViewmodel extends ChangeNotifier {
     batch.finalization ??= _finalizeBatchBalances(batch);
   }
 
-  Future<void> _finalizeBatchBalances(_BatchAccounting batch) async {
-    if (batch.baselineFutures.isNotEmpty) {
-      await Future.wait(batch.baselineFutures.values);
-    }
-    await Future.wait(batch.tokens.map((token) async {
+  Future<SubscriptionInfo?> _fetchSettledSubscription({
+    required String token,
+    required int? startingBalance,
+    required int estimatedCost,
+  }) async {
+    SubscriptionInfo? lastUsableInfo;
+    final retryDelays = startingBalance == null
+        ? const <Duration>[]
+        : _balanceSettlementRetryDelays;
+    for (var attempt = 0; attempt <= retryDelays.length; attempt++) {
+      if (attempt > 0) await Future<void>.delayed(retryDelays[attempt - 1]);
       final info = await _accountService.fetchSubscription(
         token: token,
         proxy: payloadConfig.settings.proxy,
         forceRefresh: true,
       );
-      if (info == null) return;
-      _recordSubscriptionInfo(token, info);
-      final remaining = info.anlas;
-      final command = batch.lastCommands[token];
-      if (remaining == null || command == null) return;
-      final starting = batch.startingBalances[token];
-      final actual = starting != null && starting >= remaining
-          ? starting - remaining
-          : null;
-      final successCount = batch.successCounts[token] ?? 0;
-      final showPerAccountBatchBreakdown = batch.tokens.length > 1;
-      command.value = command.value.copyWith(
-        anlasCost:
-            !showPerAccountBatchBreakdown && actual != null && successCount == 1
-                ? actual
-                : command.value.anlasCost,
-        anlasCostIsEstimated: showPerAccountBatchBreakdown
-            ? command.value.anlasCostIsEstimated
-            : !(actual != null && successCount == 1),
-        anlasRemaining: remaining,
-        batchAnlasCost:
-            showPerAccountBatchBreakdown || successCount > 1 ? actual : null,
-      );
-    }));
+      final remaining = info?.anlas;
+      if (info == null || remaining == null) continue;
+      lastUsableInfo = info;
+      final mayStillBeStale = estimatedCost > 0 && remaining == startingBalance;
+      if (!mayStillBeStale || attempt == retryDelays.length) return info;
+    }
+    return lastUsableInfo;
+  }
+
+  Future<void> _finalizeBatchBalances(_BatchAccounting batch) async {
+    await Future.wait(batch.tokens.map(
+      (token) => _finalizeBatchToken(batch, token),
+    ));
+  }
+
+  Future<void> _finalizeBatchToken(
+    _BatchAccounting batch,
+    String token,
+  ) async {
+    await batch.baselineFutures[token];
+    final command = batch.lastCommands[token];
+    if (command == null) return;
+    final starting = batch.startingBalances[token];
+    final info = await _fetchSettledSubscription(
+      token: token,
+      startingBalance: starting,
+      estimatedCost: batch.estimatedTotals[token] ?? 0,
+    );
+    if (info == null) return;
+    _recordSubscriptionInfo(token, info);
+    final remaining = info.anlas;
+    if (remaining == null) return;
+    final actual =
+        starting != null && starting >= remaining ? starting - remaining : null;
+    final successCount = batch.successCounts[token] ?? 0;
+    final showPerAccountBatchBreakdown = batch.tokens.length > 1;
+    command.value = command.value.copyWith(
+      anlasCost:
+          !showPerAccountBatchBreakdown && actual != null && successCount == 1
+              ? actual
+              : command.value.anlasCost,
+      anlasCostIsEstimated: showPerAccountBatchBreakdown
+          ? command.value.anlasCostIsEstimated
+          : !(actual != null && successCount == 1),
+      anlasRemaining: remaining,
+      batchAnlasCost:
+          showPerAccountBatchBreakdown || successCount > 1 ? actual : null,
+    );
     notifyListeners();
   }
 
@@ -1908,6 +1968,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
       }
     }
     commandStatus.currentGenerationCount = 0;
+    commandStatus.isStopping.value = false;
     commandStatus.isGenerationActive.value = true;
     commandStatus.generationTimestamp = DateTime.now();
     nextCommand();
@@ -1922,11 +1983,14 @@ class GenerationPageViewmodel extends ChangeNotifier {
 
   void stopGeneration() {
     final scheduler = _scheduler;
-    scheduler?.requestStop();
-    _generationIntervalTimer?.cancel();
-    _generationIntervalTimer = null;
-    _cancelWorkerIntervals();
-    commandStatus.isWaitingForNextGeneration.value = false;
+    if (!commandStatus.isStopping.value) {
+      commandStatus.isStopping.value = true;
+      scheduler?.requestStop();
+      _generationIntervalTimer?.cancel();
+      _generationIntervalTimer = null;
+      _cancelWorkerIntervals();
+      commandStatus.isWaitingForNextGeneration.value = false;
+    }
     if (scheduler != null && !scheduler.status.finished) {
       return;
     }
@@ -1936,6 +2000,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
   void _completeGenerationStop() {
     _clearExtraWorkers();
     commandStatus.isGenerationActive.value = false;
+    commandStatus.isStopping.value = false;
     final batch = _activeBatch;
     _activeBatch = null;
     if (batch != null) {
@@ -1996,6 +2061,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
   }
 
   void toggleGeneration() {
+    if (commandStatus.isStopping.value) return;
     if (commandStatus.isGenerationActive.value) {
       stopGeneration();
     } else {

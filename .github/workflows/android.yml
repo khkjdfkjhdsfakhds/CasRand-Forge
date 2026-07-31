@@ -32,6 +32,25 @@ jobs:
       - name: Resolve locked dependencies
         run: flutter pub get --enforce-lockfile
 
+      - name: Configure Android release signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.CASRAND_ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.CASRAND_ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.CASRAND_ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.CASRAND_ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64"
+          test -n "$ANDROID_KEYSTORE_PASSWORD"
+          test -n "$ANDROID_KEY_ALIAS"
+          test -n "$ANDROID_KEY_PASSWORD"
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/release.keystore
+          cat > android/key.properties <<EOF
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyPassword=$ANDROID_KEY_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          storeFile=release.keystore
+          EOF
+
       - name: Analyze
         run: flutter analyze --no-fatal-infos
 
@@ -53,8 +72,9 @@ jobs:
           AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)"
           test -n "$AAPT"
           BADGING="$("$AAPT" dump badging "$ASSET_NAME")"
-          grep -Fq "package: name='io.github.khkjdfkjhdsfakhds.casrandforge.beta' versionCode='70' versionName='0.9.5'" <<<"$BADGING"
+          grep -Fq "package: name='io.github.khkjdfkjhdsfakhds.casrandforge.beta' versionCode='72' versionName='0.9.5'" <<<"$BADGING"
           grep -Fq "application-label:'NAI CasRand Forge'" <<<"$BADGING"
+          grep -Fq "Signer #1 certificate SHA-256 digest: aa180c392642bf83b47eac1b7ec6756b6e0cefe2b4443ac8e1e22b3a24c31b3e" < <("$APKSIGNER" verify --verbose --print-certs "$ASSET_NAME")
 
       - name: Upload Android artifact
         uses: actions/upload-artifact@v4

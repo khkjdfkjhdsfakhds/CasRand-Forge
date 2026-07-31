@@ -656,6 +656,8 @@ class PrepareI2iRequestUseCase {
         final modeText = switch (batch.splitMode) {
           FocusSplitMode.grid => 'grid split',
           FocusSplitMode.longAxis => 'long-axis split',
+          FocusSplitMode.islands => 'mask islands',
+          FocusSplitMode.mixed => 'mixed island split',
           FocusSplitMode.none => 'single frame',
         };
         return I2iRequestBatch(
@@ -759,6 +761,14 @@ class PrepareI2iRequestUseCase {
                 y >= plan.inner.bottom) {
               continue;
             }
+            final repaintCells = plan.repaintCells;
+            if (repaintCells != null &&
+                !repaintCells.cellAt(
+                  x ~/ maskCellSize,
+                  y ~/ maskCellSize,
+                )) {
+              continue;
+            }
             if (mask == null ||
                 _maskPixelSet(mask, imageWidth, imageHeight, x, y)) {
               found = true;
@@ -798,6 +808,50 @@ class PrepareI2iRequestUseCase {
       plan: plan,
     );
     return finishComposite(canvas: canvas, responseBytes: responseBytes);
+  }
+
+  /// Rebuilds a Focus request source from the current composite canvas. This
+  /// makes a later overlapping serial tile observe earlier repaint results
+  /// while preserving the batch's frozen prompt and generation parameters.
+  I2iRequestPlan rebaseFocusPlanOnCanvas({
+    required img.Image canvas,
+    required I2iRequestPlan plan,
+  }) {
+    final composite = plan.composite;
+    if (composite == null) return plan;
+    var content = _cropWithPadding(canvas, composite.outer);
+    if (content.width != composite.contentWidth ||
+        content.height != composite.contentHeight) {
+      content = img.copyResize(
+        content,
+        width: composite.contentWidth,
+        height: composite.contentHeight,
+        interpolation: img.Interpolation.cubic,
+      );
+    }
+    final requestCanvas = img.Image(
+      width: plan.width,
+      height: plan.height,
+      numChannels: 3,
+    );
+    img.compositeImage(
+      requestCanvas,
+      content,
+      dstX: composite.contentOffsetX,
+      dstY: composite.contentOffsetY,
+    );
+    return I2iRequestPlan(
+      imageB64: base64Encode(img.encodePng(requestCanvas)),
+      maskB64: plan.maskB64,
+      blendMaskB64: plan.blendMaskB64,
+      width: plan.width,
+      height: plan.height,
+      strength: plan.strength,
+      noise: plan.noise,
+      addOriginalImage: plan.addOriginalImage,
+      composite: composite,
+      summary: plan.summary,
+    );
   }
 
   /// Blends one focus tile onto [canvas] in place, so a split mask accumulates

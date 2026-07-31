@@ -332,11 +332,25 @@ class _GenerationPageViewState extends State<GenerationPageView> {
     return ListenableBuilder(
       listenable: Listenable.merge([
         viewmodel.commandStatus.isGenerationActive,
+        viewmodel.commandStatus.isStopping,
         viewmodel.nextCostEstimate,
       ]),
       builder: (context, _) {
         final active = viewmodel.commandStatus.isGenerationActive.value;
         if (active) {
+          if (viewmodel.commandStatus.isStopping.value) {
+            return FixedTooltipFab(
+              heroTag: 'gpfab3',
+              buttonKey: const Key('generation-toggle-fab'),
+              onPressed: null,
+              tooltip: tr('stopping_generation'),
+              icon: const SizedBox.square(
+                dimension: 22,
+                child: CircularProgressIndicator(strokeWidth: 2.5),
+              ),
+              label: Text(tr('stopping_generation')),
+            );
+          }
           return FixedTooltipFab(
             heroTag: 'gpfab3',
             buttonKey: const Key('generation-toggle-fab'),

@@ -53,5 +53,6 @@ class CommandStatus {
   }
 
   ValueNotifier<bool> isGenerationActive = ValueNotifier(false);
+  ValueNotifier<bool> isStopping = ValueNotifier(false);
   ValueNotifier<bool> isWaitingForNextGeneration = ValueNotifier(false);
 }

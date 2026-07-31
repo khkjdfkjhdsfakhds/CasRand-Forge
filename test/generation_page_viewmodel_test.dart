@@ -294,6 +294,11 @@ class _SchedulingViewmodel extends GenerationPageViewmodel {
   }
 }
 
+class _NoSubscriptionRefreshViewmodel extends GenerationPageViewmodel {
+  @override
+  Future<void> refreshSubscriptionSnapshot() async {}
+}
+
 class _WorkerRecordingViewmodel extends GenerationPageViewmodel {
   _WorkerRecordingViewmodel()
       : super(preparationFeedbackBarrier: _skipPreparationFeedbackBarrier);
@@ -591,6 +596,30 @@ void main() {
     viewmodel.dispose();
   });
 
+  testWidgets('pending Vibe encoding contributes two Anlas to next cost', (
+    tester,
+  ) async {
+    final config = GetIt.I<PayloadConfig>();
+    config.settings
+      ..subscriptionTier = 3
+      ..subscriptionActive = true
+      ..subscriptionStatusKnown = true;
+    config.vibeConfigListV4.add(VibeConfigV4(
+      fileName: 'pending.png',
+      referenceStrength: 0.6,
+      imageBytes: Uint8List.fromList([1, 2, 3]),
+    ));
+    config.setVibeEnabled(true);
+    final viewmodel = _NoSubscriptionRefreshViewmodel();
+
+    viewmodel.refreshCostEstimate();
+    await tester.pump();
+
+    expect(viewmodel.nextCostEstimate.value?.anlas, 2);
+    expect(viewmodel.nextCostEstimate.value?.isFreeUnderOpus, isFalse);
+    viewmodel.dispose();
+  });
+
   testWidgets('single-image batch reconciles exact cost in the background', (
     tester,
   ) async {
@@ -636,6 +665,47 @@ void main() {
     expect(content.anlasRemaining, 80);
     expect(content.batchAnlasCost, isNull);
     expect(accounts.calls, 3);
+    viewmodel.dispose();
+  });
+
+  testWidgets('batch retries a temporarily unavailable final balance', (
+    tester,
+  ) async {
+    final outputImage = img.Image(width: 64, height: 64, numChannels: 3);
+    final api = _FakeApiService(ApiResponse(
+      status: '200',
+      data: directorResponseZip([
+        Uint8List.fromList(img.encodePng(outputImage)),
+      ]),
+    ));
+    final accounts = _FakeAccountService(responses: const [
+      SubscriptionInfo(anlas: 100, tier: 1, active: true),
+      SubscriptionInfo(anlas: 100, tier: 1, active: true),
+      null,
+      SubscriptionInfo(anlas: 80, tier: 1, active: true),
+    ]);
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      accountService: accounts,
+      fileService: _RecordingFileService(),
+    );
+    final settings = GetIt.I<PayloadConfig>().settings;
+    settings
+      ..apiKey = 'pst-test'
+      ..debugApiEnabled = false
+      ..generationCount = 1
+      ..generationIntervalSec = 0;
+    await viewmodel.refreshSubscriptionSnapshot();
+
+    viewmodel.startGeneration();
+    await waitForCurrentCommand(tester, viewmodel);
+    await tester.pump(const Duration(seconds: 5));
+
+    final content = viewmodel.currentCommand!.value;
+    expect(accounts.calls, 4);
+    expect(content.anlasCost, 20);
+    expect(content.anlasCostIsEstimated, isFalse);
+    expect(content.anlasRemaining, 80);
     viewmodel.dispose();
   });
 
@@ -824,7 +894,7 @@ void main() {
     expect(byLabel['Opus']?.anlasCost, 0);
     expect(byLabel['Standard']?.anlasCost, greaterThan(0));
     accounts.laterCalls.complete(null);
-    await tester.pump();
+    await tester.pump(const Duration(seconds: 4));
     viewmodel.dispose();
   });
 
@@ -1320,6 +1390,7 @@ void main() {
     await tester.pump();
 
     expect(commandStatus.isGenerationActive.value, isTrue);
+    expect(commandStatus.isStopping.value, isTrue);
     expect(commandStatus.isWaitingForNextGeneration.value, isFalse);
     expect(api.calls, 1);
 
@@ -1332,6 +1403,7 @@ void main() {
     await waitForCurrentCommand(tester, viewmodel);
 
     expect(commandStatus.isGenerationActive.value, isFalse);
+    expect(commandStatus.isStopping.value, isFalse);
     expect(api.calls, 1);
     expect(viewmodel.commandList.single.value.imageBytes, isNotNull);
     viewmodel.dispose();

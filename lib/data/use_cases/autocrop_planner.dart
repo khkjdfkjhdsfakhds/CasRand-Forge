@@ -42,6 +42,10 @@ const int areaCapWallpaper = 1728 * 1728;
 /// shrunk into one request.
 const int focusFrameMaxArea = areaCapNormal;
 
+/// Prevent imported masks with many isolated specks from turning one click
+/// into an unbounded number of paid Focus requests.
+const int maxFocusTiles = 16;
+
 /// Automatic Focus Inpainting is only useful beyond NovelAI's normal free
 /// image area. The preference may remain enabled for smaller images, but the
 /// request must stay on the whole-image inpaint path until this returns true.
@@ -124,16 +128,55 @@ class MaskCellGrid {
   }
 }
 
+/// Actual non-repainted context available on each side of a Focus frame.
+/// A source-image edge can reduce one side without discarding the others.
+class FocusContextInsets {
+  final int left;
+  final int top;
+  final int right;
+  final int bottom;
+
+  const FocusContextInsets({
+    required this.left,
+    required this.top,
+    required this.right,
+    required this.bottom,
+  });
+
+  const FocusContextInsets.uniform(int value)
+      : left = value,
+        top = value,
+        right = value,
+        bottom = value;
+
+  int get minimum => min(min(left, right), min(top, bottom));
+}
+
+class FocusInpaintTileLimitException implements Exception {
+  final int tileCount;
+  final int maxTiles;
+
+  const FocusInpaintTileLimitException(this.tileCount, this.maxTiles);
+
+  @override
+  String toString() => 'AutoCrop needs $tileCount Focus requests, but the '
+      'safe maximum is $maxTiles. Reduce or merge the painted regions.';
+}
+
 /// A planned focus-inpainting request.
 class FocusInpaintPlan {
   /// Frame taken from the source image. May extend past the image bounds;
   /// the outside part is padded black and never composited back.
   final CropRect outer;
 
-  /// [outer] shrunk by [contextPx] — the area the mask is allowed to occupy.
+  /// [outer] inset by [contextInsets] — the area the mask may occupy.
   final CropRect inner;
 
-  final int contextPx;
+  final FocusContextInsets contextInsets;
+
+  /// Exact 8-px mask cells owned by this request. Null is reserved for public
+  /// single-region geometry helpers and maskless manual Focus.
+  final MaskCellGrid? repaintCells;
 
   /// Magnification applied to [outer]. Always >= 1.0.
   final double scale;
@@ -153,7 +196,8 @@ class FocusInpaintPlan {
   const FocusInpaintPlan({
     required this.outer,
     required this.inner,
-    required this.contextPx,
+    required this.contextInsets,
+    this.repaintCells,
     required this.scale,
     required this.contentWidth,
     required this.contentHeight,
@@ -162,6 +206,10 @@ class FocusInpaintPlan {
     required this.requestWidth,
     required this.requestHeight,
   });
+
+  /// Backward-compatible minimum effective context. New code should inspect
+  /// [contextInsets] because edge frames can be asymmetric.
+  int get contextPx => contextInsets.minimum;
 
   /// True when the request canvas is exactly the outer frame at 1:1, so the
   /// response can be pasted back without resampling.
@@ -523,31 +571,48 @@ FocusInpaintPlan? _planFrameForRegion({
   if (geometry == null) return null;
 
   final scale = geometry.scale;
-  // The effective margin is however much frame surrounds the region, capped
-  // at the requested context and kept on the 8-px grid.
-  final surround = [
-    bbox.x - best.x,
-    bbox.y - best.y,
-    best.right - bbox.right,
-    best.bottom - bbox.bottom,
-  ].reduce(min);
-  final effectiveContext = _clampInt(
-    _floorTo(max(0, surround), latentGrid),
-    0,
-    context,
+  // Keep every available side independently. A mask touching the source edge
+  // has no context on that side, but must retain context on the other sides.
+  final contextInsets = FocusContextInsets(
+    left: _clampInt(
+      _floorTo(max(0, bbox.x - best.x), latentGrid),
+      0,
+      context,
+    ),
+    top: _clampInt(
+      _floorTo(max(0, bbox.y - best.y), latentGrid),
+      0,
+      context,
+    ),
+    right: _clampInt(
+      _floorTo(max(0, best.right - bbox.right), latentGrid),
+      0,
+      context,
+    ),
+    bottom: _clampInt(
+      _floorTo(max(0, best.bottom - bbox.bottom), latentGrid),
+      0,
+      context,
+    ),
   );
-  final innerWidth = max(latentGrid, best.w - effectiveContext * 2);
-  final innerHeight = max(latentGrid, best.h - effectiveContext * 2);
+  final innerWidth = max(
+    latentGrid,
+    best.w - contextInsets.left - contextInsets.right,
+  );
+  final innerHeight = max(
+    latentGrid,
+    best.h - contextInsets.top - contextInsets.bottom,
+  );
 
   return FocusInpaintPlan(
     outer: best,
     inner: CropRect(
-      x: best.x + effectiveContext,
-      y: best.y + effectiveContext,
+      x: best.x + contextInsets.left,
+      y: best.y + contextInsets.top,
       w: innerWidth,
       h: innerHeight,
     ),
-    contextPx: effectiveContext,
+    contextInsets: contextInsets,
     scale: scale,
     contentWidth: geometry.contentWidth,
     contentHeight: geometry.contentHeight,
@@ -688,7 +753,7 @@ FocusInpaintPlan? planManualFocusInpaint({
   return FocusInpaintPlan(
     outer: snapped,
     inner: inner,
-    contextPx: effectiveContext,
+    contextInsets: FocusContextInsets.uniform(effectiveContext),
     scale: geometry.scale,
     contentWidth: geometry.contentWidth,
     contentHeight: geometry.contentHeight,
@@ -709,6 +774,12 @@ enum FocusSplitMode {
 
   /// The mask was too large for one frame and was split into a grid.
   grid,
+
+  /// Disconnected mask islands were planned independently.
+  islands,
+
+  /// Disconnected islands included at least one internally split region.
+  mixed,
 }
 
 /// A full inpainting batch: one or more focus tiles that together repaint the
@@ -865,6 +936,314 @@ bool _anyFramesOverlap(List<FocusInpaintPlan> tiles) {
 /// half is repainted at a higher effective resolution.
 const double longAxisSplitThreshold = 0.75;
 
+class _MaskRegion {
+  final List<int> indices;
+  final CropRect bbox;
+
+  const _MaskRegion({required this.indices, required this.bbox});
+}
+
+class _OwnedFocusPlan {
+  final FocusInpaintPlan geometry;
+  final _MaskRegion region;
+
+  const _OwnedFocusPlan({required this.geometry, required this.region});
+}
+
+class _RegionPlanResult {
+  final List<_OwnedFocusPlan> plans;
+  final FocusSplitMode splitMode;
+
+  const _RegionPlanResult({required this.plans, required this.splitMode});
+}
+
+_MaskRegion _maskRegionFromIndices(
+  List<int> indices,
+  MaskCellGrid cells,
+  int imageWidth,
+  int imageHeight,
+) {
+  var minCx = cells.width;
+  var minCy = cells.height;
+  var maxCx = -1;
+  var maxCy = -1;
+  for (final index in indices) {
+    final cx = index % cells.width;
+    final cy = index ~/ cells.width;
+    minCx = min(minCx, cx);
+    minCy = min(minCy, cy);
+    maxCx = max(maxCx, cx);
+    maxCy = max(maxCy, cy);
+  }
+  return _MaskRegion(
+    indices: indices,
+    bbox: CropRect(
+      x: minCx * maskCellSize,
+      y: minCy * maskCellSize,
+      w: min(imageWidth, (maxCx + 1) * maskCellSize) - minCx * maskCellSize,
+      h: min(imageHeight, (maxCy + 1) * maskCellSize) - minCy * maskCellSize,
+    ),
+  );
+}
+
+List<_MaskRegion> _connectedMaskRegions(
+  MaskCellGrid cells,
+  int imageWidth,
+  int imageHeight,
+) {
+  final visited = Uint8List(cells.data.length);
+  final regions = <_MaskRegion>[];
+  for (var start = 0; start < cells.data.length; start++) {
+    if (cells.data[start] == 0 || visited[start] != 0) continue;
+    final queue = <int>[start];
+    final indices = <int>[];
+    visited[start] = 1;
+    for (var head = 0; head < queue.length; head++) {
+      final index = queue[head];
+      indices.add(index);
+      final cx = index % cells.width;
+      final cy = index ~/ cells.width;
+      for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+          if (dx == 0 && dy == 0) continue;
+          final nx = cx + dx;
+          final ny = cy + dy;
+          if (nx < 0 || ny < 0 || nx >= cells.width || ny >= cells.height) {
+            continue;
+          }
+          final neighbor = ny * cells.width + nx;
+          if (cells.data[neighbor] == 0 || visited[neighbor] != 0) continue;
+          visited[neighbor] = 1;
+          queue.add(neighbor);
+        }
+      }
+    }
+    regions.add(
+      _maskRegionFromIndices(
+        indices,
+        cells,
+        imageWidth,
+        imageHeight,
+      ),
+    );
+  }
+  return regions;
+}
+
+List<_MaskRegion> _partitionMaskRegion(
+  _MaskRegion source,
+  List<CropRect> partitions,
+  MaskCellGrid cells,
+  int imageWidth,
+  int imageHeight,
+) {
+  final buckets = List.generate(partitions.length, (_) => <int>[]);
+  for (final index in source.indices) {
+    final x = (index % cells.width) * maskCellSize;
+    final y = (index ~/ cells.width) * maskCellSize;
+    var owner = partitions.indexWhere(
+      (rect) => x >= rect.x && x < rect.right && y >= rect.y && y < rect.bottom,
+    );
+    if (owner < 0) owner = partitions.length - 1;
+    buckets[owner].add(index);
+  }
+  return buckets
+      .where((bucket) => bucket.isNotEmpty)
+      .map(
+        (bucket) => _maskRegionFromIndices(
+          bucket,
+          cells,
+          imageWidth,
+          imageHeight,
+        ),
+      )
+      .toList(growable: false);
+}
+
+double _maskedRatioForRegion(
+  _MaskRegion region,
+  CropRect frame,
+  MaskCellGrid cells,
+  int imageWidth,
+  int imageHeight,
+) {
+  final left = max(0, frame.x) ~/ maskCellSize;
+  final top = max(0, frame.y) ~/ maskCellSize;
+  final right = (min(imageWidth, frame.right) / maskCellSize).ceil();
+  final bottom = (min(imageHeight, frame.bottom) / maskCellSize).ceil();
+  final total = max(0, right - left) * max(0, bottom - top);
+  if (total == 0) return 0;
+  var masked = 0;
+  for (final index in region.indices) {
+    final cx = index % cells.width;
+    final cy = index ~/ cells.width;
+    if (cx >= left && cx < right && cy >= top && cy < bottom) masked++;
+  }
+  return masked / total;
+}
+
+_RegionPlanResult? _planOwnedMaskRegion({
+  required _MaskRegion region,
+  required MaskCellGrid cells,
+  required int imageWidth,
+  required int imageHeight,
+  required int maxArea,
+  required int contextPx,
+}) {
+  final single = planFocusForRegion(
+    imageWidth: imageWidth,
+    imageHeight: imageHeight,
+    region: region.bbox,
+    maxArea: maxArea,
+    contextPx: contextPx,
+  );
+  List<_MaskRegion> pieces;
+  var splitMode = FocusSplitMode.none;
+  if (single != null) {
+    final ratio = _maskedRatioForRegion(
+      region,
+      single.outer,
+      cells,
+      imageWidth,
+      imageHeight,
+    );
+    if (ratio > longAxisSplitThreshold) {
+      pieces = _partitionMaskRegion(
+        region,
+        splitAlongLongAxis(region.bbox),
+        cells,
+        imageWidth,
+        imageHeight,
+      );
+      if (pieces.length > 1) splitMode = FocusSplitMode.longAxis;
+    } else {
+      pieces = [region];
+    }
+  } else {
+    final tileSize = bestTileSizeFor(region.bbox, maxArea);
+    pieces = _partitionMaskRegion(
+      region,
+      splitIntoGrid(region.bbox, tileSize.x, tileSize.y),
+      cells,
+      imageWidth,
+      imageHeight,
+    );
+    if (pieces.length > 1) splitMode = FocusSplitMode.grid;
+  }
+
+  final plans = <_OwnedFocusPlan>[];
+  for (final piece in pieces) {
+    final geometry = planFocusForRegion(
+      imageWidth: imageWidth,
+      imageHeight: imageHeight,
+      region: piece.bbox,
+      maxArea: maxArea,
+      contextPx: contextPx,
+    );
+    if (geometry == null || !geometry.inner.contains(piece.bbox)) return null;
+    plans.add(_OwnedFocusPlan(geometry: geometry, region: piece));
+  }
+  return _RegionPlanResult(plans: plans, splitMode: splitMode);
+}
+
+List<_OwnedFocusPlan> _mergeEquivalentFocusFrames({
+  required List<_OwnedFocusPlan> plans,
+  required MaskCellGrid cells,
+  required int imageWidth,
+  required int imageHeight,
+  required int maxArea,
+  required int contextPx,
+}) {
+  final groups = <CropRect, List<_OwnedFocusPlan>>{};
+  for (final plan in plans) {
+    groups.putIfAbsent(plan.geometry.outer, () => []).add(plan);
+  }
+  final merged = <_OwnedFocusPlan>[];
+  for (final entry in groups.entries) {
+    if (entry.value.length == 1) {
+      merged.add(entry.value.single);
+      continue;
+    }
+    final indices = entry.value
+        .expand((plan) => plan.region.indices)
+        .toList(growable: false)
+      ..sort();
+    final region = _maskRegionFromIndices(
+      indices,
+      cells,
+      imageWidth,
+      imageHeight,
+    );
+    final geometry = planFocusForRegion(
+      imageWidth: imageWidth,
+      imageHeight: imageHeight,
+      region: region.bbox,
+      maxArea: maxArea,
+      contextPx: contextPx,
+    );
+    if (geometry != null &&
+        geometry.outer == entry.key &&
+        geometry.inner.contains(region.bbox)) {
+      merged.add(_OwnedFocusPlan(geometry: geometry, region: region));
+    } else {
+      merged.addAll(entry.value);
+    }
+  }
+  return merged;
+}
+
+MaskCellGrid _ownedCellGrid(_MaskRegion region, MaskCellGrid source) {
+  final data = Uint8List(source.data.length);
+  for (final index in region.indices) {
+    data[index] = 1;
+  }
+  return MaskCellGrid(data: data, width: source.width, height: source.height);
+}
+
+FocusInpaintPlan _withOwnedCells(
+  FocusInpaintPlan geometry,
+  MaskCellGrid repaintCells,
+) {
+  return FocusInpaintPlan(
+    outer: geometry.outer,
+    inner: geometry.inner,
+    contextInsets: geometry.contextInsets,
+    repaintCells: repaintCells,
+    scale: geometry.scale,
+    contentWidth: geometry.contentWidth,
+    contentHeight: geometry.contentHeight,
+    contentOffsetX: geometry.contentOffsetX,
+    contentOffsetY: geometry.contentOffsetY,
+    requestWidth: geometry.requestWidth,
+    requestHeight: geometry.requestHeight,
+  );
+}
+
+void _validateOwnedCoverage(
+  MaskCellGrid source,
+  List<FocusInpaintPlan> plans,
+) {
+  final ownership = Uint8List(source.data.length);
+  for (final plan in plans) {
+    final repaintCells = plan.repaintCells;
+    if (repaintCells == null || repaintCells.isEmpty) {
+      throw StateError('AutoCrop produced a Focus request with no mask.');
+    }
+    for (var index = 0; index < ownership.length; index++) {
+      if (repaintCells.data[index] == 0) continue;
+      if (source.data[index] == 0 || ownership[index] != 0) {
+        throw StateError('AutoCrop assigned a mask cell more than once.');
+      }
+      ownership[index] = 1;
+    }
+  }
+  for (var index = 0; index < ownership.length; index++) {
+    if ((source.data[index] > 0) != (ownership[index] > 0)) {
+      throw StateError('AutoCrop did not assign every mask cell.');
+    }
+  }
+}
+
 /// Plans the whole inpainting batch, splitting the mask into several focus
 /// tiles when one frame cannot cover it (grid) or would be almost entirely
 /// masked (long axis).
@@ -878,65 +1257,65 @@ FocusInpaintBatch? planFocusInpaintBatch({
   required int maxArea,
   int contextPx = defaultContextPx,
 }) {
-  final bbox = maskBBoxFromCells(cells, imageWidth, imageHeight);
-  if (bbox == null) return null;
+  if (cells.isEmpty) return null;
   final cap = min(
     focusFrameMaxArea,
     max(minRequestSide * minRequestSide, maxArea),
   );
 
-  final single = planFocusForRegion(
-    imageWidth: imageWidth,
-    imageHeight: imageHeight,
-    region: bbox,
-    maxArea: cap,
-    contextPx: contextPx,
+  final regions = _connectedMaskRegions(
+    cells,
+    imageWidth,
+    imageHeight,
   );
-
-  List<CropRect> regions;
-  var splitMode = FocusSplitMode.none;
-  if (single != null) {
-    // One frame covers the mask. Split it only when the frame is almost all
-    // mask, where two halves each get a better effective resolution.
-    final ratio = maskedCellRatio(cells, single.outer, imageWidth, imageHeight);
-    if (ratio > longAxisSplitThreshold) {
-      final halves = splitAlongLongAxis(bbox);
-      if (halves.length > 1) {
-        regions = halves;
-        splitMode = FocusSplitMode.longAxis;
-      } else {
-        regions = [bbox];
-      }
-    } else {
-      regions = [bbox];
-    }
-  } else {
-    // The mask does not fit one frame; tile it.
-    final tileSize = bestTileSizeFor(bbox, cap);
-    regions = splitIntoGrid(bbox, tileSize.x, tileSize.y);
-    splitMode = regions.length > 1 ? FocusSplitMode.grid : FocusSplitMode.none;
-  }
-
-  // Plan each region, dropping duplicate frames so overlapping regions that
-  // resolve to the same frame are only requested once.
-  final tiles = <FocusInpaintPlan>[];
-  final seenFrames = <String>{};
+  final ownedPlans = <_OwnedFocusPlan>[];
+  var hasInternalSplit = false;
+  FocusSplitMode singleRegionMode = FocusSplitMode.none;
   for (final region in regions) {
-    final plan = planFocusForRegion(
+    final result = _planOwnedMaskRegion(
+      region: region,
+      cells: cells,
       imageWidth: imageWidth,
       imageHeight: imageHeight,
-      region: region,
       maxArea: cap,
       contextPx: contextPx,
     );
-    if (plan == null) continue;
-    final key = '${plan.outer.x},${plan.outer.y},'
-        '${plan.outer.w},${plan.outer.h}';
-    if (!seenFrames.add(key)) continue;
-    tiles.add(plan);
+    if (result == null) return null;
+    ownedPlans.addAll(result.plans);
+    if (result.splitMode != FocusSplitMode.none) hasInternalSplit = true;
+    singleRegionMode = result.splitMode;
   }
-  if (tiles.isEmpty) return null;
-  if (tiles.length == 1) splitMode = FocusSplitMode.none;
+  final mergedPlans = _mergeEquivalentFocusFrames(
+    plans: ownedPlans,
+    cells: cells,
+    imageWidth: imageWidth,
+    imageHeight: imageHeight,
+    maxArea: cap,
+    contextPx: contextPx,
+  );
+  if (mergedPlans.length > maxFocusTiles) {
+    throw FocusInpaintTileLimitException(
+      mergedPlans.length,
+      maxFocusTiles,
+    );
+  }
+  final tiles = mergedPlans
+      .map(
+        (owned) => _withOwnedCells(
+          owned.geometry,
+          _ownedCellGrid(owned.region, cells),
+        ),
+      )
+      .toList(growable: false);
+  _validateOwnedCoverage(cells, tiles);
+
+  final splitMode = tiles.length <= 1
+      ? FocusSplitMode.none
+      : regions.length > 1
+          ? hasInternalSplit
+              ? FocusSplitMode.mixed
+              : FocusSplitMode.islands
+          : singleRegionMode;
 
   return FocusInpaintBatch(
     tiles: tiles,

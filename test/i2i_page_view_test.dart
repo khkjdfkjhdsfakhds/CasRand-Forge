@@ -16,7 +16,7 @@ import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
-import 'package:nai_casrand/data/use_cases/autocrop_planner.dart' show CropRect;
+import 'package:nai_casrand/data/use_cases/autocrop_planner.dart';
 import 'package:nai_casrand/data/use_cases/i2i_request_size.dart';
 import 'package:nai_casrand/data/use_cases/prepare_i2i_request_use_case.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
@@ -376,6 +376,34 @@ void main() {
     );
   });
 
+  testWidgets('autocrop preview reports masks above the focus tile limit', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final config = GetIt.I<PayloadConfig>().i2iConfig;
+    config.setImage(solidPng(2000, 2000));
+    config.setMask(maskPng(500, 300), const <MaskStroke>[]);
+
+    await tester.pumpWidget(
+      localizedApp(
+        I2iPageView(
+          viewmodel: I2iPageViewmodel(),
+          focusPreviewPlanner: (_) => Future.error(
+            const FocusInpaintTileLimitException(17, maxFocusTiles),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('i2i-focus-preview-error')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('safe maximum of 16'), findsOneWidget);
+  });
+
   testWidgets('clearing the mask returns the page to plain img2img', (
     tester,
   ) async {
@@ -583,6 +611,27 @@ void main() {
     await tester.pumpAndSettle();
     expect(generationViewmodel.payloadConfig.i2iEnabled, isFalse);
     expect(generationViewmodel.payloadConfig.i2iConfig.hasImage, isTrue);
+  });
+
+  testWidgets('generation button shows immediate stopping feedback', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final status = GetIt.I<CommandStatus>();
+    status.isGenerationActive.value = true;
+    status.isStopping.value = true;
+
+    await tester.pumpWidget(
+      localizedApp(
+        GenerationPageView(viewmodel: GetIt.I<GenerationPageViewmodel>()),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byKey(const Key('generation-toggle-fab')), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byIcon(Icons.stop), findsNothing);
   });
 
   testWidgets('a manual focus frame replaces the autocrop switch', (

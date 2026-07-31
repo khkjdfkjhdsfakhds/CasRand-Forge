@@ -51,6 +51,25 @@ Uint8List maskPngWithWhiteRect(
   return Uint8List.fromList(img.encodePng(image));
 }
 
+Uint8List maskPngWithWhiteRects(
+  int width,
+  int height,
+  List<({int x, int y, int w, int h})> rects,
+) {
+  final image = img.Image(width: width, height: height, numChannels: 3);
+  for (final rect in rects) {
+    img.fillRect(
+      image,
+      x1: rect.x,
+      y1: rect.y,
+      x2: rect.x + rect.w - 1,
+      y2: rect.y + rect.h - 1,
+      color: img.ColorRgb8(255, 255, 255),
+    );
+  }
+  return Uint8List.fromList(img.encodePng(image));
+}
+
 void main() {
   setUp(PrepareI2iRequestUseCase.clearCache);
 
@@ -336,6 +355,28 @@ void main() {
     // Every tile must target a distinct frame.
     final frames = batch.plans.map((p) => p.composite!.outer).toSet();
     expect(frames.length, batch.tileCount);
+  });
+
+  test('distant mask islands produce no empty request masks', () async {
+    final config = I2IConfig()..setImage(solidPng(1920, 1080, 90, 90, 90));
+    config.setMask(
+      maskPngWithWhiteRects(1920, 1080, const [
+        (x: 0, y: 784, w: 192, h: 296),
+        (x: 1728, y: 0, w: 192, h: 288),
+      ]),
+      [],
+    );
+
+    final batch = await PrepareI2iRequestUseCase(config: config).planBatch(
+      targetWidth: 832,
+      targetHeight: 1216,
+    );
+
+    expect(batch!.tileCount, 2);
+    for (final plan in batch.plans) {
+      final requestMask = img.decodePng(base64Decode(plan.maskB64!))!;
+      expect(requestMask.any((pixel) => pixel.r > 127), isTrue);
+    }
   });
 
   test('a single-tile batch carries one plan', () async {

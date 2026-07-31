@@ -19,6 +19,24 @@ MaskCellGrid gridWithMaskRect({
   );
 }
 
+MaskCellGrid gridWithMaskRects({
+  required int imageWidth,
+  required int imageHeight,
+  required List<Rectangle<int>> maskRects,
+}) {
+  return maskCellGridFromPixels(
+    imageWidth: imageWidth,
+    imageHeight: imageHeight,
+    maskPixelAt: (x, y) => maskRects.any(
+      (rect) =>
+          x >= rect.left &&
+          x < rect.left + rect.width &&
+          y >= rect.top &&
+          y < rect.top + rect.height,
+    ),
+  );
+}
+
 /// Every plan must satisfy the focus-inpainting invariants.
 void expectValidPlan(
   FocusInpaintPlan plan, {
@@ -405,6 +423,96 @@ void main() {
   });
 
   group('split planning', () {
+    test('distant corner islands become two owned focus tiles', () {
+      const imageWidth = 1920;
+      const imageHeight = 1080;
+      final cells = gridWithMaskRects(
+        imageWidth: imageWidth,
+        imageHeight: imageHeight,
+        maskRects: const [
+          Rectangle(0, 784, 192, 296),
+          Rectangle(1728, 0, 192, 288),
+        ],
+      );
+
+      final batch = planFocusInpaintBatch(
+        imageWidth: imageWidth,
+        imageHeight: imageHeight,
+        cells: cells,
+        maxArea: areaCapNormal,
+      )!;
+
+      expect(batch.tileCount, 2);
+      expect(batch.splitMode, FocusSplitMode.islands);
+      final ownership = List<int>.filled(cells.data.length, 0);
+      for (final tile in batch.tiles) {
+        expect(tile.repaintCells, isNotNull);
+        expect(tile.repaintCells!.isEmpty, isFalse);
+        for (var index = 0; index < ownership.length; index++) {
+          if (tile.repaintCells!.data[index] > 0) ownership[index]++;
+        }
+      }
+      for (var index = 0; index < ownership.length; index++) {
+        expect(ownership[index], cells.data[index] > 0 ? 1 : 0);
+      }
+    });
+
+    test('a corner island keeps context on every available side', () {
+      const imageWidth = 1920;
+      const imageHeight = 1080;
+      final cells = gridWithMaskRect(
+        imageWidth: imageWidth,
+        imageHeight: imageHeight,
+        maskRect: const Rectangle(0, 784, 192, 296),
+      );
+
+      final plan = planFocusInpaintBatch(
+        imageWidth: imageWidth,
+        imageHeight: imageHeight,
+        cells: cells,
+        maxArea: areaCapNormal,
+      )!
+          .tiles
+          .single;
+
+      expect(plan.contextInsets.left, 0);
+      expect(plan.contextInsets.bottom, 0);
+      expect(plan.contextInsets.top, defaultContextPx);
+      expect(plan.contextInsets.right, defaultContextPx);
+      expect(
+          plan.inner
+              .contains(maskBBoxFromCells(cells, imageWidth, imageHeight)!),
+          isTrue);
+    });
+
+    test('more than the safe focus request count is rejected', () {
+      final rects = <Rectangle<int>>[];
+      for (var row = 0; row < 5; row++) {
+        for (var col = 0; col < 4; col++) {
+          rects.add(Rectangle(col * 400, row * 400, 16, 16));
+        }
+      }
+      final cells = gridWithMaskRects(
+        imageWidth: 2000,
+        imageHeight: 2000,
+        maskRects: rects,
+      );
+
+      expect(
+        () => planFocusInpaintBatch(
+          imageWidth: 2000,
+          imageHeight: 2000,
+          cells: cells,
+          maxArea: areaCapNormal,
+        ),
+        throwsA(
+          isA<FocusInpaintTileLimitException>()
+              .having((error) => error.tileCount, 'tileCount', greaterThan(16))
+              .having((error) => error.maxTiles, 'maxTiles', 16),
+        ),
+      );
+    });
+
     test('a small mask stays a single tile', () {
       final cells = gridWithMaskRect(
         imageWidth: 1600,

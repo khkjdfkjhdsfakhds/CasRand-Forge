@@ -256,21 +256,62 @@ class _PromptEntryPreview extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dividerColor =
-        Theme.of(context).colorScheme.outlineVariant.withAlpha(96);
+        Theme.of(context).colorScheme.outlineVariant.withAlpha(128);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         for (final (index, entry) in entries.indexed) ...[
           Text(entry),
           if (index < entries.length - 1)
-            Divider(
+            _PromptPreviewDivider(
               key: Key('prompt-preview-divider-$index'),
-              height: 10,
-              thickness: 0.5,
               color: dividerColor,
             ),
         ],
       ],
     );
+  }
+}
+
+class _PromptPreviewDivider extends StatelessWidget {
+  const _PromptPreviewDivider({super.key, required this.color});
+
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 10,
+      width: double.infinity,
+      child: CustomPaint(
+        painter: _PromptPreviewDividerPainter(color),
+      ),
+    );
+  }
+}
+
+class _PromptPreviewDividerPainter extends CustomPainter {
+  const _PromptPreviewDividerPainter(this.color);
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1
+      ..style = PaintingStyle.stroke;
+    const dashWidth = 8.0;
+    const gapWidth = 2.0;
+    final y = size.height / 2;
+    for (var x = 0.0; x < size.width; x += dashWidth + gapWidth) {
+      final end = (x + dashWidth).clamp(0.0, size.width);
+      canvas.drawLine(Offset(x, y), Offset(end, y), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_PromptPreviewDividerPainter oldDelegate) {
+    return oldDelegate.color != color;
   }
 }

@@ -27,17 +27,23 @@ typedef InpaintImagePreparer = Future<void> Function(
   Uint8List bytes,
 );
 
+typedef FocusPreviewPlanner = Future<FocusInpaintBatch?> Function(
+  I2IConfig config,
+);
+
 /// The 图生图 / 局部重绘 destination: base image, img2img parameters and
 /// inpainting (mask, Autocrop or a hand-drawn focus frame) in one place,
 /// with its own generate button.
 class I2iPageView extends StatefulWidget {
   final I2iPageViewmodel viewmodel;
   final InpaintImagePreparer? inpaintImagePreparer;
+  final FocusPreviewPlanner? focusPreviewPlanner;
 
   const I2iPageView({
     super.key,
     required this.viewmodel,
     this.inpaintImagePreparer,
+    this.focusPreviewPlanner,
   });
 
   @override
@@ -70,11 +76,11 @@ class _I2iPageViewState extends State<I2iPageView> {
         '${config.requestSize.width}x${config.requestSize.height}';
     if (_focusPreviewKey != key) {
       _focusPreviewKey = key;
-      _focusPreviewFuture =
+      _focusPreviewFuture = widget.focusPreviewPlanner?.call(config) ??
           PrepareI2iRequestUseCase(config: config).planFocusPreview(
-        targetWidth: config.requestSize.width,
-        targetHeight: config.requestSize.height,
-      );
+            targetWidth: config.requestSize.width,
+            targetHeight: config.requestSize.height,
+          );
     }
     return _focusPreviewFuture;
   }
@@ -202,6 +208,35 @@ class _I2iPageViewState extends State<I2iPageView> {
                     FutureBuilder<FocusInpaintBatch?>(
                       future: focusPreview,
                       builder: (context, snapshot) {
+                        final error = snapshot.error;
+                        if (error != null) {
+                          final message =
+                              error is FocusInpaintTileLimitException
+                                  ? tr(
+                                      'inpaint_autocrop_too_many_tiles',
+                                      namedArgs: {
+                                        'count': error.tileCount.toString(),
+                                        'max': error.maxTiles.toString(),
+                                      },
+                                    )
+                                  : tr('inpaint_autocrop_planning_failed');
+                          return IgnorePointer(
+                            child: ColoredBox(
+                              key: const Key('i2i-focus-preview-error'),
+                              color: Colors.black54,
+                              child: Center(
+                                child: Padding(
+                                  padding: const EdgeInsets.all(24),
+                                  child: Text(
+                                    message,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(color: Colors.white),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        }
                         final batch = snapshot.data;
                         final manual = config.manualFocusFrame;
                         final specs = batch != null
