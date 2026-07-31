@@ -542,6 +542,10 @@ void main() {
     expect(find.byIcon(Icons.block), findsOneWidget);
     expect(find.text('Character 1'), findsOneWidget);
     expect(find.text('Character #0'), findsNothing);
+    expect(
+      find.text('Tap properties to edit, scroll if information is cropped'),
+      findsNothing,
+    );
 
     final positionTile = find.byKey(const Key('character-position-tile'));
     final genderTile = find.byKey(const Key('character-gender-tile'));

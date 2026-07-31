@@ -49,6 +49,16 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('String Values: 1 items'), findsOneWidget);
+    expect(find.text('one'), findsOneWidget);
+    expect(find.text('# saved note'), findsOneWidget);
+    expect(
+      find.byKey(const Key('prompt-preview-divider-0')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('prompt-preview-divider-1')),
+      findsNothing,
+    );
     await tester.tap(find.text('String Values: 1 items'));
     await tester.pumpAndSettle();
 
@@ -65,7 +75,9 @@ void main() {
     expect(find.text('String Values: 2 items'), findsOneWidget);
   });
 
-  testWidgets('prompt entry actions fit a phone-size dialog', (tester) async {
+  testWidgets('prompt editor uses the phone dialog for editing content', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -81,15 +93,6 @@ void main() {
               child: PromptEntryEditor(
                 initialEntries: const ['one'],
                 onChanged: (_) {},
-                helpItems: const [
-                  'Enter: new entry',
-                  'Shift+Enter: line break within entry',
-                  'Line starts with #: comment only, not part of the prompt. '
-                      'Use it for notes or labels.',
-                ],
-                insertLineBreakLabel: 'Insert line break',
-                nextEntryLabel: 'Next entry',
-                commentLabel: 'Comment',
               ),
             ),
           ),
@@ -98,8 +101,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Insert line break'), findsOneWidget);
-    expect(find.text('Next entry'), findsOneWidget);
+    expect(find.byType(TextField), findsOneWidget);
+    expect(find.byKey(const Key('prompt-entry-help')), findsNothing);
+    expect(find.byKey(const Key('insert-prompt-line-break')), findsNothing);
+    expect(find.byKey(const Key('next-prompt-entry')), findsNothing);
     expect(tester.takeException(), isNull);
   });
 }

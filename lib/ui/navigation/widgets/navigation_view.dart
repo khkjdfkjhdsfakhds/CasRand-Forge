@@ -37,6 +37,8 @@ class NavigationView extends StatefulWidget {
 
 class NavigationViewState extends State<NavigationView> {
   DateTime? _lastBackButtonPressTime;
+  final GlobalKey<ApplicationNavigationShellState> _navigationShellKey =
+      GlobalKey();
 
   /// Pages are created once and reused across rebuilds, so their viewmodels
   /// stay alive: async work (image imports, cost estimates) must notify the
@@ -74,6 +76,11 @@ class NavigationViewState extends State<NavigationView> {
     return PopScope(
         canPop: false,
         onPopInvokedWithResult: (didPop, result) {
+          if (_navigationShellKey.currentState?.returnToSettingsIfTransient() ??
+              false) {
+            _lastBackButtonPressTime = null;
+            return;
+          }
           // 使用 onPopInvoked 回调
           final now = DateTime.now();
           final timeDiff = _lastBackButtonPressTime == null
@@ -106,6 +113,7 @@ class NavigationViewState extends State<NavigationView> {
   Widget getBody() {
     final settings = GetIt.I<PayloadConfig>().settings;
     return ApplicationNavigationShell(
+      key: _navigationShellKey,
       configuration: settings.navigation,
       navigationRequest: _navigationRequest,
       pages: _pages,

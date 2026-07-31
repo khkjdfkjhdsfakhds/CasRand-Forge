@@ -25,7 +25,6 @@ NavigationDestinationDefinition navigationDefinition(
   final icon = switch (destination.icon) {
     AppDestinationIcon.create => Icons.create,
     AppDestinationIcon.tune => Icons.tune,
-    AppDestinationIcon.apps => Icons.apps,
     AppDestinationIcon.brush => Icons.brush,
     AppDestinationIcon.reference => Icons.auto_awesome_motion_outlined,
     AppDestinationIcon.enhance => Icons.auto_awesome,

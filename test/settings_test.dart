@@ -186,7 +186,7 @@ void main() {
     expect(settings.resultDisplayMode, 'classic');
   });
 
-  test('legacy page visibility does not seed navigation favorites', () {
+  test('legacy page visibility seeds matching navigation entries', () {
     final settings = Settings.fromJson({
       'show_image_to_image_page': true,
       'show_vibe_reference_page': true,
@@ -199,7 +199,10 @@ void main() {
     expect(settings.navigation.destinations, [
       AppDestination.generation,
       AppDestination.config,
-      AppDestination.more,
+      AppDestination.imageToImage,
+      AppDestination.vibeReference,
+      AppDestination.enhance,
+      AppDestination.directorTools,
       AppDestination.settings,
     ]);
     expect(settings.proxy, '127.0.0.1:8080');

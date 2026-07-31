@@ -25,9 +25,6 @@ class PromptTabView extends StatelessWidget {
             : Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  ListTile(
-                      title: Text(context.tr('prompt_compact_view_hint')),
-                      dense: true),
                   _PromptSectionCard(
                     key: const Key('base-prompt-section'),
                     title: context.tr('base_prompts'),

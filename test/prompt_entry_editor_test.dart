@@ -19,15 +19,6 @@ void main() {
               child: PromptEntryEditor(
                 initialEntries: entries,
                 onChanged: onChanged,
-                helpItems: const [
-                  'Enter: new entry',
-                  'Shift+Enter: line break within entry',
-                  'Line starts with #: comment only, not part of the prompt. '
-                      'Use it for notes or labels.',
-                ],
-                insertLineBreakLabel: 'Insert line break',
-                nextEntryLabel: 'Next entry',
-                commentLabel: 'Comment',
               ),
             ),
           ),
@@ -45,7 +36,7 @@ void main() {
         .controller!;
   }
 
-  testWidgets('dividers number only entries that can reach the prompt', (
+  testWidgets('text fields alone distinguish prompt entries', (
     tester,
   ) async {
     await pumpEditor(
@@ -59,43 +50,11 @@ void main() {
       onChanged: (_) {},
     );
 
-    expect(
-      find.descendant(
-        of: find.byKey(const Key('prompt-entry-divider-0')),
-        matching: find.text('1'),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-        of: find.byKey(const Key('prompt-entry-divider-1')),
-        matching: find.text('Comment'),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-        of: find.byKey(const Key('prompt-entry-divider-2')),
-        matching: find.text('2'),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-        of: find.byKey(const Key('prompt-entry-divider-3')),
-        matching: find.text('Comment'),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      tester
-          .widget<Text>(
-            find.byKey(const Key('prompt-entry-number-1')),
-          )
-          .style
-          ?.fontSize,
-      9,
-    );
+    expect(find.byType(TextField), findsNWidgets(4));
+    expect(find.text('1'), findsNothing);
+    expect(find.text('2'), findsNothing);
+    expect(find.text('Comment'), findsNothing);
+    expect(find.byType(Divider), findsNothing);
   });
 
   testWidgets('Enter splits at the caret and Backspace merges at the boundary',
@@ -127,7 +86,7 @@ void main() {
     expect(controllerFor(tester, 0).selection.baseOffset, 4);
   });
 
-  testWidgets('Shift Enter and the touch button insert an internal newline', (
+  testWidgets('Shift Enter inserts an internal newline', (
     tester,
   ) async {
     var entries = <String>[];
@@ -147,68 +106,9 @@ void main() {
 
     expect(entries, ['red \nhair']);
     expect(find.byType(TextField), findsOneWidget);
-
-    first.selection = const TextSelection.collapsed(offset: 5);
-    await tester.tap(find.byKey(const Key('insert-prompt-line-break')));
-    await tester.pump();
-
-    expect(entries, ['red \n\nhair']);
-    expect(find.byType(TextField), findsOneWidget);
   });
 
-  testWidgets('next entry button splits at the caret and focuses the new entry',
-      (
-    tester,
-  ) async {
-    var entries = <String>[];
-    await pumpEditor(
-      tester,
-      entries: const ['red hair'],
-      onChanged: (value) => entries = value,
-    );
-
-    expect(
-      tester.getCenter(find.byKey(const Key('next-prompt-entry'))).dx,
-      greaterThan(
-        tester.getCenter(find.byKey(const Key('insert-prompt-line-break'))).dx,
-      ),
-    );
-    expect(
-      find.descendant(
-        of: find.byKey(const Key('next-prompt-entry')),
-        matching: find.byType(Icon),
-      ),
-      findsNothing,
-    );
-    expect(
-      find.descendant(
-        of: find.byKey(const Key('insert-prompt-line-break')),
-        matching: find.byIcon(Icons.keyboard_return),
-      ),
-      findsOneWidget,
-    );
-
-    final first = controllerFor(tester, 0);
-    await tester.tap(find.byKey(const Key('prompt-entry-field-0')));
-    first.selection = const TextSelection.collapsed(offset: 4);
-    await tester.tap(find.byKey(const Key('next-prompt-entry')));
-    await tester.pump();
-
-    expect(entries, ['red ', 'hair']);
-    expect(find.byType(TextField), findsNWidgets(2));
-    expect(controllerFor(tester, 1).selection.baseOffset, 0);
-    expect(
-      tester
-          .widget<TextField>(
-            find.byKey(const Key('prompt-entry-field-1')),
-          )
-          .focusNode!
-          .hasFocus,
-      isTrue,
-    );
-  });
-
-  testWidgets('help instructions are visually separated without dot markers', (
+  testWidgets('editor omits help and touch action chrome', (
     tester,
   ) async {
     await pumpEditor(
@@ -217,22 +117,10 @@ void main() {
       onChanged: (_) {},
     );
 
-    expect(find.textContaining('·'), findsNothing);
-    expect(find.text('Enter: new entry'), findsOneWidget);
-    expect(find.text('Shift+Enter: line break within entry'), findsOneWidget);
-    expect(
-      find.text(
-        'Line starts with #: comment only, not part of the prompt. '
-        'Use it for notes or labels.',
-      ),
-      findsOneWidget,
-    );
-
-    final help = tester.widget<Wrap>(
-      find.byKey(const Key('prompt-entry-help')),
-    );
-    expect(help.spacing, 24);
-    expect(help.runSpacing, 6);
+    expect(find.byKey(const Key('prompt-entry-help')), findsNothing);
+    expect(find.byKey(const Key('insert-prompt-line-break')), findsNothing);
+    expect(find.byKey(const Key('next-prompt-entry')), findsNothing);
+    expect(find.byType(TextField), findsOneWidget);
   });
 
   testWidgets('pasted newlines become entry boundaries', (tester) async {

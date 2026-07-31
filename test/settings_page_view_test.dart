@@ -348,19 +348,144 @@ void main() {
     );
   });
 
-  testWidgets('legacy navigation visibility controls are retired', (
+  testWidgets('settings contains one seven-item navigation directory', (
     tester,
   ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(localizedSettingsPage());
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('show-image-to-image-page')), findsNothing);
-    expect(find.byKey(const Key('show-vibe-reference-page')), findsNothing);
-    expect(find.byKey(const Key('show-enhance-page')), findsNothing);
-    expect(find.byKey(const Key('show-director-tools-page')), findsNothing);
-    expect(find.byKey(const Key('api-proxy-settings-tile')), findsOneWidget);
+    expect(find.text('Feature navigation settings'), findsOneWidget);
     expect(
-        find.byKey(const Key('restore-initial-settings-tile')), findsOneWidget);
+      find.text(
+        'Click a function to open it temporarily; use its switch to pin it '
+        'to the Home screen, and drag to reorder.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('navigation-directory-list')), findsOneWidget);
+    for (final destination in AppDestination.values) {
+      expect(
+        find.byKey(
+          ValueKey('navigation-directory-item-${destination.name}'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(
+          ValueKey('navigation-directory-reorder-${destination.name}'),
+        ),
+        findsOneWidget,
+      );
+    }
+    expect(
+      find.byKey(const ValueKey('navigation-directory-required-generation')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('navigation-directory-required-config')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('navigation-directory-required-settings')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('navigation-directory-list')),
+        matching: find.byType(Switch),
+      ),
+      findsNWidgets(4),
+    );
+    expect(find.text('More'), findsNothing);
+  });
+
+  testWidgets('directory name opens without enabling and switch only enables', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final navigationRequest = GetIt.I<NavigationRequest>();
+    final configuration = GetIt.I<PayloadConfig>().settings.navigation;
+
+    await tester.pumpWidget(localizedSettingsPage());
+    await tester.pumpAndSettle();
+
+    final open = find.byKey(
+      const ValueKey('navigation-directory-open-imageToImage'),
+    );
+    final toggle = find.byKey(
+      const ValueKey('navigation-directory-toggle-imageToImage'),
+    );
+    await tester.tap(open);
+    await tester.pump();
+
+    expect(
+      navigationRequest.requestedDestination.value,
+      AppDestination.imageToImage,
+    );
+    expect(navigationRequest.openFromSettingsDirectory, isTrue);
+    expect(configuration.contains(AppDestination.imageToImage), isFalse);
+
+    navigationRequest.consume();
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+
+    expect(configuration.contains(AppDestination.imageToImage), isTrue);
+    expect(navigationRequest.requestedDestination.value, isNull);
+    expect(tester.getSize(toggle).height, greaterThanOrEqualTo(48));
+  });
+
+  testWidgets('directory restores its scroll context around the last function',
+      (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final viewmodel = SettingsPageViewmodel();
+
+    await tester.pumpWidget(localizedSettingsPage(viewmodel: viewmodel));
+    await tester.pumpAndSettle();
+
+    final director = find.byKey(
+      const ValueKey('navigation-directory-open-directorTools'),
+    );
+    await tester.ensureVisible(director);
+    await tester.pumpAndSettle();
+    await tester.tap(director);
+    await tester.pump();
+    final rememberedOffset = viewmodel.navigationDirectoryScrollOffset;
+    expect(rememberedOffset, greaterThan(0));
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(localizedSettingsPage(viewmodel: viewmodel));
+    await tester.pumpAndSettle();
+
+    final directorRect = tester.getRect(director);
+    expect(directorRect.bottom, greaterThan(0));
+    expect(directorRect.top, lessThan(600));
+    final scrollView = tester.widget<SingleChildScrollView>(
+      find.byKey(const Key('settings-scroll-view')),
+    );
+    expect(scrollView.controller!.offset, closeTo(rememberedOffset, 1));
+
+    final restoredOffset = scrollView.controller!.position.maxScrollExtent;
+    scrollView.controller!.jumpTo(restoredOffset);
+    await tester.pump();
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(localizedSettingsPage(viewmodel: viewmodel));
+    await tester.pumpAndSettle();
+
+    final ordinaryEntryScroll = tester.widget<SingleChildScrollView>(
+      find.byKey(const Key('settings-scroll-view')),
+    );
+    expect(
+      ordinaryEntryScroll.controller!.offset,
+      closeTo(restoredOffset, 1),
+    );
   });
 
   testWidgets('restore entry is below saved configs and requires a choice', (

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/core/constants/settings.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
+import 'package:nai_casrand/ui/settings_page/widgets/navigation_directory.dart';
 import 'package:nai_casrand/ui/settings_page/view_models/settings_page_viewmodel.dart';
 import 'package:nai_casrand/ui/core/widgets/editable_list_tile.dart';
 import 'package:nai_casrand/ui/settings_page/widgets/config_selection_page_view.dart';
@@ -34,12 +35,19 @@ class SettingsPageView extends StatefulWidget {
 class _SettingsPageViewState extends State<SettingsPageView> {
   NavigationRequest? _navigationRequest;
   bool _apiProxyDialogOpen = false;
+  late final ScrollController _scrollController;
+  final Map<AppDestination, GlobalKey> _navigationDestinationKeys = {
+    for (final destination in AppDestination.values) destination: GlobalKey(),
+  };
 
   SettingsPageViewmodel get viewmodel => widget.viewmodel;
 
   @override
   void initState() {
     super.initState();
+    _scrollController = ScrollController(
+      initialScrollOffset: viewmodel.navigationDirectoryScrollOffset,
+    )..addListener(_rememberScrollOffset);
     if (GetIt.I.isRegistered<NavigationRequest>()) {
       _navigationRequest = GetIt.I<NavigationRequest>();
       _navigationRequest!.apiProxySettingsRevision
@@ -48,13 +56,44 @@ class _SettingsPageViewState extends State<SettingsPageView> {
         _handleApiProxySettingsRequest();
       });
     }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _revealNavigationDirectoryAnchor();
+    });
   }
 
   @override
   void dispose() {
     _navigationRequest?.apiProxySettingsRevision
         .removeListener(_handleApiProxySettingsRequest);
+    _scrollController
+      ..removeListener(_rememberScrollOffset)
+      ..dispose();
     super.dispose();
+  }
+
+  void _rememberScrollOffset() {
+    if (!_scrollController.hasClients) return;
+    viewmodel.navigationDirectoryScrollOffset = _scrollController.offset;
+  }
+
+  void _revealNavigationDirectoryAnchor() {
+    if (!mounted) return;
+    final destination = viewmodel.navigationDirectoryAnchor;
+    viewmodel.navigationDirectoryAnchor = null;
+    final anchorContext = destination == null
+        ? null
+        : _navigationDestinationKeys[destination]?.currentContext;
+    if (anchorContext == null) return;
+    Scrollable.ensureVisible(
+      anchorContext,
+      duration: Duration.zero,
+      alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+    );
+  }
+
+  void _openNavigationDestination(AppDestination destination) {
+    _rememberScrollOffset();
+    viewmodel.openNavigationDestination(destination);
   }
 
   void _handleApiProxySettingsRequest() {
@@ -79,6 +118,18 @@ class _SettingsPageViewState extends State<SettingsPageView> {
             _buildPrefixKeyTile(),
             _buildRememberSequentialProgressTile(),
             _buildPromptModeConfirmationTile(),
+            const Divider(),
+            NavigationDirectory(
+              configuration: viewmodel.settings.navigation,
+              destinationKeys: _navigationDestinationKeys,
+              onOpenDestination: _openNavigationDestination,
+              onEnabledChanged: (change) =>
+                  viewmodel.setNavigationDestinationEnabled(
+                change.destination,
+                change.enabled,
+              ),
+              onReorder: viewmodel.reorderNavigationDestination,
+            ),
             const Divider(),
             _buildSavedConfigTile(context),
             _buildRestoreInitialSettingsTile(context),
@@ -111,6 +162,8 @@ class _SettingsPageViewState extends State<SettingsPageView> {
 
     return Scaffold(
       body: SingleChildScrollView(
+        key: const Key('settings-scroll-view'),
+        controller: _scrollController,
         child: content,
       ),
       floatingActionButton: buttons,

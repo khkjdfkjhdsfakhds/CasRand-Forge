@@ -79,7 +79,7 @@ class PromptConfigView extends StatelessWidget {
           child: ListTile(
             title: Text(
                 '${context.tr('cascaded_strings')}${context.tr('colon')}${viewModel.config.usableEntryCount}${context.tr('items')}'),
-            subtitle: Text(viewModel.config.strs.join('\n')),
+            subtitle: _PromptEntryPreview(entries: viewModel.config.strs),
             onTap: () => _editStrList(context),
           ),
         )
@@ -229,14 +229,6 @@ class _PromptEntryEditorDialogState extends State<_PromptEntryEditorDialog> {
         child: PromptEntryEditor(
           initialEntries: _entries,
           onChanged: (value) => _entries = value,
-          helpItems: [
-            context.tr('prompt_entry_editor_help_new_entry'),
-            context.tr('prompt_entry_editor_help_line_break'),
-            context.tr('prompt_entry_editor_help_comment'),
-          ],
-          insertLineBreakLabel: context.tr('insert_prompt_line_break'),
-          nextEntryLabel: context.tr('next_prompt_entry'),
-          commentLabel: context.tr('prompt_entry_comment'),
         ),
       ),
       actions: [
@@ -251,6 +243,33 @@ class _PromptEntryEditorDialogState extends State<_PromptEntryEditorDialog> {
             Navigator.of(context).pop();
           },
         ),
+      ],
+    );
+  }
+}
+
+class _PromptEntryPreview extends StatelessWidget {
+  const _PromptEntryPreview({required this.entries});
+
+  final List<String> entries;
+
+  @override
+  Widget build(BuildContext context) {
+    final dividerColor =
+        Theme.of(context).colorScheme.outlineVariant.withAlpha(96);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final (index, entry) in entries.indexed) ...[
+          Text(entry),
+          if (index < entries.length - 1)
+            Divider(
+              key: Key('prompt-preview-divider-$index'),
+              height: 10,
+              thickness: 0.5,
+              color: dividerColor,
+            ),
+        ],
       ],
     );
   }

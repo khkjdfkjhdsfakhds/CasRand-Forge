@@ -18,14 +18,6 @@ enum AppDestination {
     descriptionKey: 'navigation_description_config',
     icon: AppDestinationIcon.tune,
   ),
-  more(
-    persistenceId: 'more',
-    mandatory: true,
-    labelKey: 'navigation_more',
-    shortLabelKey: 'navigation_short_more',
-    descriptionKey: 'navigation_description_more',
-    icon: AppDestinationIcon.apps,
-  ),
   imageToImage(
     persistenceId: 'image_to_image',
     labelKey: 'i2i_inpaint',
@@ -85,7 +77,6 @@ enum AppDestination {
 enum AppDestinationIcon {
   create,
   tune,
-  apps,
   brush,
   reference,
   enhance,
@@ -118,22 +109,33 @@ class NavigationRequest {
   final ValueNotifier<int> i2iEntryRevision = ValueNotifier(0);
 
   bool _openApiProxySettingsOnArrival = false;
+  bool _openFromSettingsDirectory = false;
+
+  bool get openFromSettingsDirectory => _openFromSettingsDirectory;
 
   /// How the Img2Img page should present itself on arrival.
   I2iEntryMode i2iEntryMode = I2iEntryMode.baseImage;
 
   void goTo(AppDestination destination) {
+    _openFromSettingsDirectory = false;
+    requestedDestination.value = destination;
+  }
+
+  void goToFromSettingsDirectory(AppDestination destination) {
+    _openFromSettingsDirectory = true;
     requestedDestination.value = destination;
   }
 
   void goToI2i(I2iEntryMode mode) {
     i2iEntryMode = mode;
+    _openFromSettingsDirectory = false;
     requestedDestination.value = AppDestination.imageToImage;
     i2iEntryRevision.value++;
   }
 
   void goToApiProxySettings() {
     _openApiProxySettingsOnArrival = true;
+    _openFromSettingsDirectory = false;
     requestedDestination.value = AppDestination.settings;
     apiProxySettingsRevision.value++;
   }
@@ -155,5 +157,6 @@ class NavigationRequest {
   /// Called by the shell once it has handled the request.
   void consume() {
     requestedDestination.value = null;
+    _openFromSettingsDirectory = false;
   }
 }

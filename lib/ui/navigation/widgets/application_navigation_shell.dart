@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:nai_casrand/data/models/navigation_configuration.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/ui/navigation/navigation_destination_catalog.dart';
-import 'package:nai_casrand/ui/navigation/widgets/more_page_view.dart';
 
 class ApplicationNavigationShell extends StatefulWidget {
   final NavigationConfiguration configuration;
@@ -27,10 +26,10 @@ class ApplicationNavigationShell extends StatefulWidget {
 
   @override
   State<ApplicationNavigationShell> createState() =>
-      _ApplicationNavigationShellState();
+      ApplicationNavigationShellState();
 }
 
-class _ApplicationNavigationShellState
+class ApplicationNavigationShellState
     extends State<ApplicationNavigationShell> {
   static const _phoneEntryMinExtent = 88.0;
   static const _desktopRailWidth = 80.0;
@@ -45,6 +44,7 @@ class _ApplicationNavigationShellState
   };
 
   AppDestination _contentDestination = AppDestination.generation;
+  bool _returnToSettings = false;
   bool _phoneOverflow = false;
   bool _desktopOverflow = false;
   bool _phoneCanScrollBack = false;
@@ -56,9 +56,9 @@ class _ApplicationNavigationShellState
   double _phoneEntryExtent = _phoneEntryMinExtent;
 
   AppDestination get _selectedNavigationDestination =>
-      widget.configuration.contains(_contentDestination)
+      !_returnToSettings && widget.configuration.contains(_contentDestination)
           ? _contentDestination
-          : AppDestination.more;
+          : AppDestination.settings;
 
   @override
   void initState() {
@@ -98,7 +98,10 @@ class _ApplicationNavigationShellState
   void _handleRequest() {
     final destination = widget.navigationRequest.requestedDestination.value;
     if (destination == null) return;
-    _open(destination);
+    _open(
+      destination,
+      fromSettingsDirectory: widget.navigationRequest.openFromSettingsDirectory,
+    );
     widget.navigationRequest.consume();
   }
 
@@ -108,14 +111,29 @@ class _ApplicationNavigationShellState
     WidgetsBinding.instance.addPostFrameCallback((_) => _revealSelected());
   }
 
-  void _open(AppDestination destination) {
-    if (_contentDestination == destination) {
+  void _open(
+    AppDestination destination, {
+    bool fromSettingsDirectory = false,
+  }) {
+    final returnsToSettings = destination != AppDestination.settings &&
+        (fromSettingsDirectory || !widget.configuration.contains(destination));
+    if (_contentDestination == destination &&
+        _returnToSettings == returnsToSettings) {
       widget.navigationRequest.consume();
       return;
     }
-    setState(() => _contentDestination = destination);
+    setState(() {
+      _contentDestination = destination;
+      _returnToSettings = returnsToSettings;
+    });
     widget.onDestinationOpened?.call(destination);
     WidgetsBinding.instance.addPostFrameCallback((_) => _revealSelected());
+  }
+
+  bool returnToSettingsIfTransient() {
+    if (!_returnToSettings) return false;
+    _open(AppDestination.settings);
+    return true;
   }
 
   void _revealSelected() {
@@ -198,13 +216,6 @@ class _ApplicationNavigationShellState
   }
 
   Widget _content() {
-    if (_contentDestination == AppDestination.more) {
-      return MorePageView(
-        configuration: widget.configuration,
-        onOpenDestination: _open,
-        onConfigurationChanged: widget.onConfigurationChanged,
-      );
-    }
     return widget.pages[_contentDestination] ?? const SizedBox.shrink();
   }
 

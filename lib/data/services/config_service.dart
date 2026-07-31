@@ -94,6 +94,8 @@ class ConfigService {
   }
 
   Future<void> saveConfig(Map<String, dynamic> jsonData) async {
+    // Let the initiating UI event finish before encoding and writing the config.
+    await Future<void>.delayed(Duration.zero);
     saveBox.put('savedUuid', currentUuid);
     saveConfigByUuid(currentUuid, jsonData);
   }

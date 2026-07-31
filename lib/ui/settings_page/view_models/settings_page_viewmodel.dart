@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/core/constants/settings.dart';
+import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
 import 'package:nai_casrand/data/services/config_service.dart';
@@ -18,6 +19,9 @@ class SettingsPageViewmodel extends ChangeNotifier {
 
   PayloadConfig get payloadConfig => GetIt.I();
   ConfigService get configService => GetIt.I();
+
+  double navigationDirectoryScrollOffset = 0;
+  AppDestination? navigationDirectoryAnchor;
 
   SettingsPageViewmodel({ProxyDetectionService? proxyDetectionService})
       : _proxyDetectionService =
@@ -47,6 +51,26 @@ class SettingsPageViewmodel extends ChangeNotifier {
     payloadConfig.settings.confirmPromptModeSwitch = value;
     configService.saveConfig(payloadConfig.toJson());
     notifyListeners();
+  }
+
+  void setNavigationDestinationEnabled(
+    AppDestination destination,
+    bool enabled,
+  ) {
+    if (!settings.navigation.setEnabled(destination, enabled)) return;
+    configService.saveConfig(payloadConfig.toJson());
+    notifyListeners();
+  }
+
+  void reorderNavigationDestination(int oldIndex, int newIndex) {
+    if (!settings.navigation.reorder(oldIndex, newIndex)) return;
+    configService.saveConfig(payloadConfig.toJson());
+    notifyListeners();
+  }
+
+  void openNavigationDestination(AppDestination destination) {
+    navigationDirectoryAnchor = destination;
+    GetIt.I<NavigationRequest>().goToFromSettingsDirectory(destination);
   }
 
   void setEraseMetadataEnabled(bool? value) {

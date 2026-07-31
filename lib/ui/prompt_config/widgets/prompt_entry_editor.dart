@@ -8,18 +8,10 @@ class PromptEntryEditor extends StatefulWidget {
     super.key,
     required this.initialEntries,
     required this.onChanged,
-    required this.helpItems,
-    required this.insertLineBreakLabel,
-    required this.nextEntryLabel,
-    required this.commentLabel,
   });
 
   final List<String> initialEntries;
   final ValueChanged<List<String>> onChanged;
-  final List<String> helpItems;
-  final String insertLineBreakLabel;
-  final String nextEntryLabel;
-  final String commentLabel;
 
   @override
   State<PromptEntryEditor> createState() => _PromptEntryEditorState();
@@ -336,39 +328,11 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
     });
   }
 
-  List<int?> get _entryNumbers {
-    var number = 0;
-    return _fields.map((field) {
-      if (PromptConfig.entryHasPrompt(field.controller.text)) {
-        number++;
-        return number;
-      }
-      return null;
-    }).toList(growable: false);
-  }
-
   @override
   Widget build(BuildContext context) {
-    final entryNumbers = _entryNumbers;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Wrap(
-          key: const Key('prompt-entry-help'),
-          spacing: 24,
-          runSpacing: 6,
-          children: [
-            for (var index = 0; index < widget.helpItems.length; index++)
-              Text(
-                widget.helpItems[index],
-                key: Key('prompt-entry-help-$index'),
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-              ),
-          ],
-        ),
-        const SizedBox(height: 8),
         Expanded(
           child: ListView.builder(
             itemCount: _fields.length,
@@ -377,11 +341,6 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _PromptEntryDivider(
-                    key: Key('prompt-entry-divider-$index'),
-                    number: entryNumbers[index],
-                    commentLabel: widget.commentLabel,
-                  ),
                   TextField(
                     key: Key('prompt-entry-field-$index'),
                     controller: field.controller,
@@ -409,24 +368,6 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
             },
           ),
         ),
-        Wrap(
-          alignment: WrapAlignment.end,
-          spacing: 8,
-          runSpacing: 4,
-          children: [
-            TextButton.icon(
-              key: const Key('insert-prompt-line-break'),
-              onPressed: _insertLineBreak,
-              icon: const Icon(Icons.keyboard_return, size: 18),
-              label: Text(widget.insertLineBreakLabel),
-            ),
-            TextButton(
-              key: const Key('next-prompt-entry'),
-              onPressed: () => _splitAtSelection(_activeIndex),
-              child: Text(widget.nextEntryLabel),
-            ),
-          ],
-        ),
       ],
     );
   }
@@ -437,79 +378,6 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
       field.dispose();
     }
     super.dispose();
-  }
-}
-
-class _PromptEntryDivider extends StatelessWidget {
-  const _PromptEntryDivider({
-    super.key,
-    required this.number,
-    required this.commentLabel,
-  });
-
-  final int? number;
-  final String commentLabel;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = Theme.of(context).colorScheme.outlineVariant;
-    final labelStyle = Theme.of(context).textTheme.labelSmall?.copyWith(
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-          fontWeight: FontWeight.w600,
-          letterSpacing: 0.4,
-        );
-    final numberStyle = labelStyle?.copyWith(
-      color: Theme.of(context).colorScheme.outline,
-      fontSize: 9,
-      fontWeight: FontWeight.w500,
-      letterSpacing: 0,
-    );
-    final isNumber = number != null;
-    final label = number == null
-        ? Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.comment_outlined, size: 13),
-              const SizedBox(width: 4),
-              Text(commentLabel, style: labelStyle),
-            ],
-          )
-        : Text(
-            '$number',
-            key: Key('prompt-entry-number-$number'),
-            style: numberStyle,
-          );
-
-    return ExcludeSemantics(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 5),
-        child: Row(
-          children: [
-            Expanded(child: Divider(color: color, height: 1)),
-            Container(
-              margin: EdgeInsets.symmetric(horizontal: isNumber ? 5 : 8),
-              padding: isNumber
-                  ? EdgeInsets.zero
-                  : const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-              decoration: isNumber
-                  ? null
-                  : BoxDecoration(
-                      color: color.withAlpha(45),
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: color),
-                    ),
-              child: IconTheme(
-                data: IconThemeData(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-                child: label,
-              ),
-            ),
-            Expanded(child: Divider(color: color, height: 1)),
-          ],
-        ),
-      ),
-    );
   }
 }
 

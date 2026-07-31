@@ -96,7 +96,6 @@ void main() {
     expect(config.settings.navigation, same(navigation));
     expect(navigation.destinations, [
       AppDestination.settings,
-      AppDestination.more,
       AppDestination.imageToImage,
       AppDestination.config,
       AppDestination.generation,
