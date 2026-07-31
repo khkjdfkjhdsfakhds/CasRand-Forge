@@ -363,43 +363,50 @@ class PrepareI2iRequestUseCase {
     required int targetWidth,
     required int targetHeight,
   }) async {
-    if (!config.hasImage) return null;
-    final configId = identityHashCode(config);
-    for (final entry in _batchCache) {
-      if (entry.configId == configId &&
-          entry.revision == config.planRevision &&
-          entry.targetWidth == targetWidth &&
-          entry.targetHeight == targetHeight) {
-        return _withCurrentParameters(entry.batch);
+    while (config.hasImage) {
+      final configId = identityHashCode(config);
+      final revision = config.planRevision;
+      for (final entry in _batchCache) {
+        if (entry.configId == configId &&
+            entry.revision == revision &&
+            entry.targetWidth == targetWidth &&
+            entry.targetHeight == targetHeight) {
+          return _withCurrentParameters(entry.batch);
+        }
       }
-    }
 
-    late final I2iRequestBatch batch;
-    if (!config.hasInpaintSelection) {
-      final plan = await call(
+      late final I2iRequestBatch batch;
+      if (!config.hasInpaintSelection) {
+        final plan = await call(
+          targetWidth: targetWidth,
+          targetHeight: targetHeight,
+        );
+        if (plan == null) return null;
+        batch = I2iRequestBatch(
+          plans: [plan],
+          serial: true,
+          summary: plan.summary,
+        );
+      } else {
+        batch = _buildInpaintBatch(targetWidth, targetHeight);
+      }
+      if (identityHashCode(config) != configId ||
+          config.planRevision != revision) {
+        continue;
+      }
+      _batchCache.add(_BatchCacheEntry(
+        configId: configId,
+        revision: revision,
         targetWidth: targetWidth,
         targetHeight: targetHeight,
-      );
-      if (plan == null) return null;
-      batch = I2iRequestBatch(
-        plans: [plan],
-        serial: true,
-        summary: plan.summary,
-      );
-    } else {
-      batch = _buildInpaintBatch(targetWidth, targetHeight);
+        batch: batch,
+      ));
+      while (_batchCache.length > _planCacheLimit) {
+        _batchCache.removeAt(0);
+      }
+      return _withCurrentParameters(batch);
     }
-    _batchCache.add(_BatchCacheEntry(
-      configId: configId,
-      revision: config.planRevision,
-      targetWidth: targetWidth,
-      targetHeight: targetHeight,
-      batch: batch,
-    ));
-    while (_batchCache.length > _planCacheLimit) {
-      _batchCache.removeAt(0);
-    }
-    return _withCurrentParameters(batch);
+    return null;
   }
 
   I2iRequestBatch _withCurrentParameters(I2iRequestBatch batch) {
@@ -430,49 +437,55 @@ class PrepareI2iRequestUseCase {
     required int targetWidth,
     required int targetHeight,
   }) async {
-    if (!config.hasImage) return null;
-
-    final configId = identityHashCode(config);
-    for (final entry in _planCache) {
-      if (entry.configId == configId &&
-          entry.revision == config.planRevision &&
-          entry.targetWidth == targetWidth &&
-          entry.targetHeight == targetHeight) {
-        return entry.plan.withRequestParameters(
-          strength: config.strength,
-          noise: config.noise,
-          addOriginalImage: config.addOriginalImage,
-        );
-      }
-    }
-
-    final plan = config.hasInpaintSelection
-        ? _buildInpaintBatch(targetWidth, targetHeight).plans.first
-        : await preparePlainImg2ImgBytesInBackground(
-            imageBytes: config.imageBytes!,
-            sourceWidth: config.width,
-            sourceHeight: config.height,
-            targetWidth: targetWidth,
-            targetHeight: targetHeight,
+    while (config.hasImage) {
+      final configId = identityHashCode(config);
+      final revision = config.planRevision;
+      for (final entry in _planCache) {
+        if (entry.configId == configId &&
+            entry.revision == revision &&
+            entry.targetWidth == targetWidth &&
+            entry.targetHeight == targetHeight) {
+          return entry.plan.withRequestParameters(
             strength: config.strength,
             noise: config.noise,
             addOriginalImage: config.addOriginalImage,
           );
-    _planCache.add(_PlanCacheEntry(
-      configId: configId,
-      revision: config.planRevision,
-      targetWidth: targetWidth,
-      targetHeight: targetHeight,
-      plan: plan,
-    ));
-    while (_planCache.length > _planCacheLimit) {
-      _planCache.removeAt(0);
+        }
+      }
+
+      final plan = config.hasInpaintSelection
+          ? _buildInpaintBatch(targetWidth, targetHeight).plans.first
+          : await preparePlainImg2ImgBytesInBackground(
+              imageBytes: config.imageBytes!,
+              sourceWidth: config.width,
+              sourceHeight: config.height,
+              targetWidth: targetWidth,
+              targetHeight: targetHeight,
+              strength: config.strength,
+              noise: config.noise,
+              addOriginalImage: config.addOriginalImage,
+            );
+      if (identityHashCode(config) != configId ||
+          config.planRevision != revision) {
+        continue;
+      }
+      _planCache.add(_PlanCacheEntry(
+        configId: configId,
+        revision: revision,
+        targetWidth: targetWidth,
+        targetHeight: targetHeight,
+        plan: plan,
+      ));
+      while (_planCache.length > _planCacheLimit) {
+        _planCache.removeAt(0);
+      }
+      return plan.withRequestParameters(
+        strength: config.strength,
+        noise: config.noise,
+        addOriginalImage: config.addOriginalImage,
+      );
     }
-    return plan.withRequestParameters(
-      strength: config.strength,
-      noise: config.noise,
-      addOriginalImage: config.addOriginalImage,
-    );
+    return null;
   }
 
   img.Image _requireBaseImage() {

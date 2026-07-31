@@ -95,6 +95,38 @@ void main() {
     expect(base64Decode(plan!.imageB64), original);
   });
 
+  test('img2img preparation discards stale bytes when the image changes',
+      () async {
+    final first = solidPng(1024, 1024, 200, 30, 30);
+    final second = solidPng(1024, 1024, 30, 200, 30);
+    final config = I2IConfig()..setImage(first);
+    final useCase = PrepareI2iRequestUseCase(config: config);
+
+    final pending = useCase(targetWidth: 832, targetHeight: 1216);
+    config.setImage(second);
+
+    final plan = await pending;
+    expect(base64Decode(plan!.imageB64), second);
+    final cached = await useCase(targetWidth: 832, targetHeight: 1216);
+    expect(base64Decode(cached!.imageB64), second);
+  });
+
+  test('img2img batch preparation cannot cache stale image bytes', () async {
+    final first = solidPng(1024, 1024, 200, 30, 30);
+    final second = solidPng(1024, 1024, 30, 200, 30);
+    final config = I2IConfig()..setImage(first);
+    final useCase = PrepareI2iRequestUseCase(config: config);
+
+    final pending = useCase.planBatch(targetWidth: 832, targetHeight: 1216);
+    config.setImage(second);
+
+    final batch = await pending;
+    expect(base64Decode(batch!.plans.single.imageB64), second);
+    final cached =
+        await useCase.planBatch(targetWidth: 832, targetHeight: 1216);
+    expect(base64Decode(cached!.plans.single.imageB64), second);
+  });
+
   test('focus inpaint sends a request canvas matching the plan', () async {
     final config = I2IConfig()..setImage(quadrantPng(1600, 2400));
     config.setMask(maskPngWithWhiteRect(1600, 2400, 700, 1100, 120, 160), []);
