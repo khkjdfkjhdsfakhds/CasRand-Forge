@@ -325,7 +325,8 @@ class _GenerationPageViewState extends State<GenerationPageView> {
   }
 
   /// Start/stop button. While idle it shows the estimated Anlas of the next
-  /// generation ("免费" under Opus); while generating it is a stop button.
+  /// generation as a number (including zero); while generating it is a stop
+  /// button.
   Widget _buildGenerationFab(BuildContext context) {
     viewmodel.refreshCostEstimate();
     return ListenableBuilder(

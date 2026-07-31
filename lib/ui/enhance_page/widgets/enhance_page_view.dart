@@ -375,6 +375,11 @@ class EnhancePageView extends StatelessWidget {
         command.isExecuting.addListener(listener);
         WidgetsBinding.instance.addPostFrameCallback((_) => listener());
       }
+    } else {
+      final error = generationViewmodel.takeEnhancePreparationError();
+      if (error != null) {
+        showErrorBar(context, '${tr('image_handoff_failed')}: $error');
+      }
     }
   }
 }

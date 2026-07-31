@@ -134,11 +134,11 @@ void main() {
   });
 
   test('api tokens and display mode survive a JSON round trip', () {
-    final settings = Settings.fromJson({});
+    final settings = Settings.fromJson({'api_key': 'pst-main'});
     settings.apiTokens.addAll([
-      ApiTokenConfig(label: 'Main', token: 'pst-main'),
       ApiTokenConfig(label: 'Alt', token: 'pst-alt', enabled: false),
     ]);
+    settings.parallelApiEnabled = true;
     settings.resultDisplayMode = 'classic';
 
     final restored = Settings.fromJson(
@@ -146,10 +146,12 @@ void main() {
     );
 
     expect(restored.apiTokens, hasLength(2));
-    expect(restored.apiTokens[0].label, 'Main');
+    expect(restored.apiTokens[0].label, 'Main API');
     expect(restored.apiTokens[0].token, 'pst-main');
     expect(restored.apiTokens[0].enabled, isTrue);
+    expect(restored.apiTokens[0].isPrimary, isTrue);
     expect(restored.apiTokens[1].enabled, isFalse);
+    expect(restored.parallelApiEnabled, isTrue);
     expect(restored.resultDisplayMode, 'classic');
   });
 
@@ -173,10 +175,11 @@ void main() {
     expect(settings.toJson()['classic_grid_default_migrated'], isTrue);
   });
 
-  test('legacy configs without token list fall back to the api key', () {
+  test('legacy configs automatically expose the main api key', () {
     final settings = Settings.fromJson({'api_key': 'pst-legacy'});
 
-    expect(settings.apiTokens, isEmpty);
+    expect(settings.apiTokens, hasLength(1));
+    expect(settings.apiTokens.single.isPrimary, isTrue);
     final effective = settings.effectiveApiTokens;
     expect(effective, hasLength(1));
     expect(effective.single.token, 'pst-legacy');
@@ -215,13 +218,74 @@ void main() {
       ApiTokenConfig(label: 'Empty', token: ''),
       ApiTokenConfig(label: 'On', token: 'pst-on'),
     ]);
+    settings
+      ..parallelApiEnabled = true
+      ..normalizeApiTokens();
 
     final effective = settings.effectiveApiTokens;
-    expect(effective, hasLength(1));
-    expect(effective.single.token, 'pst-on');
+    expect(effective.map((entry) => entry.token), ['pst-legacy', 'pst-on']);
+    expect(settings.apiKey, 'pst-legacy');
+  });
 
-    settings.syncLegacyApiKey();
-    expect(settings.apiKey, 'pst-on');
+  test('old additional tokens enable parallel mode and keep the main token',
+      () {
+    final settings = Settings.fromJson({
+      'api_key': 'pst-main',
+      'api_tokens': [
+        {'label': 'Alt', 'token': 'pst-alt', 'enabled': true},
+      ],
+    });
+
+    expect(settings.parallelApiEnabled, isTrue);
+    expect(settings.apiTokens.map((entry) => entry.token), [
+      'pst-main',
+      'pst-alt',
+    ]);
+    expect(settings.effectiveApiTokens.map((entry) => entry.token), [
+      'pst-main',
+      'pst-alt',
+    ]);
+  });
+
+  test('main token replacement preserves its order and removes duplicates', () {
+    final settings = Settings.fromJson({
+      'api_key': 'pst-main',
+      'api_tokens': [
+        {'label': 'Alt 1', 'token': 'pst-alt-1', 'enabled': true},
+        {
+          'label': 'Main label',
+          'token': 'pst-main',
+          'enabled': false,
+          'is_primary': true,
+        },
+        {'label': 'Alt 2', 'token': 'pst-alt-2', 'enabled': true},
+      ],
+      'parallel_api_enabled': true,
+    });
+
+    settings.updatePrimaryApiKey('pst-alt-2');
+
+    expect(settings.apiKey, 'pst-alt-2');
+    expect(settings.apiTokens.map((entry) => entry.token), [
+      'pst-alt-1',
+      'pst-alt-2',
+    ]);
+    expect(settings.apiTokens[1].isPrimary, isTrue);
+    expect(settings.apiTokens[1].enabled, isFalse);
+  });
+
+  test('parallel mode caps enabled accounts at six', () {
+    final settings = Settings.fromJson({
+      'api_key': 'pst-main',
+      'parallel_api_enabled': true,
+      'api_tokens': [
+        for (var i = 0; i < 7; i++)
+          {'label': 'T$i', 'token': 'pst-$i', 'enabled': true},
+      ],
+    });
+
+    expect(settings.apiTokens.where((entry) => entry.enabled), hasLength(6));
+    expect(settings.effectiveApiTokens, hasLength(6));
   });
 
   test('masked token hides the middle of the value', () {

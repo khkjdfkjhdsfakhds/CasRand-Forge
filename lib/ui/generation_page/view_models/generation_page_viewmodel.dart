@@ -4,16 +4,17 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_command/flutter_command.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/data/models/api_request.dart';
 import 'package:nai_casrand/data/models/command_status.dart';
 import 'package:nai_casrand/data/models/director_tool_config.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
+import 'package:nai_casrand/data/models/i2i_config.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:lorem_ipsum/lorem_ipsum.dart';
-import 'package:nai_casrand/data/models/i2i_config.dart';
 import 'package:nai_casrand/data/services/account_service.dart';
 import 'package:nai_casrand/data/services/api_service.dart';
 import 'package:nai_casrand/data/services/file_service.dart';
@@ -22,20 +23,51 @@ import 'package:nai_casrand/data/use_cases/anlas_cost.dart';
 import 'package:nai_casrand/data/use_cases/encode_vibe_use_case.dart';
 import 'package:nai_casrand/data/use_cases/generate_payload_use_case.dart';
 import 'package:nai_casrand/data/use_cases/prepare_i2i_request_use_case.dart';
+import 'package:nai_casrand/data/use_cases/prepare_director_tool_request_use_case.dart';
+import 'package:nai_casrand/ui/generation_page/view_models/generation_scheduler.dart';
 
 const infoCardContentListLength = 200;
+
+typedef PreparationFeedbackBarrier = Future<void> Function();
+typedef I2iBatchPreparer = Future<I2iRequestBatch?> Function({
+  required I2IConfig config,
+  required int targetWidth,
+  required int targetHeight,
+});
+
+Future<void> _defaultPreparationFeedbackBarrier() async {
+  final binding = WidgetsBinding.instance;
+  if (!binding.hasScheduledFrame) binding.scheduleFrame();
+  await binding.endOfFrame;
+}
+
+Future<I2iRequestBatch?> _defaultI2iBatchPreparer({
+  required I2IConfig config,
+  required int targetWidth,
+  required int targetHeight,
+}) {
+  return PrepareI2iRequestUseCase(config: config).planBatch(
+    targetWidth: targetWidth,
+    targetHeight: targetHeight,
+  );
+}
 
 /// Per-worker generation state. Worker 0 is the legacy single-token path;
 /// additional workers exist only while multiple API tokens are enabled.
 class _WorkerState {
+  Timer? intervalTimer;
+  Command<void, InfoCardContent>? command;
+  GenerationLease? lease;
+  int consecutiveFailures = 0;
+  bool paused = false;
+}
+
+class _LogicalGenerationTask {
   PayloadGenerationResult? cachedPayloadResult;
   I2iRequestBatch? cachedI2iBatch;
   String? cachedRetryFingerprint;
   int cacheRetriesCount = 0;
-  int consecutiveTransientFailures = 0;
-  bool halted = false;
-  Timer? intervalTimer;
-  Command<void, InfoCardContent>? command;
+  Command<void, InfoCardContent>? cardCommand;
 }
 
 class _BatchAccounting {
@@ -61,6 +93,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
   final FileService _fileService;
   final ImageService _imageService;
   final Random _i2iSeedRandom;
+  final PrepareDirectorToolRequestUseCase _prepareDirectorToolRequest;
+  final PreparationFeedbackBarrier _preparationFeedbackBarrier;
+  final I2iBatchPreparer _prepareI2iBatch;
   final Map<String, Future<String>> _vibeEncodingFutures = {};
 
   GenerationPageViewmodel({
@@ -70,6 +105,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
     FileService? fileService,
     ImageService? imageService,
     Random? i2iSeedRandom,
+    PrepareDirectorToolRequestUseCase? prepareDirectorToolRequest,
+    PreparationFeedbackBarrier? preparationFeedbackBarrier,
+    I2iBatchPreparer? prepareI2iBatch,
   })  : _encodeVibeUseCase = encodeVibeUseCase ??
             EncodeVibeUseCase(apiService: apiService ?? ApiService.shared),
         _apiService = apiService ?? ApiService.shared,
@@ -77,7 +115,12 @@ class GenerationPageViewmodel extends ChangeNotifier {
             AccountService(apiService: apiService ?? ApiService.shared),
         _fileService = fileService ?? FileService(),
         _imageService = imageService ?? ImageService(),
-        _i2iSeedRandom = i2iSeedRandom ?? Random();
+        _i2iSeedRandom = i2iSeedRandom ?? Random(),
+        _prepareDirectorToolRequest = prepareDirectorToolRequest ??
+            const PrepareDirectorToolRequestUseCase(),
+        _preparationFeedbackBarrier =
+            preparationFeedbackBarrier ?? _defaultPreparationFeedbackBarrier,
+        _prepareI2iBatch = prepareI2iBatch ?? _defaultI2iBatchPreparer;
 
   PayloadConfig get payloadConfig => GetIt.I<PayloadConfig>();
   CommandStatus get commandStatus => GetIt.I<CommandStatus>();
@@ -91,24 +134,45 @@ class GenerationPageViewmodel extends ChangeNotifier {
 
   bool _isPreparingEnhance = false;
   bool get isPreparingEnhance => _isPreparingEnhance;
+  bool _isPreparingDirector = false;
+  bool get isPreparingDirector => _isPreparingDirector;
+  Object? _enhancePreparationError;
+  Object? _directorPreparationError;
+
+  Object? takeEnhancePreparationError() {
+    final error = _enhancePreparationError;
+    _enhancePreparationError = null;
+    return error;
+  }
+
+  Object? takeDirectorPreparationError() {
+    final error = _directorPreparationError;
+    _directorPreparationError = null;
+    return error;
+  }
 
   PayloadGenerationResult? _cachedPayloadResult;
   I2iRequestBatch? _cachedI2iBatch;
   String? _cachedRetryFingerprint;
   int _cacheRetriesCount = 0;
-  int _consecutiveTransientFailures = 0;
-  bool _primaryWorkerHalted = false;
+  int _primaryConsecutiveFailures = 0;
+  bool _primaryWorkerPaused = false;
   Timer? _generationIntervalTimer;
 
   /// Tokens captured at generation start; index-aligned with workers.
   List<String> _activeTokens = [];
   List<String> _activeTokenLabels = [];
   final Map<int, _WorkerState> _extraWorkers = {};
+  final Map<int, _LogicalGenerationTask> _logicalTasks = {};
+  GenerationScheduler? _scheduler;
+  GenerationLease? _primaryLease;
   _BatchAccounting? _activeBatch;
 
   /// Last known Anlas balance per token (updated after each generation).
   final Map<String, int> _lastAnlasBalances = {};
   final Map<String, DateTime> _lastAnlasBalanceTimes = {};
+  final Map<String, SubscriptionInfo> _subscriptionSnapshots = {};
+  final Map<String, DateTime> _subscriptionSnapshotTimes = {};
   Map<String, int> get lastAnlasBalances => Map.of(_lastAnlasBalances);
 
   /// Estimated Anlas for the next generation, shown on the start buttons
@@ -214,9 +278,11 @@ class GenerationPageViewmodel extends ChangeNotifier {
           vibeCount: vibeCount,
         );
       } else {
-        final batch = await PrepareI2iRequestUseCase(
+        final batch = await _prepareI2iBatch(
           config: i2i,
-        ).planBatch(targetWidth: largest.width, targetHeight: largest.height);
+          targetWidth: largest.width,
+          targetHeight: largest.height,
+        );
         if (batch != null) {
           final base = estimateBatchAnlasCost(
             tiles: batch.plans
@@ -230,8 +296,6 @@ class GenerationPageViewmodel extends ChangeNotifier {
             tier: tier,
             subscriptionActive: subscriptionActive,
             nSamples: paramConfig.nSamples,
-            opusFocusedInpaint: batch.plans.isNotEmpty &&
-                batch.plans.every((plan) => plan.composite != null),
           );
           // Precise references and extra vibes are billed per request, so a
           // split mask pays them once per tile.
@@ -297,12 +361,18 @@ class GenerationPageViewmodel extends ChangeNotifier {
 
   void _recordSubscriptionInfo(String token, SubscriptionInfo info) {
     final settings = payloadConfig.settings;
-    settings.subscriptionTier = info.tier;
-    settings.subscriptionActive = info.active;
-    settings.subscriptionStatusKnown = true;
+    final now = DateTime.now();
+    _subscriptionSnapshots[token] = info;
+    _subscriptionSnapshotTimes[token] = now;
+    final displayToken = settings.effectiveApiTokens.firstOrNull?.token;
+    if (token == displayToken) {
+      settings.subscriptionTier = info.tier;
+      settings.subscriptionActive = info.active;
+      settings.subscriptionStatusKnown = true;
+    }
     if (info.anlas != null) {
       _lastAnlasBalances[token] = info.anlas!;
-      _lastAnlasBalanceTimes[token] = DateTime.now();
+      _lastAnlasBalanceTimes[token] = now;
     }
   }
 
@@ -385,7 +455,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
   void addAndRunCommand(Command<void, InfoCardContent> command) {
     // Make sure list is not longer than expected
     while (commandList.length >= infoCardContentListLength) {
-      commandList.removeAt(0);
+      commandStatus.removeProgress(commandList.removeAt(0));
     }
     // Push command into list and run command
     commandList.add(command);
@@ -513,6 +583,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
   }) {
     final batchAccounting = _activeBatch;
     final token = _tokenForWorker(workerIndex);
+    final scheduledLease = _leaseForWorker(workerIndex);
     int? startingBalance;
     DateTime? startingBalanceTime;
     var vibeExtractionAnlas = 0;
@@ -580,9 +651,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
               final i2iConfig = payloadConfig.i2iConfig;
               if (payloadConfig.i2iEnabled && i2iConfig.hasImage) {
                 final target = i2iConfig.requestSize;
-                i2iBatch = await PrepareI2iRequestUseCase(
+                i2iBatch = await _prepareI2iBatch(
                   config: i2iConfig,
-                ).planBatch(
                   targetWidth: target.width,
                   targetHeight: target.height,
                 );
@@ -611,6 +681,20 @@ class GenerationPageViewmodel extends ChangeNotifier {
           }
         }
         _applyCurrentVibesToPayload(payloadResult);
+
+        final estimatedGenerationCost = _estimateResultAnlas(
+          token: token,
+          payloadResult: payloadResult,
+          batch: i2iBatch,
+          vibeExtractionAnlas: 0,
+        );
+        if (!settings.debugApiEnabled &&
+            _hasFreshInsufficientBalance(token, estimatedGenerationCost)) {
+          throw const NovelAiApiException(
+            'The freshly refreshed Anlas balance is insufficient for this '
+            'estimated request.',
+          );
+        }
 
         final headers = payloadConfig.getHeadersForToken(token);
         Future<Uint8List> sendPlan(Map<String, dynamic> payload) async {
@@ -666,6 +750,10 @@ class GenerationPageViewmodel extends ChangeNotifier {
             metadataString,
           );
         }
+        if (scheduledLease != null &&
+            _scheduler?.reserveSuccess(scheduledLease) != true) {
+          return InfoCardContent.fromEmpty();
+        }
         // Save image
         final filePrefix = payloadResult.suggestedFileName.isNotEmpty
             ? _getSafeFileName(payloadResult.suggestedFileName)
@@ -674,7 +762,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
           _fileService.generateTimestampString(
             commandStatus.generationTimestamp,
           ),
-          commandStatus.currentGenerationCount.toString().padLeft(6, '0'),
+          (scheduledLease?.taskNumber ?? commandStatus.currentGenerationCount)
+              .toString()
+              .padLeft(6, '0'),
           filePrefix,
           '${_fileService.generateRandomString()}.png',
         ].join('-');
@@ -683,7 +773,12 @@ class GenerationPageViewmodel extends ChangeNotifier {
           fileName,
           settings.outputFolderPath,
         );
+        if (scheduledLease != null &&
+            _scheduler?.completeSuccess(scheduledLease) != true) {
+          return InfoCardContent.fromEmpty();
+        }
         final estimatedCost = _estimateResultAnlas(
+          token: token,
           payloadResult: payloadResult,
           batch: i2iBatch,
           vibeExtractionAnlas: vibeExtractionAnlas,
@@ -716,11 +811,16 @@ class GenerationPageViewmodel extends ChangeNotifier {
           tokenLabel: _tokenLabelForWorker(workerIndex),
         );
       } catch (e) {
-        final transientFailures = _recordAttemptFailure(workerIndex, e);
+        final scheduledFailure = scheduledLease == null
+            ? null
+            : _scheduler?.completeFailure(scheduledLease);
+        final failureCount = scheduledFailure == null
+            ? _recordAttemptFailure(workerIndex)
+            : _recordScheduledFailure(workerIndex, scheduledFailure);
         final pauseNotice =
-            commandStatus.isGenerationActive.value && transientFailures >= 3
-                ? '\nAutomatic attempts for this token will pause after three '
-                    'temporary server failures. You can retry manually later.'
+            commandStatus.isGenerationActive.value && failureCount >= 5
+                ? '\nAutomatic attempts for this token will pause after five '
+                    'consecutive failures. You can retry manually later.'
                 : '';
         return InfoCardContent(
           title: 'Error occurred in generation process.',
@@ -754,7 +854,16 @@ class GenerationPageViewmodel extends ChangeNotifier {
     return command;
   }
 
+  @visibleForTesting
+  Command<void, InfoCardContent> createScheduledGenerationCommand({
+    required int workerIndex,
+    required GenerationLease lease,
+  }) {
+    return createGenerationCommand(workerIndex: workerIndex);
+  }
+
   int _estimateResultAnlas({
+    required String token,
     required PayloadGenerationResult payloadResult,
     required I2iRequestBatch? batch,
     required int vibeExtractionAnlas,
@@ -771,11 +880,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
           (parameters['director_reference_images'] as List?)?.length ?? 0;
       final vibeCount =
           (parameters['reference_image_multiple'] as List?)?.length ?? 0;
-      final settings = payloadConfig.settings;
-      final tier =
-          settings.subscriptionStatusKnown ? settings.subscriptionTier : null;
-      final subscriptionActive =
-          settings.subscriptionStatusKnown && settings.subscriptionActive;
+      final snapshot = _freshSubscriptionSnapshot(token);
+      final tier = snapshot?.tier;
+      final subscriptionActive = snapshot?.active ?? false;
       final sm = parameters['sm'] == true;
       final smDyn = parameters['sm_dyn'] == true;
       final plans = batch?.plans ?? const <I2iRequestPlan>[];
@@ -784,9 +891,6 @@ class GenerationPageViewmodel extends ChangeNotifier {
           : (parameters['inpaintImg2ImgStrength'] as num?)?.toDouble() ??
               (parameters['strength'] as num?)?.toDouble() ??
               1.0;
-      final focusedInpaint = plans.isNotEmpty &&
-          plans.every((plan) => plan.isInpaint && plan.composite != null);
-
       if (batch != null && batch.isSplit) {
         final base = estimateBatchAnlasCost(
           tiles: plans
@@ -800,7 +904,6 @@ class GenerationPageViewmodel extends ChangeNotifier {
           tier: tier,
           subscriptionActive: subscriptionActive,
           nSamples: nSamples,
-          opusFocusedInpaint: focusedInpaint,
         );
         final referenceCostPerRequest = (preciseCount * preciseReferenceAnlas +
                 max(0, vibeCount - freeVibeCount) * extraVibeAnlas) *
@@ -823,12 +926,27 @@ class GenerationPageViewmodel extends ChangeNotifier {
             subscriptionActive: subscriptionActive,
             preciseReferenceCount: preciseCount,
             vibeCount: vibeCount,
-            opusFocusedInpaint: focusedInpaint,
           ).anlas +
           vibeExtractionAnlas;
     } catch (_) {
       return (nextCostEstimate.value?.anlas ?? 0) + vibeExtractionAnlas;
     }
+  }
+
+  SubscriptionInfo? _freshSubscriptionSnapshot(String token) {
+    final fetchedAt = _subscriptionSnapshotTimes[token];
+    if (fetchedAt == null ||
+        DateTime.now().difference(fetchedAt) >= const Duration(minutes: 2)) {
+      return null;
+    }
+    return _subscriptionSnapshots[token];
+  }
+
+  bool _hasFreshInsufficientBalance(String token, int estimatedCost) {
+    if (estimatedCost <= 0) return false;
+    final snapshot = _freshSubscriptionSnapshot(token);
+    final balance = snapshot?.anlas;
+    return balance != null && balance < estimatedCost;
   }
 
   void _handleGenerationCommandFinished({
@@ -905,6 +1023,13 @@ class GenerationPageViewmodel extends ChangeNotifier {
 
   void _tryFinalizeBatch(_BatchAccounting batch) {
     if (!batch.stopped || batch.activeRequests != 0) return;
+    final successfulTokens = batch.successCounts.entries
+        .where((entry) => entry.value > 0)
+        .map((entry) => entry.key);
+    if (successfulTokens
+        .any((token) => !batch.lastCommands.containsKey(token))) {
+      return;
+    }
     batch.finalization ??= _finalizeBatchBalances(batch);
   }
 
@@ -928,13 +1053,18 @@ class GenerationPageViewmodel extends ChangeNotifier {
           ? starting - remaining
           : null;
       final successCount = batch.successCounts[token] ?? 0;
+      final showPerAccountBatchBreakdown = batch.tokens.length > 1;
       command.value = command.value.copyWith(
-        anlasCost: actual != null && successCount == 1
-            ? actual
-            : command.value.anlasCost,
-        anlasCostIsEstimated: !(actual != null && successCount == 1),
+        anlasCost:
+            !showPerAccountBatchBreakdown && actual != null && successCount == 1
+                ? actual
+                : command.value.anlasCost,
+        anlasCostIsEstimated: showPerAccountBatchBreakdown
+            ? command.value.anlasCostIsEstimated
+            : !(actual != null && successCount == 1),
         anlasRemaining: remaining,
-        batchAnlasCost: successCount > 1 ? actual : null,
+        batchAnlasCost:
+            showPerAccountBatchBreakdown || successCount > 1 ? actual : null,
       );
     }));
     notifyListeners();
@@ -1112,18 +1242,24 @@ class GenerationPageViewmodel extends ChangeNotifier {
   }
 
   PayloadGenerationResult? _getCachedPayload(int workerIndex) {
+    final task = _logicalTaskForWorker(workerIndex);
+    if (task != null) return task.cachedPayloadResult;
     if (workerIndex == 0) return _cachedPayloadResult;
-    return _extraWorkers[workerIndex]?.cachedPayloadResult;
+    return null;
   }
 
   String? _getCachedRetryFingerprint(int workerIndex) {
+    final task = _logicalTaskForWorker(workerIndex);
+    if (task != null) return task.cachedRetryFingerprint;
     if (workerIndex == 0) return _cachedRetryFingerprint;
-    return _extraWorkers[workerIndex]?.cachedRetryFingerprint;
+    return null;
   }
 
   I2iRequestBatch? _getCachedBatch(int workerIndex) {
+    final task = _logicalTaskForWorker(workerIndex);
+    if (task != null) return task.cachedI2iBatch;
     if (workerIndex == 0) return _cachedI2iBatch;
-    return _extraWorkers[workerIndex]?.cachedI2iBatch;
+    return null;
   }
 
   void _setCachedPayload(
@@ -1132,67 +1268,132 @@ class GenerationPageViewmodel extends ChangeNotifier {
     I2iRequestBatch? batch, {
     String? retryFingerprint,
   }) {
+    final task = _logicalTaskForWorker(workerIndex);
+    if (task != null) {
+      task.cachedPayloadResult = result;
+      task.cachedI2iBatch = batch;
+      task.cachedRetryFingerprint = result == null ? null : retryFingerprint;
+      return;
+    }
     if (workerIndex == 0) {
       _cachedPayloadResult = result;
       _cachedI2iBatch = batch;
       _cachedRetryFingerprint = result == null ? null : retryFingerprint;
       return;
     }
-    final state = _extraWorkers[workerIndex];
-    if (state == null) return;
-    state.cachedPayloadResult = result;
-    state.cachedI2iBatch = batch;
-    state.cachedRetryFingerprint = result == null ? null : retryFingerprint;
   }
 
   int _getCacheRetries(int workerIndex) {
+    final task = _logicalTaskForWorker(workerIndex);
+    if (task != null) return task.cacheRetriesCount;
     if (workerIndex == 0) return _cacheRetriesCount;
-    return _extraWorkers[workerIndex]?.cacheRetriesCount ?? 0;
+    return 0;
   }
 
   void _setCacheRetries(int workerIndex, int value) {
-    if (workerIndex == 0) {
-      _cacheRetriesCount = value;
+    final task = _logicalTaskForWorker(workerIndex);
+    if (task != null) {
+      task.cacheRetriesCount = value;
       return;
     }
-    _extraWorkers[workerIndex]?.cacheRetriesCount = value;
+    if (workerIndex == 0) {
+      _cacheRetriesCount = value;
+    }
+  }
+
+  _LogicalGenerationTask? _logicalTaskForWorker(int workerIndex) {
+    final lease = _leaseForWorker(workerIndex);
+    if (lease == null) return null;
+    return _logicalTasks.putIfAbsent(
+      lease.taskNumber,
+      _LogicalGenerationTask.new,
+    );
+  }
+
+  GenerationLease? _leaseForWorker(int workerIndex) =>
+      workerIndex == 0 ? _primaryLease : _extraWorkers[workerIndex]?.lease;
+
+  bool _prepareScheduledTaskCard(
+    Command<void, InfoCardContent> command,
+    GenerationLease lease,
+    String token,
+  ) {
+    final task = _logicalTasks.putIfAbsent(
+      lease.taskNumber,
+      _LogicalGenerationTask.new,
+    );
+    final card = task.cardCommand;
+    if (card == null) {
+      task.cardCommand = command;
+      final totalTaskCount = _scheduler?.taskCount ?? 0;
+      commandStatus.setProgress(
+        command,
+        taskNumber: lease.taskNumber,
+        totalTaskCount: totalTaskCount == 0 ? null : totalTaskCount,
+      );
+      return true;
+    }
+    command.isExecuting.addListener(() {
+      if (command.isExecuting.value) return;
+      final content = command.value;
+      if (content.title.isEmpty && content.imageBytes == null) return;
+      card.value = content;
+      final batch = _activeBatch;
+      if (content.imageBytes != null && batch != null) {
+        batch.lastCommands[token] = card;
+      }
+      notifyListeners();
+    });
+    return false;
+  }
+
+  int _recordScheduledFailure(
+    int workerIndex,
+    GenerationFailureResult failure,
+  ) {
+    if (workerIndex == 0) {
+      _primaryConsecutiveFailures = failure.consecutiveFailureCount;
+      _primaryWorkerPaused = failure.workerPaused;
+    } else {
+      final state = _extraWorkers[workerIndex];
+      state?.consecutiveFailures = failure.consecutiveFailureCount;
+      state?.paused = failure.workerPaused;
+    }
+    return failure.consecutiveFailureCount;
   }
 
   void _recordAttemptSuccess(int workerIndex) {
     if (workerIndex == 0) {
-      _consecutiveTransientFailures = 0;
-      _primaryWorkerHalted = false;
+      _primaryConsecutiveFailures = 0;
+      _primaryWorkerPaused = false;
       return;
     }
     final state = _extraWorkers[workerIndex];
     if (state == null) return;
-    state.consecutiveTransientFailures = 0;
-    state.halted = false;
+    state.consecutiveFailures = 0;
+    state.paused = false;
   }
 
-  int _recordAttemptFailure(int workerIndex, Object error) {
-    final transient = error is NovelAiApiException && error.isTransient;
+  int _recordAttemptFailure(int workerIndex) {
     if (workerIndex == 0) {
-      _consecutiveTransientFailures =
-          transient ? _consecutiveTransientFailures + 1 : 0;
-      return _consecutiveTransientFailures;
+      _primaryConsecutiveFailures++;
+      return _primaryConsecutiveFailures;
     }
     final state = _extraWorkers[workerIndex];
     if (state == null) return 0;
-    state.consecutiveTransientFailures =
-        transient ? state.consecutiveTransientFailures + 1 : 0;
-    return state.consecutiveTransientFailures;
+    state.consecutiveFailures++;
+    return state.consecutiveFailures;
   }
 
-  Duration _transientBackoff(int consecutiveFailures) {
+  Duration _failureBackoff(int consecutiveFailures) {
     if (consecutiveFailures >= 2) return const Duration(seconds: 15);
     if (consecutiveFailures == 1) return const Duration(seconds: 5);
     return Duration.zero;
   }
 
-  bool get _allWorkersHalted =>
-      _primaryWorkerHalted &&
-      _extraWorkers.values.every((state) => state.halted);
+  bool get _allWorkersPaused =>
+      _primaryWorkerPaused &&
+      _extraWorkers.values.every((state) => state.paused);
 
   void nextCommand() {
     if (!commandStatus.isGenerationActive.value) return;
@@ -1201,8 +1402,17 @@ class GenerationPageViewmodel extends ChangeNotifier {
     // Skip if active command exists
     if (currentCommand != null && currentCommand!.isExecuting.value) return;
 
-    // Create command and attach post-command operations
-    final command = createGenerationCommand(workerIndex: 0);
+    final lease = _scheduler?.claim('0');
+    if (_scheduler != null && lease == null) {
+      _finishScheduledBatchIfNeeded();
+      return;
+    }
+    _primaryLease = lease;
+    final command = lease == null
+        ? createGenerationCommand(workerIndex: 0)
+        : createScheduledGenerationCommand(workerIndex: 0, lease: lease);
+    final addTaskCard = lease == null ||
+        _prepareScheduledTaskCard(command, lease, _tokenForWorker(0));
     command.isExecuting.addListener(() {
       notifyListeners();
       // Only update after execution
@@ -1213,22 +1423,31 @@ class GenerationPageViewmodel extends ChangeNotifier {
 
     // Execute command
     currentCommand = command;
-    addAndRunCommand(command);
+    if (addTaskCard) {
+      addAndRunCommand(command);
+    } else {
+      command();
+    }
   }
 
   /// Runs one Director Tool against its source image. These go to the
   /// augment-image endpoint; they are billed by pixel count, and the Opus
   /// free allowance does not apply.
-  void runDirectorTool() {
-    if (commandStatus.isGenerationActive.value) return;
-    if (currentCommand != null && currentCommand!.isExecuting.value) return;
+  Future<bool> runDirectorTool() async {
+    if (_isPreparingDirector || _isPreparingEnhance) return false;
+    if (commandStatus.isGenerationActive.value) return false;
+    if (currentCommand != null && currentCommand!.isExecuting.value) {
+      return false;
+    }
     final config = payloadConfig.directorToolConfig;
-    if (!config.hasImage) return;
+    final imageBytes = config.imageBytes;
+    if (imageBytes == null) return false;
 
     // Capture one immutable request snapshot at the click boundary. Response
     // handling must not be reclassified if the user prepares another tool or
     // image while this request is in flight.
-    final payload = config.getPayload();
+    final requestRevision = config.requestRevision;
+    final requestParameters = config.getRequestParameters();
     final toolType = config.type;
     final toolName = config.displayName;
     final sourceWidth = config.width;
@@ -1244,6 +1463,42 @@ class GenerationPageViewmodel extends ChangeNotifier {
     final debugApiEnabled = settings.debugApiEnabled;
     final requestTimestamp = DateTime.now();
     commandStatus.generationTimestamp = requestTimestamp;
+
+    _isPreparingDirector = true;
+    _directorPreparationError = null;
+    notifyListeners();
+    late final Map<String, dynamic> payload;
+    late final int requestWidth;
+    late final int requestHeight;
+    try {
+      await _preparationFeedbackBarrier();
+      final prepared = await _prepareDirectorToolRequest(
+        imageBytes: imageBytes,
+        width: sourceWidth,
+        height: sourceHeight,
+      );
+      final currentConfig = payloadConfig.directorToolConfig;
+      if (!identical(currentConfig, config) ||
+          currentConfig.requestRevision != requestRevision ||
+          commandStatus.isGenerationActive.value ||
+          (currentCommand?.isExecuting.value ?? false)) {
+        return false;
+      }
+      requestWidth = prepared.width;
+      requestHeight = prepared.height;
+      payload = <String, dynamic>{
+        ...requestParameters,
+        'width': requestWidth,
+        'height': requestHeight,
+        'image': prepared.imageB64,
+      };
+    } catch (error) {
+      _directorPreparationError = error;
+      return false;
+    } finally {
+      _isPreparingDirector = false;
+      notifyListeners();
+    }
 
     var additionalResults = const <InfoCardContent>[];
     int? startingBalance;
@@ -1279,8 +1534,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
         final info = Map<String, dynamic>.from(payload)..remove('image');
         final estimatedCost = estimateDirectorToolAnlas(
           tool: toolType,
-          width: sourceWidth,
-          height: sourceHeight,
+          width: requestWidth,
+          height: requestHeight,
         );
         final results = <InfoCardContent>[];
         for (final (index, rawBytes) in responseImages.indexed) {
@@ -1362,11 +1617,12 @@ class GenerationPageViewmodel extends ChangeNotifier {
     lastDirectorCommand = command;
     currentCommand = command;
     addAndRunCommand(command);
+    return true;
   }
 
   void _addCompletedResult(InfoCardContent content) {
     while (commandList.length >= infoCardContentListLength) {
-      commandList.removeAt(0);
+      commandStatus.removeProgress(commandList.removeAt(0));
     }
     commandList.add(Command.createAsyncNoParam(
       () async => content,
@@ -1400,7 +1656,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
   /// destination's own source image, at the preset strength/noise and the
   /// magnified size. Returns false when busy or without a source image.
   Future<bool> runEnhanceGeneration() async {
-    if (_isPreparingEnhance || commandStatus.isGenerationActive.value) {
+    if (_isPreparingEnhance ||
+        _isPreparingDirector ||
+        commandStatus.isGenerationActive.value) {
       return false;
     }
     if (currentCommand != null && currentCommand!.isExecuting.value) {
@@ -1416,24 +1674,23 @@ class GenerationPageViewmodel extends ChangeNotifier {
     final strength = enhance.strength;
     final noise = enhance.noise;
     final target = enhance.targetSize;
+    final generationFingerprint = _enhancePreparationFingerprint();
 
     _isPreparingEnhance = true;
+    _enhancePreparationError = null;
     notifyListeners();
     try {
-      // A throwaway I2IConfig reuses the img2img plan builder without touching
-      // the real Img2Img base image. Heavy pixel work runs off the UI isolate.
-      final requestConfig = I2IConfig(
-        strength: strength,
-        noise: noise,
-      );
-      requestConfig.setImage(Uint8List.fromList(bytes));
-      final plan = await PrepareI2iRequestUseCase(
-        config: requestConfig,
-      ).preparePlainImg2ImgInBackground(
+      await _preparationFeedbackBarrier();
+      final plan = await preparePlainImg2ImgBytesInBackground(
+        imageBytes: bytes,
+        sourceWidth: enhance.width,
+        sourceHeight: enhance.height,
         targetWidth: target.width,
         targetHeight: target.height,
+        strength: strength,
+        noise: noise,
+        addOriginalImage: false,
       );
-      if (plan == null) return false;
       final currentEnhance = payloadConfig.enhanceConfig;
       if (!identical(currentEnhance, enhance) ||
           !currentEnhance.hasImage ||
@@ -1443,7 +1700,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
           currentEnhance.showIndividualSettings != showIndividualSettings ||
           currentEnhance.strength != strength ||
           currentEnhance.noise != noise ||
-          currentEnhance.targetSize != target) {
+          currentEnhance.targetSize != target ||
+          _enhancePreparationFingerprint() != generationFingerprint) {
         return false;
       }
 
@@ -1466,7 +1724,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
       _isPreparingEnhance = false;
       addAndRunCommand(command);
       return true;
-    } catch (_) {
+    } catch (error) {
+      _enhancePreparationError = error;
       return false;
     } finally {
       if (_isPreparingEnhance) {
@@ -1481,24 +1740,66 @@ class GenerationPageViewmodel extends ChangeNotifier {
     notifyListeners();
   }
 
+  String _enhancePreparationFingerprint() {
+    final settings = payloadConfig.settings;
+    return jsonEncode({
+      'generation': _generationRetryFingerprint(),
+      'api_key': settings.apiKey,
+      'proxy': settings.proxy,
+      'debug_api_enabled': settings.debugApiEnabled,
+      'debug_api_path': settings.debugApiPath,
+      'output_folder_path': settings.outputFolderPath,
+      'metadata_erase_enabled': settings.metadataEraseEnabled,
+      'custom_metadata_enabled': settings.customMetadataEnabled,
+      'custom_metadata_content': settings.customMetadataContent,
+    });
+  }
+
   void _nextCommandForExtraWorker(int workerIndex) {
     if (!commandStatus.isGenerationActive.value) return;
     final state = _extraWorkers[workerIndex];
     if (state == null) return;
     if (state.command != null && state.command!.isExecuting.value) return;
 
-    final command = createGenerationCommand(workerIndex: workerIndex);
+    final lease = _scheduler?.claim(workerIndex.toString());
+    if (_scheduler != null && lease == null) {
+      _finishScheduledBatchIfNeeded();
+      return;
+    }
+    state.lease = lease;
+    final command = lease == null
+        ? createGenerationCommand(workerIndex: workerIndex)
+        : createScheduledGenerationCommand(
+            workerIndex: workerIndex,
+            lease: lease,
+          );
+    final addTaskCard = lease == null ||
+        _prepareScheduledTaskCard(
+          command,
+          lease,
+          _tokenForWorker(workerIndex),
+        );
     command.isExecuting.addListener(() {
       notifyListeners();
       if (command.isExecuting.value) return;
       _continueExtraWorkerAfterAttempt(workerIndex);
     });
     state.command = command;
-    addAndRunCommand(command);
+    if (addTaskCard) {
+      addAndRunCommand(command);
+    } else {
+      command();
+    }
   }
 
   void _continueExtraWorkerAfterAttempt(int workerIndex) {
     if (!commandStatus.isGenerationActive.value) return;
+
+    final schedulerStatus = _scheduler?.status;
+    if (schedulerStatus?.stopRequested == true) {
+      if (schedulerStatus!.finished) stopGeneration();
+      return;
+    }
 
     final generationCount = payloadConfig.settings.generationCount;
     if (generationCount != 0 &&
@@ -1509,16 +1810,16 @@ class GenerationPageViewmodel extends ChangeNotifier {
 
     final state = _extraWorkers[workerIndex];
     if (state == null) return;
-    if (state.consecutiveTransientFailures >= 3) {
-      state.halted = true;
-      if (_allWorkersHalted) stopGeneration();
+    if (state.consecutiveFailures >= 5) {
+      state.paused = true;
+      if (_allWorkersPaused) stopGeneration();
       return;
     }
     state.intervalTimer?.cancel();
     final configuredDelay = Duration(
       seconds: payloadConfig.settings.generationIntervalSec,
     );
-    final backoff = _transientBackoff(state.consecutiveTransientFailures);
+    final backoff = _failureBackoff(state.consecutiveFailures);
     final delay =
         configuredDelay.compareTo(backoff) >= 0 ? configuredDelay : backoff;
     if (delay == Duration.zero) {
@@ -1551,6 +1852,13 @@ class GenerationPageViewmodel extends ChangeNotifier {
     _extraWorkers.clear();
   }
 
+  void _cancelWorkerIntervals() {
+    for (final state in _extraWorkers.values) {
+      state.intervalTimer?.cancel();
+      state.intervalTimer = null;
+    }
+  }
+
   void startGeneration() {
     final paramConfig = payloadConfig.paramConfig;
     if (!paramConfig.randomSeed && paramConfig.seed == null) {
@@ -1559,8 +1867,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
     }
     _generationIntervalTimer?.cancel();
     commandStatus.isWaitingForNextGeneration.value = false;
-    _consecutiveTransientFailures = 0;
-    _primaryWorkerHalted = false;
+    _primaryConsecutiveFailures = 0;
+    _primaryWorkerPaused = false;
     if (!payloadConfig.settings.rememberSequentialProgress) {
       payloadConfig.resetSequentialState();
       _cachedPayloadResult = null;
@@ -1570,9 +1878,20 @@ class GenerationPageViewmodel extends ChangeNotifier {
     }
     _clearExtraWorkers();
     final tokens = payloadConfig.settings.effectiveApiTokens;
-    _activeTokens = tokens.map((entry) => entry.token).toList(growable: false);
+    final generationCount = payloadConfig.settings.generationCount;
+    var workerCount = tokens.length;
+    if (generationCount != 0) workerCount = min(workerCount, generationCount);
+    final activeEntries = tokens.take(workerCount).toList(growable: false);
+    _activeTokens =
+        activeEntries.map((entry) => entry.token).toList(growable: false);
     _activeTokenLabels =
-        tokens.map((entry) => entry.label).toList(growable: false);
+        activeEntries.map((entry) => entry.label).toList(growable: false);
+    if (_activeTokens.isEmpty) return;
+    _logicalTasks.clear();
+    _scheduler = GenerationScheduler(
+      taskCount: generationCount,
+      workerIds: List.generate(workerCount, (index) => index.toString()),
+    );
     final batch = _BatchAccounting(
       List<String>.of(_activeTokens),
       reconcileBalances: !payloadConfig.settings.debugApiEnabled,
@@ -1595,11 +1914,27 @@ class GenerationPageViewmodel extends ChangeNotifier {
     _startExtraWorkers();
   }
 
+  void _finishScheduledBatchIfNeeded() {
+    if (_scheduler?.status.finished == true) {
+      stopGeneration();
+    }
+  }
+
   void stopGeneration() {
+    final scheduler = _scheduler;
+    scheduler?.requestStop();
     _generationIntervalTimer?.cancel();
     _generationIntervalTimer = null;
-    _clearExtraWorkers();
+    _cancelWorkerIntervals();
     commandStatus.isWaitingForNextGeneration.value = false;
+    if (scheduler != null && !scheduler.status.finished) {
+      return;
+    }
+    _completeGenerationStop();
+  }
+
+  void _completeGenerationStop() {
+    _clearExtraWorkers();
     commandStatus.isGenerationActive.value = false;
     final batch = _activeBatch;
     _activeBatch = null;
@@ -1607,6 +1942,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
       batch.stopped = true;
       if (batch.reconcileBalances) _tryFinalizeBatch(batch);
     }
+    _scheduler = null;
+    _primaryLease = null;
   }
 
   void scheduleNextGeneration({Duration minimumDelay = Duration.zero}) {
@@ -1636,19 +1973,25 @@ class GenerationPageViewmodel extends ChangeNotifier {
   void continueAfterGenerationAttempt() {
     if (!commandStatus.isGenerationActive.value) return;
 
+    final schedulerStatus = _scheduler?.status;
+    if (schedulerStatus?.stopRequested == true) {
+      if (schedulerStatus!.finished) stopGeneration();
+      return;
+    }
+
     final generationCount = payloadConfig.settings.generationCount;
     if (generationCount != 0 &&
         commandStatus.currentGenerationCount >= generationCount) {
       stopGeneration();
       return;
     }
-    if (_consecutiveTransientFailures >= 3) {
-      _primaryWorkerHalted = true;
-      if (_allWorkersHalted) stopGeneration();
+    if (_primaryConsecutiveFailures >= 5) {
+      _primaryWorkerPaused = true;
+      if (_allWorkersPaused) stopGeneration();
       return;
     }
     scheduleNextGeneration(
-      minimumDelay: _transientBackoff(_consecutiveTransientFailures),
+      minimumDelay: _failureBackoff(_primaryConsecutiveFailures),
     );
   }
 

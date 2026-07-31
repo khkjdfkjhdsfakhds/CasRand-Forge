@@ -4,6 +4,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:nai_casrand/data/models/director_tool_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/use_cases/anlas_cost.dart';
+import 'package:nai_casrand/data/use_cases/prepare_director_tool_request_use_case.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
 
 class DirectorPageViewmodel extends ChangeNotifier {
@@ -79,10 +80,11 @@ class DirectorPageViewmodel extends ChangeNotifier {
   /// Anlas [tool] would consume for the loaded source image.
   int? costFor(String tool) {
     if (!config.hasImage) return null;
+    final requestSize = directorToolRequestSize(config.width, config.height);
     return estimateDirectorToolAnlas(
       tool: tool,
-      width: config.width,
-      height: config.height,
+      width: requestSize.width,
+      height: requestSize.height,
     );
   }
 

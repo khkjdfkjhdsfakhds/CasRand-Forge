@@ -5,6 +5,8 @@ import 'package:nai_casrand/data/models/navigation_configuration.dart';
 
 import '../../core/constants/defaults.dart';
 
+const int maxParallelApiTokens = 6;
+
 class Settings {
   // Don't show again
   String welcomeMessageVersion;
@@ -24,11 +26,16 @@ class Settings {
   /// out. Automatic metadata/Enhance activation still reports the new mode.
   bool confirmPromptModeSwitch;
 
-  // API key (legacy single-token field, kept in sync with [apiTokens])
+  // API key configured on the main settings page. This remains authoritative.
   String apiKey;
 
-  /// Multi-token support. Empty list means "use [apiKey] only".
+  /// Ordered account list shown by the multi-token manager. The primary entry
+  /// mirrors [apiKey], but keeps its own position and enabled state.
   List<ApiTokenConfig> apiTokens;
+
+  /// Whether generation may use the enabled entries in [apiTokens]. When
+  /// disabled, generation follows the legacy single-account path via [apiKey].
+  bool parallelApiEnabled;
 
   /// Subscription tier of the active account (3 = Opus), refreshed from the
   /// balance query. Drives the "free under Opus" cost estimate.
@@ -85,28 +92,111 @@ class Settings {
     this.subscriptionTier = 0,
     this.subscriptionActive = false,
     this.subscriptionStatusKnown = false,
+    this.parallelApiEnabled = false,
     List<ApiTokenConfig>? apiTokens,
   })  : navigation = navigation ?? NavigationConfiguration.fromJson({}),
-        apiTokens = apiTokens ?? [];
-
-  /// Tokens that generation should use, in order. Falls back to the legacy
-  /// [apiKey] when no explicit token entries exist.
-  List<ApiTokenConfig> get effectiveApiTokens {
-    final active = apiTokens
-        .where((entry) => entry.enabled && entry.token.isNotEmpty)
-        .toList(growable: false);
-    if (active.isNotEmpty) return active;
-    return [ApiTokenConfig(label: 'Token 1', token: apiKey, enabled: true)];
+        apiTokens = apiTokens ?? [] {
+    normalizeApiTokens();
   }
 
-  /// Keeps the legacy single-token field aligned with the token list so old
-  /// exports and older app versions stay compatible.
-  void syncLegacyApiKey() {
-    final active = apiTokens
+  /// Tokens that generation should use, in user-defined priority order.
+  List<ApiTokenConfig> get effectiveApiTokens {
+    if (!parallelApiEnabled) {
+      if (apiKey.trim().isEmpty) return const [];
+      final primary = apiTokens.where((entry) => entry.isPrimary).firstOrNull;
+      return [
+        ApiTokenConfig(
+          label: primary?.label ?? 'Main API',
+          token: apiKey.trim(),
+          enabled: true,
+          isPrimary: true,
+        ),
+      ];
+    }
+    return apiTokens
         .where((entry) => entry.enabled && entry.token.isNotEmpty)
+        .take(maxParallelApiTokens)
         .toList(growable: false);
-    if (active.isNotEmpty) {
-      apiKey = active.first.token;
+  }
+
+  /// Replaces the primary token in place when the main settings value changes.
+  /// A matching additional entry is folded into the primary entry.
+  void updatePrimaryApiKey(String value) {
+    final nextToken = value.trim();
+    final primaryIndex = apiTokens.indexWhere((entry) => entry.isPrimary);
+    final previous = primaryIndex == -1 ? null : apiTokens[primaryIndex];
+    final insertIndex = primaryIndex == -1 ? 0 : primaryIndex;
+    if (primaryIndex != -1) apiTokens.removeAt(primaryIndex);
+    apiTokens.removeWhere((entry) => entry.token.trim() == nextToken);
+    apiKey = nextToken;
+    if (nextToken.isNotEmpty) {
+      apiTokens.insert(
+        insertIndex.clamp(0, apiTokens.length),
+        ApiTokenConfig(
+          label: previous?.label ?? 'Main API',
+          token: nextToken,
+          enabled: previous?.enabled ?? true,
+          isPrimary: true,
+        ),
+      );
+    }
+    normalizeApiTokens();
+  }
+
+  /// Repairs old configurations, removes duplicate token values, preserves the
+  /// user's order, and guarantees at most one primary entry.
+  void normalizeApiTokens() {
+    apiKey = apiKey.trim();
+    final oldPrimaryIndex = apiTokens.indexWhere((entry) => entry.isPrimary);
+    final oldPrimary =
+        oldPrimaryIndex == -1 ? null : apiTokens[oldPrimaryIndex];
+    final normalized = <ApiTokenConfig>[];
+    final seen = <String>{};
+    for (final entry in apiTokens) {
+      final token = entry.token.trim();
+      if (token.isEmpty || !seen.add(token)) continue;
+      normalized.add(
+        ApiTokenConfig(
+          label: entry.label.trim().isEmpty ? 'Token' : entry.label.trim(),
+          token: token,
+          enabled: entry.enabled,
+          isPrimary: false,
+        ),
+      );
+    }
+
+    if (apiKey.isNotEmpty) {
+      final matchingIndex = normalized.indexWhere(
+        (entry) => entry.token == apiKey,
+      );
+      if (matchingIndex != -1) {
+        normalized[matchingIndex].isPrimary = true;
+      } else {
+        normalized.insert(
+          oldPrimaryIndex == -1
+              ? 0
+              : oldPrimaryIndex.clamp(0, normalized.length),
+          ApiTokenConfig(
+            label: oldPrimary?.label ?? 'Main API',
+            token: apiKey,
+            enabled: oldPrimary?.enabled ?? true,
+            isPrimary: true,
+          ),
+        );
+      }
+    }
+
+    var enabledCount = 0;
+    for (final entry in normalized) {
+      if (!entry.enabled) continue;
+      enabledCount++;
+      if (enabledCount > maxParallelApiTokens) entry.enabled = false;
+    }
+    apiTokens
+      ..clear()
+      ..addAll(normalized);
+    if (!apiTokens.any((entry) => entry.enabled)) {
+      parallelApiEnabled = false;
     }
   }
 
@@ -118,10 +208,19 @@ class Settings {
             .map(ApiTokenConfig.fromJson)
             .toList()
         : <ApiTokenConfig>[];
+    final apiKey = (json['api_key'] ?? 'pst-abcd') as String;
+    final hasEnabledAdditionalToken = apiTokens.any(
+      (entry) =>
+          entry.enabled &&
+          entry.token.trim().isNotEmpty &&
+          entry.token != apiKey,
+    );
     return Settings(
       welcomeMessageVersion: json['welcome_message_version'] ?? '',
-      apiKey: json['api_key'] ?? 'pst-abcd',
+      apiKey: apiKey,
       apiTokens: apiTokens,
+      parallelApiEnabled:
+          json['parallel_api_enabled'] ?? hasEnabledAdditionalToken,
       resultDisplayMode: json['classic_grid_default_migrated'] == true
           ? (json['result_display_mode'] == 'waterfall'
               ? 'waterfall'
@@ -154,6 +253,7 @@ class Settings {
       'welcome_message_version': welcomeMessageVersion,
       'api_key': apiKey,
       'api_tokens': apiTokens.map((entry) => entry.toJson()).toList(),
+      'parallel_api_enabled': parallelApiEnabled,
       'result_display_mode': resultDisplayMode,
       'classic_grid_default_migrated': true,
       ...navigation.toJson(),

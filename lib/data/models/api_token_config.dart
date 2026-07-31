@@ -3,11 +3,13 @@ class ApiTokenConfig {
   String label;
   String token;
   bool enabled;
+  bool isPrimary;
 
   ApiTokenConfig({
     required this.label,
     required this.token,
     this.enabled = true,
+    this.isPrimary = false,
   });
 
   Map<String, dynamic> toJson() {
@@ -15,6 +17,7 @@ class ApiTokenConfig {
       'label': label,
       'token': token,
       'enabled': enabled,
+      'is_primary': isPrimary,
     };
   }
 
@@ -23,6 +26,7 @@ class ApiTokenConfig {
       label: json['label'] ?? '',
       token: json['token'] ?? '',
       enabled: json['enabled'] ?? true,
+      isPrimary: json['is_primary'] ?? false,
     );
   }
 

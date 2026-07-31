@@ -27,14 +27,13 @@ class InfoCard extends StatelessWidget {
       listenable: command.isExecuting,
       builder: (context, child) {
         if (command.isExecuting.value) {
-          final current = commandStatus.currentGenerationCount.toString();
-          final total = settings.generationCount != 0
-              ? settings.generationCount.toString()
-              : '∞';
           // Loading
           return ListTile(
             leading: const CircularProgressIndicator(),
-            title: Text('Requesting $current/$total ...'),
+            title: Text(commandStatus.requestingLabel(
+              command,
+              configuredTotal: settings.generationCount,
+            )),
           );
         } else {
           // Result

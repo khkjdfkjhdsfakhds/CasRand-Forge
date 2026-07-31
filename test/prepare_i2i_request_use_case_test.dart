@@ -54,8 +54,10 @@ Uint8List maskPngWithWhiteRect(
 void main() {
   setUp(PrepareI2iRequestUseCase.clearCache);
 
-  test('img2img plan cover-fits the base image to the target size', () async {
-    final config = I2IConfig()..setImage(solidPng(500, 300, 200, 30, 30));
+  test('img2img plan preserves source bytes while requesting the target size',
+      () async {
+    final original = solidPng(500, 300, 200, 30, 30);
+    final config = I2IConfig()..setImage(original);
     final plan = await PrepareI2iRequestUseCase(config: config)(
       targetWidth: 832,
       targetHeight: 1216,
@@ -65,9 +67,7 @@ void main() {
     expect(plan.width, 832);
     expect(plan.height, 1216);
     expect(plan.composite, isNull);
-    final sent = img.decodePng(base64Decode(plan.imageB64))!;
-    expect(sent.width, 832);
-    expect(sent.height, 1216);
+    expect(base64Decode(plan.imageB64), original);
   });
 
   test('img2img plan sends original bytes when size already matches', () async {
@@ -77,6 +77,21 @@ void main() {
       targetWidth: 832,
       targetHeight: 1216,
     );
+    expect(base64Decode(plan!.imageB64), original);
+  });
+
+  test('img2img plan preserves JPEG bytes instead of inflating them to PNG',
+      () async {
+    final source = img.Image(width: 832, height: 1216, numChannels: 3);
+    img.fill(source, color: img.ColorRgb8(10, 200, 10));
+    final original = Uint8List.fromList(img.encodeJpg(source, quality: 92));
+    final config = I2IConfig()..setImage(original);
+
+    final plan = await PrepareI2iRequestUseCase(config: config)(
+      targetWidth: 832,
+      targetHeight: 1216,
+    );
+
     expect(base64Decode(plan!.imageB64), original);
   });
 

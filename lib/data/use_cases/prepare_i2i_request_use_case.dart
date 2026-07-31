@@ -9,6 +9,8 @@ import 'package:nai_casrand/data/use_cases/autocrop_planner.dart';
 
 class _PlainI2iPrepareInput {
   final Uint8List imageBytes;
+  final int sourceWidth;
+  final int sourceHeight;
   final int targetWidth;
   final int targetHeight;
   final double strength;
@@ -17,6 +19,8 @@ class _PlainI2iPrepareInput {
 
   const _PlainI2iPrepareInput({
     required this.imageBytes,
+    required this.sourceWidth,
+    required this.sourceHeight,
     required this.targetWidth,
     required this.targetHeight,
     required this.strength,
@@ -33,44 +37,8 @@ class _EncodedInpaintMasks {
 }
 
 I2iRequestPlan _preparePlainI2iPlan(_PlainI2iPrepareInput input) {
-  final decoded = img.decodeImage(input.imageBytes);
-  if (decoded == null) {
-    throw Exception('Failed to decode img2img base image.');
-  }
-  final base = img.bakeOrientation(decoded);
-  Uint8List pngBytes;
-  if (base.width == input.targetWidth && base.height == input.targetHeight) {
-    final raw = input.imageBytes;
-    final alreadyPng = raw.length > 8 &&
-        raw[0] == 0x89 &&
-        raw[1] == 0x50 &&
-        raw[2] == 0x4E &&
-        raw[3] == 0x47;
-    pngBytes = alreadyPng ? raw : Uint8List.fromList(img.encodePng(base));
-  } else {
-    final scale = max(
-      input.targetWidth / base.width,
-      input.targetHeight / base.height,
-    );
-    final scaledWidth = max(input.targetWidth, (base.width * scale).round());
-    final scaledHeight = max(input.targetHeight, (base.height * scale).round());
-    var resized = img.copyResize(
-      base,
-      width: scaledWidth,
-      height: scaledHeight,
-      interpolation: img.Interpolation.cubic,
-    );
-    resized = img.copyCrop(
-      resized,
-      x: ((scaledWidth - input.targetWidth) / 2).round(),
-      y: ((scaledHeight - input.targetHeight) / 2).round(),
-      width: input.targetWidth,
-      height: input.targetHeight,
-    );
-    pngBytes = Uint8List.fromList(img.encodePng(resized));
-  }
   return I2iRequestPlan(
-    imageB64: base64Encode(pngBytes),
+    imageB64: base64Encode(input.imageBytes),
     maskB64: null,
     blendMaskB64: null,
     width: input.targetWidth,
@@ -79,10 +47,36 @@ I2iRequestPlan _preparePlainI2iPlan(_PlainI2iPrepareInput input) {
     noise: input.noise,
     addOriginalImage: input.addOriginalImage,
     composite: null,
-    summary: 'img2img ${base.width}x${base.height} -> '
+    summary: 'img2img ${input.sourceWidth}x${input.sourceHeight} -> '
         '${input.targetWidth}x${input.targetHeight}, '
         'strength ${input.strength.toStringAsFixed(2)}, '
         'noise ${input.noise.toStringAsFixed(2)}',
+  );
+}
+
+Future<I2iRequestPlan> preparePlainImg2ImgBytesInBackground({
+  required Uint8List imageBytes,
+  required int sourceWidth,
+  required int sourceHeight,
+  required int targetWidth,
+  required int targetHeight,
+  required double strength,
+  required double noise,
+  required bool addOriginalImage,
+}) {
+  return compute(
+    _preparePlainI2iPlan,
+    _PlainI2iPrepareInput(
+      imageBytes: imageBytes,
+      sourceWidth: sourceWidth,
+      sourceHeight: sourceHeight,
+      targetWidth: targetWidth,
+      targetHeight: targetHeight,
+      strength: strength,
+      noise: noise,
+      addOriginalImage: addOriginalImage,
+    ),
+    debugLabel: 'prepare-plain-img2img',
   );
 }
 
@@ -426,35 +420,12 @@ class PrepareI2iRequestUseCase {
     );
   }
 
-  /// Prepares a plain img2img request on a background isolate. Enhance uses
-  /// this path so decode, resize, PNG encode and base64 conversion never block
-  /// the UI isolate before the request spinner can appear.
-  Future<I2iRequestPlan?> preparePlainImg2ImgInBackground({
-    required int targetWidth,
-    required int targetHeight,
-  }) async {
-    final bytes = config.imageBytes;
-    if (bytes == null || config.hasInpaintSelection) return null;
-    return compute(
-      _preparePlainI2iPlan,
-      _PlainI2iPrepareInput(
-        imageBytes: bytes,
-        targetWidth: targetWidth,
-        targetHeight: targetHeight,
-        strength: config.strength,
-        noise: config.noise,
-        addOriginalImage: config.addOriginalImage,
-      ),
-      debugLabel: 'prepare-enhance-img2img',
-    );
-  }
-
   /// Builds (or returns a cached) single request plan. For a split mask this
   /// returns the first tile only; use [planBatch] for the whole batch.
   ///
   /// [targetWidth] / [targetHeight] is the generation size selected for this
-  /// request; plain img2img adapts the image to it, while inpainting derives
-  /// its own request size and only uses it for the area-cap tier.
+  /// request; plain img2img preserves the source bytes while requesting those
+  /// output dimensions, while inpainting derives its own request size.
   Future<I2iRequestPlan?> call({
     required int targetWidth,
     required int targetHeight,
@@ -477,7 +448,16 @@ class PrepareI2iRequestUseCase {
 
     final plan = config.hasInpaintSelection
         ? _buildInpaintBatch(targetWidth, targetHeight).plans.first
-        : _buildImg2ImgPlan(targetWidth, targetHeight);
+        : await preparePlainImg2ImgBytesInBackground(
+            imageBytes: config.imageBytes!,
+            sourceWidth: config.width,
+            sourceHeight: config.height,
+            targetWidth: targetWidth,
+            targetHeight: targetHeight,
+            strength: config.strength,
+            noise: config.noise,
+            addOriginalImage: config.addOriginalImage,
+          );
     _planCache.add(_PlanCacheEntry(
       configId: configId,
       revision: config.planRevision,
@@ -528,50 +508,6 @@ class PrepareI2iRequestUseCase {
     _decodedMaskConfigId = configId;
     _decodedMaskRevision = config.planRevision;
     return decoded;
-  }
-
-  I2iRequestPlan _buildImg2ImgPlan(int targetWidth, int targetHeight) {
-    final base = _requireBaseImage();
-    String imageB64;
-    if (base.width == targetWidth && base.height == targetHeight) {
-      imageB64 = base64Encode(_pngBytesForOriginal(base));
-    } else {
-      // Cover-fit: scale to fill the target, then center-crop.
-      final scale = max(targetWidth / base.width, targetHeight / base.height);
-      final scaledW = max(targetWidth, (base.width * scale).round());
-      final scaledH = max(targetHeight, (base.height * scale).round());
-      var resized = img.copyResize(
-        base,
-        width: scaledW,
-        height: scaledH,
-        interpolation: img.Interpolation.cubic,
-      );
-      final cropX = ((scaledW - targetWidth) / 2).round();
-      final cropY = ((scaledH - targetHeight) / 2).round();
-      resized = img.copyCrop(
-        resized,
-        x: cropX,
-        y: cropY,
-        width: targetWidth,
-        height: targetHeight,
-      );
-      imageB64 = base64Encode(img.encodePng(resized));
-    }
-    return I2iRequestPlan(
-      imageB64: imageB64,
-      maskB64: null,
-      blendMaskB64: null,
-      width: targetWidth,
-      height: targetHeight,
-      strength: config.strength,
-      noise: config.noise,
-      addOriginalImage: config.addOriginalImage,
-      composite: null,
-      summary: 'img2img ${base.width}x${base.height} -> '
-          '${targetWidth}x$targetHeight, '
-          'strength ${config.strength.toStringAsFixed(2)}, '
-          'noise ${config.noise.toStringAsFixed(2)}',
-    );
   }
 
   /// Builds one focus tile request from its plan.

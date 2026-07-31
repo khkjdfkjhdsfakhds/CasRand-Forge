@@ -232,10 +232,8 @@ void main() {
       expect(find.byKey(const Key('api-token-input')), findsOneWidget);
       expect(find.text('NovelAI API Token (required)'), findsOneWidget);
       expect(find.text('Multiple APIs (optional)'), findsOneWidget);
-      expect(
-        find.textContaining('Leave this unset for normal use'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('1 tokens configured, 1 enabled'),
+          findsOneWidget);
       expect(find.text('Proxy Settings'), findsOneWidget);
       expect(find.byKey(const Key('proxy-settings-input')), findsOneWidget);
       expect(find.byKey(const Key('proxy-detect-button')), findsOneWidget);
@@ -243,6 +241,12 @@ void main() {
       await tester.tap(find.byKey(const Key('api-tokens-optional-tile')));
       await tester.pumpAndSettle();
       expect(find.text('Multi-token concurrency'), findsOneWidget);
+      expect(
+        find.byKey(const Key('token-manager-parallel-switch')),
+        findsOneWidget,
+      );
+      expect(find.text('Main'), findsOneWidget);
+      expect(find.byIcon(Icons.lock_outline), findsOneWidget);
     } finally {
       debugDefaultTargetPlatformOverride = null;
     }

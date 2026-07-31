@@ -35,6 +35,13 @@ class _TestAssetLoader extends AssetLoader {
 
 class _RecordingGenerationViewmodel extends GenerationPageViewmodel {
   int enhanceRuns = 0;
+  bool freezeSubscriptionSnapshot = false;
+
+  @override
+  Future<void> refreshSubscriptionSnapshot() async {
+    if (freezeSubscriptionSnapshot) return;
+    await super.refreshSubscriptionSnapshot();
+  }
 
   @override
   Future<bool> runEnhanceGeneration() async {
@@ -234,6 +241,33 @@ void main() {
     expect(find.byKey(const Key('enhance-run')), findsOneWidget);
     expect(find.textContaining('Enhance once → 1024×1024'), findsOneWidget);
     expect(find.textContaining('·'), findsWidgets);
+  });
+
+  testWidgets('Opus Enhance inside the free window displays zero Anlas', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final payload = GetIt.I<PayloadConfig>();
+    (GetIt.I<GenerationPageViewmodel>() as _RecordingGenerationViewmodel)
+        .freezeSubscriptionSnapshot = true;
+    payload.settings
+      ..subscriptionTier = 3
+      ..subscriptionActive = true
+      ..subscriptionStatusKnown = true;
+    payload.enhanceConfig
+      ..setImage(solidPng(512, 512))
+      ..setScale(2);
+
+    await tester.pumpWidget(
+      localizedApp(EnhancePageView(viewmodel: EnhancePageViewmodel())),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining('Enhance once → 1024×1024 · Est. 0'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('a typical portrait offers 1.5x but not 2x', (tester) async {

@@ -18,6 +18,7 @@ import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
 import 'package:nai_casrand/data/use_cases/autocrop_planner.dart' show CropRect;
 import 'package:nai_casrand/data/use_cases/i2i_request_size.dart';
+import 'package:nai_casrand/data/use_cases/prepare_i2i_request_use_case.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/classic_info_card.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/generation_page_view.dart';
@@ -39,8 +40,38 @@ class _TestAssetLoader extends AssetLoader {
 }
 
 class _NoNetworkGenerationPageViewmodel extends GenerationPageViewmodel {
+  _NoNetworkGenerationPageViewmodel()
+      : super(prepareI2iBatch: _prepareI2iBatchWithoutIsolate);
+
+  @override
+  Future<void> refreshSubscriptionSnapshot() async {}
+
   @override
   void nextCommand() {}
+}
+
+Future<I2iRequestBatch?> _prepareI2iBatchWithoutIsolate({
+  required I2IConfig config,
+  required int targetWidth,
+  required int targetHeight,
+}) async {
+  if (!config.hasImage) return null;
+  final plan = I2iRequestPlan(
+    imageB64: base64Encode(config.imageBytes!),
+    maskB64: null,
+    width: targetWidth,
+    height: targetHeight,
+    strength: config.strength,
+    noise: config.noise,
+    addOriginalImage: config.addOriginalImage,
+    composite: null,
+    summary: 'test img2img',
+  );
+  return I2iRequestBatch(
+    plans: [plan],
+    serial: true,
+    summary: plan.summary,
+  );
 }
 
 late Map<String, dynamic> testTranslations;
@@ -158,6 +189,27 @@ void main() {
     );
     expect(generate.onPressed, isNull);
     expect(find.text('Img2Img Parameters'), findsOneWidget);
+  });
+
+  testWidgets('Opus I2I inside the free window displays zero Anlas', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final payload = GetIt.I<PayloadConfig>();
+    payload.settings
+      ..subscriptionTier = 3
+      ..subscriptionActive = true
+      ..subscriptionStatusKnown = true;
+    payload.i2iConfig.setImage(solidPng(832, 1216));
+    payload.i2iEnabled = true;
+
+    await tester.pumpWidget(
+      localizedApp(I2iPageView(viewmodel: I2iPageViewmodel())),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Generate once  ·  0'), findsOneWidget);
   });
 
   testWidgets('inpaint action overlays the top-right of the import area', (

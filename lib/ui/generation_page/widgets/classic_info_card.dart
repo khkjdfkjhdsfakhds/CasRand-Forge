@@ -30,17 +30,16 @@ class ClassicInfoCard extends StatelessWidget {
       listenable: command.isExecuting,
       builder: (context, child) {
         if (command.isExecuting.value) {
-          final current = commandStatus.currentGenerationCount.toString();
-          final total = settings.generationCount != 0
-              ? settings.generationCount.toString()
-              : '∞';
           return Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 const CircularProgressIndicator(),
                 const SizedBox(height: 12),
-                Text('Requesting $current/$total ...'),
+                Text(commandStatus.requestingLabel(
+                  command,
+                  configuredTotal: settings.generationCount,
+                )),
               ],
             ),
           );

@@ -4,6 +4,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_command/flutter_command.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get_it/get_it.dart';
@@ -25,8 +26,14 @@ import 'package:nai_casrand/data/services/file_service.dart';
 import 'package:nai_casrand/data/use_cases/encode_vibe_use_case.dart';
 import 'package:nai_casrand/data/use_cases/generate_payload_use_case.dart';
 import 'package:nai_casrand/data/use_cases/i2i_request_size.dart';
+import 'package:nai_casrand/data/use_cases/prepare_director_tool_request_use_case.dart';
 import 'package:nai_casrand/data/use_cases/prepare_i2i_request_use_case.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
+import 'package:nai_casrand/ui/generation_page/view_models/generation_scheduler.dart';
+import 'package:nai_casrand/ui/generation_page/widgets/classic_info_card.dart';
+import 'package:nai_casrand/ui/generation_page/widgets/info_card.dart';
+
+Future<void> _skipPreparationFeedbackBarrier() async {}
 
 class _FakeEncodeVibeUseCase extends EncodeVibeUseCase {
   int calls = 0;
@@ -57,6 +64,53 @@ class _FakeEncodeVibeUseCase extends EncodeVibeUseCase {
   }
 }
 
+class _FakePrepareDirectorToolRequestUseCase
+    extends PrepareDirectorToolRequestUseCase {
+  const _FakePrepareDirectorToolRequestUseCase(this.result);
+
+  final PreparedDirectorToolImage result;
+
+  @override
+  Future<PreparedDirectorToolImage> call({
+    required Uint8List imageBytes,
+    required int width,
+    required int height,
+  }) async =>
+      result;
+}
+
+class _PassthroughPrepareDirectorToolRequestUseCase
+    extends PrepareDirectorToolRequestUseCase {
+  const _PassthroughPrepareDirectorToolRequestUseCase();
+
+  @override
+  Future<PreparedDirectorToolImage> call({
+    required Uint8List imageBytes,
+    required int width,
+    required int height,
+  }) async {
+    return PreparedDirectorToolImage(
+      imageB64: base64Encode(imageBytes),
+      width: width,
+      height: height,
+    );
+  }
+}
+
+class _FailingPrepareDirectorToolRequestUseCase
+    extends PrepareDirectorToolRequestUseCase {
+  const _FailingPrepareDirectorToolRequestUseCase();
+
+  @override
+  Future<PreparedDirectorToolImage> call({
+    required Uint8List imageBytes,
+    required int width,
+    required int height,
+  }) {
+    throw const FormatException('invalid Director source');
+  }
+}
+
 class _FakeApiService extends ApiService {
   final ApiResponse response;
   int calls = 0;
@@ -69,6 +123,52 @@ class _FakeApiService extends ApiService {
     calls++;
     requests.add(request);
     return response;
+  }
+}
+
+class _SequenceApiService extends ApiService {
+  _SequenceApiService(Iterable<ApiResponse> responses)
+      : responses = List.of(responses);
+
+  final List<ApiResponse> responses;
+  final List<ApiRequest> requests = [];
+
+  @override
+  Future<ApiResponse> fetchData(ApiRequest request) async {
+    requests.add(request);
+    return responses.removeAt(0);
+  }
+}
+
+class _BlockingApiService extends ApiService {
+  final Completer<ApiResponse> response = Completer<ApiResponse>();
+  int calls = 0;
+
+  @override
+  Future<ApiResponse> fetchData(ApiRequest request) {
+    calls++;
+    return response.future;
+  }
+}
+
+class _FirstSuccessThenBlockingApiService extends ApiService {
+  _FirstSuccessThenBlockingApiService(this.successData);
+
+  final Uint8List successData;
+  final Completer<ApiResponse> blockedResponse = Completer<ApiResponse>();
+  final Map<String, int> callsByAuthorization = {};
+  int calls = 0;
+
+  @override
+  Future<ApiResponse> fetchData(ApiRequest request) {
+    calls++;
+    final authorization = request.headers['authorization'] ?? '';
+    final accountCalls = (callsByAuthorization[authorization] ?? 0) + 1;
+    callsByAuthorization[authorization] = accountCalls;
+    if (accountCalls == 1) {
+      return Future.value(ApiResponse(status: '200', data: successData));
+    }
+    return blockedResponse.future;
   }
 }
 
@@ -93,6 +193,45 @@ class _FakeAccountService extends AccountService {
     final pending = blocker;
     if (pending != null) return pending.future;
     return null;
+  }
+}
+
+class _PerTokenAccountService extends AccountService {
+  _PerTokenAccountService(this.snapshots);
+
+  final Map<String, SubscriptionInfo> snapshots;
+  final Map<String, int> calls = {};
+  final Completer<SubscriptionInfo?> laterCalls = Completer();
+
+  @override
+  Future<SubscriptionInfo?> fetchSubscription({
+    required String token,
+    required String proxy,
+    bool forceRefresh = false,
+  }) async {
+    final call = (calls[token] ?? 0) + 1;
+    calls[token] = call;
+    if (call == 1) return snapshots[token];
+    return laterCalls.future;
+  }
+}
+
+class _TokenSequenceAccountService extends AccountService {
+  _TokenSequenceAccountService(Map<String, List<SubscriptionInfo?>> responses)
+      : responses = {
+          for (final entry in responses.entries)
+            entry.key: List.of(entry.value),
+        };
+
+  final Map<String, List<SubscriptionInfo?>> responses;
+
+  @override
+  Future<SubscriptionInfo?> fetchSubscription({
+    required String token,
+    required String proxy,
+    bool forceRefresh = false,
+  }) async {
+    return responses[token]!.removeAt(0);
   }
 }
 
@@ -156,7 +295,11 @@ class _SchedulingViewmodel extends GenerationPageViewmodel {
 }
 
 class _WorkerRecordingViewmodel extends GenerationPageViewmodel {
+  _WorkerRecordingViewmodel()
+      : super(preparationFeedbackBarrier: _skipPreparationFeedbackBarrier);
+
   final List<int> createdWorkers = [];
+  final List<int> createdTasks = [];
   I2iRequestBatch? lastPresetBatch;
   int? lastSeedOverride;
   String? lastPromptSuffix;
@@ -180,6 +323,15 @@ class _WorkerRecordingViewmodel extends GenerationPageViewmodel {
       ),
       initialValue: InfoCardContent.fromEmpty(),
     );
+  }
+
+  @override
+  Command<void, InfoCardContent> createScheduledGenerationCommand({
+    required int workerIndex,
+    required GenerationLease lease,
+  }) {
+    createdTasks.add(lease.taskNumber);
+    return createGenerationCommand(workerIndex: workerIndex);
   }
 
   /// Records the command without executing it, so tests stay free of the
@@ -234,9 +386,8 @@ void main() {
     final originalSeed = config.paramConfig.seed;
     final sourceImage = img.Image(width: 64, height: 64, numChannels: 3);
     img.fill(sourceImage, color: img.ColorRgb8(60, 90, 150));
-    config.enhanceConfig.setImage(
-      Uint8List.fromList(img.encodePng(sourceImage)),
-    );
+    final sourceBytes = Uint8List.fromList(img.encodePng(sourceImage));
+    config.enhanceConfig.setImage(sourceBytes);
 
     final firstRun = viewmodel.runEnhanceGeneration();
     expect(viewmodel.isPreparingEnhance, isTrue);
@@ -249,6 +400,9 @@ void main() {
     expect(viewmodel.lastPromptSuffix, '-2::upscaled, blurry::,');
     expect(viewmodel.lastPresetBatch?.plans, hasLength(1));
     final plan = viewmodel.lastPresetBatch!.plans.single;
+    expect(base64Decode(plan.imageB64), sourceBytes);
+    expect(plan.width, config.enhanceConfig.targetSize.width);
+    expect(plan.height, config.enhanceConfig.targetSize.height);
     expect(plan.strength, config.enhanceConfig.strength);
     expect(plan.noise, config.enhanceConfig.noise);
     expect(config.rootPromptConfig.strs, originalPrompt);
@@ -276,12 +430,15 @@ void main() {
     final viewmodel = GenerationPageViewmodel(
       apiService: api,
       fileService: files,
+      prepareDirectorToolRequest:
+          const _PassthroughPrepareDirectorToolRequestUseCase(),
+      preparationFeedbackBarrier: _skipPreparationFeedbackBarrier,
     );
     final payload = GetIt.I<PayloadConfig>();
     payload.settings.debugApiEnabled = true;
     payload.directorToolConfig.setImage(coloredPng(80, 80, 80));
 
-    viewmodel.runDirectorTool();
+    expect(await viewmodel.runDirectorTool(), isTrue);
     await tester.pumpAndSettle();
 
     expect(api.calls, 1);
@@ -311,7 +468,12 @@ void main() {
         '{"statusCode":500,"message":"upstream i/o timeout"}',
       )),
     ));
-    final viewmodel = GenerationPageViewmodel(apiService: api);
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      prepareDirectorToolRequest:
+          const _PassthroughPrepareDirectorToolRequestUseCase(),
+      preparationFeedbackBarrier: _skipPreparationFeedbackBarrier,
+    );
     final payload = GetIt.I<PayloadConfig>();
     payload.settings.debugApiEnabled = true;
     final source = img.Image(width: 32, height: 32, numChannels: 3);
@@ -319,13 +481,73 @@ void main() {
       Uint8List.fromList(img.encodePng(source)),
     );
 
-    viewmodel.runDirectorTool();
+    expect(await viewmodel.runDirectorTool(), isTrue);
     await tester.pumpAndSettle();
 
     final error = viewmodel.commandList.single.value.info;
     expect(error, contains('NovelAI server timed out'));
     expect(error, contains('HTTP 500'));
     expect(error, isNot(contains('End of Central Directory')));
+    viewmodel.dispose();
+  });
+
+  testWidgets('Director Tools normalizes oversized sources like the website', (
+    tester,
+  ) async {
+    final api = _FakeApiService(ApiResponse(
+      status: '500',
+      data: Uint8List.fromList(utf8.encode('{"message":"expected failure"}')),
+    ));
+    final requestImage = img.Image(width: 8, height: 8, numChannels: 3);
+    final requestBytes = Uint8List.fromList(img.encodePng(requestImage));
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      prepareDirectorToolRequest: _FakePrepareDirectorToolRequestUseCase(
+        PreparedDirectorToolImage(
+          imageB64: base64Encode(requestBytes),
+          width: 1773,
+          height: 1773,
+        ),
+      ),
+      preparationFeedbackBarrier: _skipPreparationFeedbackBarrier,
+    );
+    final source = img.Image(width: 64, height: 64, numChannels: 3);
+    img.fill(source, color: img.ColorRgb8(30, 60, 90));
+    GetIt.I<PayloadConfig>().directorToolConfig.setImage(
+          Uint8List.fromList(img.encodePng(source)),
+        );
+
+    expect(await viewmodel.runDirectorTool(), isTrue);
+    await tester.pumpAndSettle();
+
+    final request = api.requests.single.payload;
+    expect(request['width'], 1773);
+    expect(request['height'], 1773);
+    expect(base64Decode(request['image'] as String), requestBytes);
+    viewmodel.dispose();
+  });
+
+  test('Director Tools exposes preparation failures once', () async {
+    final viewmodel = GenerationPageViewmodel(
+      prepareDirectorToolRequest:
+          const _FailingPrepareDirectorToolRequestUseCase(),
+      preparationFeedbackBarrier: _skipPreparationFeedbackBarrier,
+    );
+    final source = img.Image(width: 64, height: 64, numChannels: 3);
+    GetIt.I<PayloadConfig>().directorToolConfig.setImage(
+          Uint8List.fromList(img.encodePng(source)),
+        );
+
+    expect(await viewmodel.runDirectorTool(), isFalse);
+    expect(
+      viewmodel.takeDirectorPreparationError(),
+      isA<FormatException>().having(
+        (error) => error.message,
+        'message',
+        'invalid Director source',
+      ),
+    );
+    expect(viewmodel.takeDirectorPreparationError(), isNull);
     viewmodel.dispose();
   });
 
@@ -471,13 +693,13 @@ void main() {
     viewmodel.dispose();
   });
 
-  testWidgets('temporary server failures back off and pause after three', (
+  testWidgets('all API errors back off and pause an account after five', (
     tester,
   ) async {
     final api = _FakeApiService(ApiResponse(
-      status: '500',
+      status: '401',
       data: Uint8List.fromList(utf8.encode(
-        '{"statusCode":500,"message":"upstream i/o timeout"}',
+        '{"statusCode":401,"message":"invalid token"}',
       )),
     ));
     final viewmodel = GenerationPageViewmodel(apiService: api);
@@ -499,16 +721,201 @@ void main() {
     await waitForCurrentCommand(tester, viewmodel);
     expect(api.calls, 2);
 
-    await tester.pump(const Duration(seconds: 14));
-    expect(api.calls, 2);
-    await tester.pump(const Duration(seconds: 1));
-    await waitForCurrentCommand(tester, viewmodel);
-    expect(api.calls, 3);
+    for (var attempt = 3; attempt <= 5; attempt++) {
+      await tester.pump(const Duration(seconds: 14));
+      expect(api.calls, attempt - 1);
+      await tester.pump(const Duration(seconds: 1));
+      await waitForCurrentCommand(tester, viewmodel);
+      expect(api.calls, attempt);
+    }
     expect(viewmodel.commandStatus.isGenerationActive.value, isFalse);
     expect(
       viewmodel.commandList.last.value.info,
-      contains('pause after three temporary server failures'),
+      contains('pause after five consecutive failures'),
     );
+    viewmodel.dispose();
+  });
+
+  testWidgets('a retry reuses its task card and stable task file number', (
+    tester,
+  ) async {
+    final outputImage = img.Image(width: 64, height: 64, numChannels: 3);
+    final api = _SequenceApiService([
+      ApiResponse(
+        status: '500',
+        data: Uint8List.fromList(utf8.encode('{"message":"retry"}')),
+      ),
+      ApiResponse(
+        status: '200',
+        data: directorResponseZip([
+          Uint8List.fromList(img.encodePng(outputImage)),
+        ]),
+      ),
+    ]);
+    final files = _RecordingFileService();
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      fileService: files,
+    );
+    final settings = GetIt.I<PayloadConfig>().settings;
+    settings
+      ..debugApiEnabled = true
+      ..generationCount = 1
+      ..generationIntervalSec = 0;
+
+    viewmodel.startGeneration();
+    await waitForCurrentCommand(tester, viewmodel);
+
+    expect(viewmodel.commandList, hasLength(1));
+    expect(viewmodel.commandList.single.value.imageBytes, isNull);
+
+    await tester.pump(const Duration(seconds: 5));
+    await waitForCurrentCommand(tester, viewmodel);
+
+    expect(api.requests, hasLength(2));
+    expect(viewmodel.commandList, hasLength(1));
+    expect(viewmodel.commandList.single.value.imageBytes, isNotNull);
+    expect(files.savedNames.single, contains('-000001-'));
+    expect(
+      api.requests[1].payload['parameters']['seed'],
+      api.requests[0].payload['parameters']['seed'],
+    );
+    viewmodel.dispose();
+  });
+
+  testWidgets('parallel accounts use their own subscription cost snapshots', (
+    tester,
+  ) async {
+    final outputImage = img.Image(width: 64, height: 64, numChannels: 3);
+    final api = _FakeApiService(ApiResponse(
+      status: '200',
+      data: directorResponseZip([
+        Uint8List.fromList(img.encodePng(outputImage)),
+      ]),
+    ));
+    final accounts = _PerTokenAccountService(const {
+      'pst-opus': SubscriptionInfo(anlas: 100, tier: 3, active: true),
+      'pst-standard': SubscriptionInfo(anlas: 100, tier: 1, active: true),
+    });
+    final settings = GetIt.I<PayloadConfig>().settings;
+    settings.updatePrimaryApiKey('pst-opus');
+    settings.apiTokens.first.label = 'Opus';
+    settings.apiTokens.add(
+      ApiTokenConfig(label: 'Standard', token: 'pst-standard'),
+    );
+    settings
+      ..parallelApiEnabled = true
+      ..generationCount = 2
+      ..generationIntervalSec = 0
+      ..debugApiEnabled = false;
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      accountService: accounts,
+      fileService: _RecordingFileService(),
+    );
+
+    viewmodel.startGeneration();
+    await tester.pumpAndSettle();
+
+    final byLabel = {
+      for (final command in viewmodel.commandList)
+        command.value.tokenLabel: command.value,
+    };
+    expect(byLabel['Opus']?.anlasCost, 0);
+    expect(byLabel['Standard']?.anlasCost, greaterThan(0));
+    accounts.laterCalls.complete(null);
+    await tester.pump();
+    viewmodel.dispose();
+  });
+
+  testWidgets('fresh insufficient balance skips the image request', (
+    tester,
+  ) async {
+    final api = _FakeApiService(ApiResponse(
+      status: '200',
+      data: Uint8List(0),
+    ));
+    final accounts = _FakeAccountService(responses: const [
+      SubscriptionInfo(anlas: 0, tier: 1, active: true),
+    ]);
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      accountService: accounts,
+    );
+    final settings = GetIt.I<PayloadConfig>().settings;
+    settings
+      ..updatePrimaryApiKey('pst-empty')
+      ..debugApiEnabled = false
+      ..generationCount = 1
+      ..generationIntervalSec = 0;
+    await viewmodel.refreshSubscriptionSnapshot();
+
+    viewmodel.startGeneration();
+    await waitForCurrentCommand(tester, viewmodel);
+
+    expect(api.calls, 0);
+    expect(viewmodel.commandList.single.value.info, contains('insufficient'));
+    viewmodel.stopGeneration();
+    await tester.pump();
+    viewmodel.dispose();
+  });
+
+  testWidgets('parallel batch keeps estimated and actual cost per account', (
+    tester,
+  ) async {
+    final outputImage = img.Image(width: 64, height: 64, numChannels: 3);
+    final api = _FakeApiService(ApiResponse(
+      status: '200',
+      data: directorResponseZip([
+        Uint8List.fromList(img.encodePng(outputImage)),
+      ]),
+    ));
+    final accounts = _TokenSequenceAccountService(const {
+      'pst-a': [
+        SubscriptionInfo(anlas: 100, tier: 1, active: true),
+        SubscriptionInfo(anlas: 90, tier: 1, active: true),
+      ],
+      'pst-b': [
+        SubscriptionInfo(anlas: 100, tier: 1, active: true),
+        SubscriptionInfo(anlas: 80, tier: 1, active: true),
+      ],
+    });
+    final settings = GetIt.I<PayloadConfig>().settings;
+    settings.updatePrimaryApiKey('pst-a');
+    settings.apiTokens.first.label = 'A';
+    settings.apiTokens.add(ApiTokenConfig(label: 'B', token: 'pst-b'));
+    settings
+      ..parallelApiEnabled = true
+      ..generationCount = 2
+      ..generationIntervalSec = 0
+      ..debugApiEnabled = false;
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      accountService: accounts,
+      fileService: _RecordingFileService(),
+    );
+
+    viewmodel.startGeneration();
+    await tester.pumpAndSettle();
+    await tester.runAsync(() async {
+      final deadline = DateTime.now().add(const Duration(seconds: 2));
+      while (viewmodel.commandList.any(
+            (command) => command.value.batchAnlasCost == null,
+          ) &&
+          DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    });
+    await tester.pump();
+
+    final byLabel = {
+      for (final command in viewmodel.commandList)
+        command.value.tokenLabel: command.value,
+    };
+    expect(byLabel['A']?.anlasCostIsEstimated, isTrue);
+    expect(byLabel['A']?.batchAnlasCost, 10);
+    expect(byLabel['B']?.anlasCostIsEstimated, isTrue);
+    expect(byLabel['B']?.batchAnlasCost, 20);
     viewmodel.dispose();
   });
 
@@ -889,6 +1296,47 @@ void main() {
     viewmodel.dispose();
   });
 
+  testWidgets('stopping waits for the in-flight request before finishing', (
+    tester,
+  ) async {
+    final outputImage = img.Image(width: 64, height: 64, numChannels: 3);
+    final api = _BlockingApiService();
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      fileService: _RecordingFileService(),
+    );
+    final commandStatus = GetIt.I<CommandStatus>();
+    final settings = GetIt.I<PayloadConfig>().settings;
+    settings
+      ..debugApiEnabled = true
+      ..generationCount = 2
+      ..generationIntervalSec = 0;
+
+    viewmodel.startGeneration();
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(api.calls, 1);
+
+    viewmodel.stopGeneration();
+    await tester.pump();
+
+    expect(commandStatus.isGenerationActive.value, isTrue);
+    expect(commandStatus.isWaitingForNextGeneration.value, isFalse);
+    expect(api.calls, 1);
+
+    api.response.complete(ApiResponse(
+      status: '200',
+      data: directorResponseZip([
+        Uint8List.fromList(img.encodePng(outputImage)),
+      ]),
+    ));
+    await waitForCurrentCommand(tester, viewmodel);
+
+    expect(commandStatus.isGenerationActive.value, isFalse);
+    expect(api.calls, 1);
+    expect(viewmodel.commandList.single.value.imageBytes, isNotNull);
+    viewmodel.dispose();
+  });
+
   testWidgets('finite generation stops and unlimited generation continues', (
     tester,
   ) async {
@@ -921,6 +1369,7 @@ void main() {
   ) async {
     final viewmodel = _WorkerRecordingViewmodel();
     final settings = GetIt.I<PayloadConfig>().settings;
+    settings.parallelApiEnabled = true;
     settings.apiTokens.addAll([
       ApiTokenConfig(label: 'A', token: 'pst-a'),
       ApiTokenConfig(label: 'B', token: 'pst-b'),
@@ -929,16 +1378,105 @@ void main() {
 
     viewmodel.startGeneration();
 
-    expect(viewmodel.createdWorkers, [0, 1, 2]);
-    expect(viewmodel.commandList, hasLength(3));
+    expect(viewmodel.createdWorkers, [0, 1, 2, 3]);
+    expect(viewmodel.commandList, hasLength(4));
     viewmodel.stopGeneration();
     await tester.pump();
+    viewmodel.dispose();
+  });
+
+  testWidgets('parallel second-wave cards show logical task numbers 6 to 10', (
+    tester,
+  ) async {
+    final outputImage = img.Image(width: 64, height: 64, numChannels: 3);
+    final api = _FirstSuccessThenBlockingApiService(
+      directorResponseZip([
+        Uint8List.fromList(img.encodePng(outputImage)),
+      ]),
+    );
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      fileService: _RecordingFileService(),
+    );
+    final settings = GetIt.I<PayloadConfig>().settings;
+    settings
+      ..debugApiEnabled = true
+      ..generationCount = 40
+      ..generationIntervalSec = 0
+      ..generationPageColumnCount = 5
+      ..resultDisplayMode = 'classic'
+      ..parallelApiEnabled = true
+      ..apiTokens.addAll([
+        ApiTokenConfig(label: 'A', token: 'pst-a'),
+        ApiTokenConfig(label: 'B', token: 'pst-b'),
+        ApiTokenConfig(label: 'C', token: 'pst-c'),
+        ApiTokenConfig(label: 'D', token: 'pst-d'),
+      ]);
+
+    viewmodel.startGeneration();
+    for (var attempt = 0; attempt < 100 && api.calls < 10; attempt++) {
+      await tester.pump(const Duration(milliseconds: 10));
+    }
+    expect(api.calls, 10);
+    expect(viewmodel.commandStatus.currentGenerationCount, 5);
+
+    await tester.binding.setSurfaceSize(const Size(2200, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final requestingCommands = viewmodel.commandList.reversed.take(5).toList();
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: GridView.count(
+          crossAxisCount: 5,
+          children: [
+            for (final command in requestingCommands)
+              ClassicInfoCard(command: command),
+          ],
+        ),
+      ),
+    ));
+    await tester.pump();
+
+    for (var taskNumber = 6; taskNumber <= 10; taskNumber++) {
+      expect(
+        find.text('Requesting $taskNumber/40 ...'),
+        findsOneWidget,
+      );
+    }
+    expect(find.text('Requesting 5/40 ...'), findsNothing);
+
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: GridView.count(
+          crossAxisCount: 5,
+          children: [
+            for (final command in requestingCommands)
+              InfoCard(command: command),
+          ],
+        ),
+      ),
+    ));
+    await tester.pump();
+    for (var taskNumber = 6; taskNumber <= 10; taskNumber++) {
+      expect(
+        find.text('Requesting $taskNumber/40 ...'),
+        findsOneWidget,
+      );
+    }
+    expect(find.text('Requesting 5/40 ...'), findsNothing);
+
+    viewmodel.stopGeneration();
+    api.blockedResponse.complete(ApiResponse(
+      status: '500',
+      data: Uint8List.fromList(utf8.encode('{"message":"stopped"}')),
+    ));
+    await tester.pumpAndSettle();
     viewmodel.dispose();
   });
 
   testWidgets('disabled tokens do not get workers', (tester) async {
     final viewmodel = _WorkerRecordingViewmodel();
     final settings = GetIt.I<PayloadConfig>().settings;
+    settings.parallelApiEnabled = true;
     settings.apiTokens.addAll([
       ApiTokenConfig(label: 'A', token: 'pst-a'),
       ApiTokenConfig(label: 'B', token: 'pst-b', enabled: false),
@@ -947,7 +1485,7 @@ void main() {
 
     viewmodel.startGeneration();
 
-    expect(viewmodel.createdWorkers, [0, 1]);
+    expect(viewmodel.createdWorkers, [0, 1, 2]);
     viewmodel.stopGeneration();
     await tester.pump();
     viewmodel.dispose();
@@ -959,6 +1497,7 @@ void main() {
     final viewmodel = _WorkerRecordingViewmodel();
     final settings = GetIt.I<PayloadConfig>().settings;
     settings.generationCount = 2;
+    settings.parallelApiEnabled = true;
     settings.apiTokens.addAll([
       ApiTokenConfig(label: 'A', token: 'pst-a'),
       ApiTokenConfig(label: 'B', token: 'pst-b'),
@@ -968,6 +1507,7 @@ void main() {
     viewmodel.startGeneration();
 
     expect(viewmodel.createdWorkers, [0, 1]);
+    expect(viewmodel.createdTasks, [1, 2]);
     viewmodel.stopGeneration();
     await tester.pump();
     viewmodel.dispose();

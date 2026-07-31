@@ -58,7 +58,8 @@ class DirectorPageView extends StatelessWidget {
 
   Widget _buildPrimaryAction(BuildContext context) {
     final cost = viewmodel.currentCost;
-    final busy = generationViewmodel.commandStatus.isGenerationActive.value ||
+    final busy = generationViewmodel.isPreparingDirector ||
+        generationViewmodel.commandStatus.isGenerationActive.value ||
         (generationViewmodel.currentCommand?.isExecuting.value ?? false);
     final enabled = viewmodel.config.hasImage && !busy;
     return Padding(
@@ -322,10 +323,18 @@ class DirectorPageView extends StatelessWidget {
     });
   }
 
-  void _run(BuildContext context) {
+  Future<void> _run(BuildContext context) async {
     final config = viewmodel.config;
     if (!config.hasImage) return;
-    generationViewmodel.runDirectorTool();
+    final started = await generationViewmodel.runDirectorTool();
+    if (!context.mounted) return;
+    if (!started) {
+      final error = generationViewmodel.takeDirectorPreparationError();
+      if (error != null) {
+        showErrorBar(context, '${tr('image_handoff_failed')}: $error');
+      }
+      return;
+    }
     showInfoBar(
       context,
       tr('director_tool_started', namedArgs: {'tool': config.displayName}),

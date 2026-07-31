@@ -71,6 +71,45 @@ void main() {
     service.close();
   });
 
+  test('isolates persistent HTTP clients by authorization credential',
+      () async {
+    var createdClients = 0;
+    final service = ApiService(
+      clientFactory: (_) {
+        createdClients++;
+        String? boundAuthorization;
+        return MockClient((request) async {
+          final authorization = request.headers['authorization'];
+          boundAuthorization ??= authorization;
+          if (authorization != boundAuthorization) {
+            throw StateError('connection reused across credentials');
+          }
+          return http.Response('{}', 200);
+        });
+      },
+    );
+
+    final responses = await Future.wait([
+      service.fetchData(const ApiRequest(
+        endpoint: 'https://example.test/generate',
+        proxy: '127.0.0.1:7897',
+        headers: {'authorization': 'Bearer account-a'},
+        payload: {},
+      )),
+      service.fetchData(const ApiRequest(
+        endpoint: 'https://example.test/generate',
+        proxy: '127.0.0.1:7897',
+        headers: {'authorization': 'Bearer account-b'},
+        payload: {},
+      )),
+    ]);
+
+    expect(responses.map((response) => response.status), ['200', '200']);
+    expect(createdClients, 2);
+    expect(service.pooledClientCount, 2);
+    service.close();
+  });
+
   test('subscription cache avoids repeat network calls and force refreshes',
       () async {
     var requests = 0;

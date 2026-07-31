@@ -113,14 +113,12 @@ class ResultActions {
 /// Formats an Anlas estimate for a toolbar button.
 String formatAnlasBadge(AnlasCost? cost) {
   if (cost == null) return '';
-  if (cost.isFreeUnderOpus) return tr('anlas_free');
   return cost.anlas.toString();
 }
 
 /// Reader-facing hover text for any generation action.
 String formatAnlasTooltip(AnlasCost? cost, {bool isUpperBound = false}) {
   if (cost == null) return tr('generation_cost_pending');
-  if (cost.isFreeUnderOpus) return tr('generation_cost_tooltip_free');
   return tr(
     isUpperBound
         ? 'generation_cost_tooltip_upper_bound'
@@ -132,7 +130,6 @@ String formatAnlasTooltip(AnlasCost? cost, {bool isUpperBound = false}) {
 /// Reader-facing hover text for tools whose displayed cost is an estimate.
 String formatEstimatedAnlasTooltip(AnlasCost? cost) {
   if (cost == null) return tr('estimated_generation_cost_pending');
-  if (cost.isFreeUnderOpus) return tr('estimated_generation_cost_free');
   return tr(
     'estimated_generation_cost_tooltip',
     namedArgs: {'anlas': cost.anlas.toString()},

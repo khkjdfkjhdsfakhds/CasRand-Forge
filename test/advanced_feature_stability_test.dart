@@ -12,6 +12,7 @@ import 'package:nai_casrand/data/models/api_request.dart';
 import 'package:nai_casrand/data/models/command_status.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
+import 'package:nai_casrand/data/models/i2i_config.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
@@ -24,8 +25,58 @@ import 'package:nai_casrand/data/services/file_service.dart';
 import 'package:nai_casrand/data/use_cases/autocrop_planner.dart';
 import 'package:nai_casrand/data/use_cases/encode_vibe_use_case.dart';
 import 'package:nai_casrand/data/use_cases/generate_payload_use_case.dart';
+import 'package:nai_casrand/data/use_cases/prepare_director_tool_request_use_case.dart';
 import 'package:nai_casrand/data/use_cases/prepare_i2i_request_use_case.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
+
+Future<void> _skipPreparationFeedbackBarrier() async {}
+
+Future<I2iRequestBatch?> _prepareI2iBatchWithoutIsolate({
+  required I2IConfig config,
+  required int targetWidth,
+  required int targetHeight,
+}) async {
+  if (!config.hasImage) return null;
+  if (config.hasInpaintSelection) {
+    return PrepareI2iRequestUseCase(config: config).planBatch(
+      targetWidth: targetWidth,
+      targetHeight: targetHeight,
+    );
+  }
+  final plan = I2iRequestPlan(
+    imageB64: base64Encode(config.imageBytes!),
+    maskB64: null,
+    width: targetWidth,
+    height: targetHeight,
+    strength: config.strength,
+    noise: config.noise,
+    addOriginalImage: config.addOriginalImage,
+    composite: null,
+    summary: 'test img2img',
+  );
+  return I2iRequestBatch(
+    plans: [plan],
+    serial: true,
+    summary: plan.summary,
+  );
+}
+
+GenerationPageViewmodel _testGenerationViewmodel({
+  ApiService? apiService,
+  FileService? fileService,
+  EncodeVibeUseCase? encodeVibeUseCase,
+  PrepareDirectorToolRequestUseCase? prepareDirectorToolRequest,
+  PreparationFeedbackBarrier? preparationFeedbackBarrier,
+}) {
+  return GenerationPageViewmodel(
+    apiService: apiService,
+    fileService: fileService,
+    encodeVibeUseCase: encodeVibeUseCase,
+    prepareDirectorToolRequest: prepareDirectorToolRequest,
+    preparationFeedbackBarrier: preparationFeedbackBarrier,
+    prepareI2iBatch: _prepareI2iBatchWithoutIsolate,
+  );
+}
 
 class _RecordingFailureApiService extends ApiService {
   final List<Map<String, dynamic>> payloads = [];
@@ -119,6 +170,40 @@ class _BlockingEncodeVibeUseCase extends EncodeVibeUseCase {
   }
 }
 
+class _PassthroughPrepareDirectorToolRequestUseCase
+    extends PrepareDirectorToolRequestUseCase {
+  const _PassthroughPrepareDirectorToolRequestUseCase();
+
+  @override
+  Future<PreparedDirectorToolImage> call({
+    required Uint8List imageBytes,
+    required int width,
+    required int height,
+  }) async {
+    return PreparedDirectorToolImage(
+      imageB64: base64Encode(imageBytes),
+      width: width,
+      height: height,
+    );
+  }
+}
+
+class _BlockingPrepareDirectorToolRequestUseCase
+    extends PrepareDirectorToolRequestUseCase {
+  final Completer<PreparedDirectorToolImage> release = Completer();
+  int calls = 0;
+
+  @override
+  Future<PreparedDirectorToolImage> call({
+    required Uint8List imageBytes,
+    required int width,
+    required int height,
+  }) {
+    calls++;
+    return release.future;
+  }
+}
+
 class _FirstVibeEncodingBlockingUseCase extends EncodeVibeUseCase {
   final Completer<void> firstRequestStarted = Completer<void>();
   final Completer<String> releaseFirst = Completer<String>();
@@ -156,6 +241,11 @@ class _NoopFileService extends FileService {
 }
 
 class _EnhanceRecordingViewmodel extends GenerationPageViewmodel {
+  _EnhanceRecordingViewmodel({
+    PreparationFeedbackBarrier preparationFeedbackBarrier =
+        _skipPreparationFeedbackBarrier,
+  }) : super(preparationFeedbackBarrier: preparationFeedbackBarrier);
+
   I2iRequestBatch? capturedBatch;
 
   @override
@@ -457,7 +547,7 @@ void main() {
 
   testWidgets('I2I retry sends current B instead of cached A', (tester) async {
     final api = _RecordingFailureApiService();
-    final viewmodel = GenerationPageViewmodel(apiService: api);
+    final viewmodel = _testGenerationViewmodel(apiService: api);
     final config = GetIt.I<PayloadConfig>();
 
     config.i2iConfig.setImage(_solidPng(255, 0, 0));
@@ -547,7 +637,7 @@ void main() {
 
   testWidgets('I2I retry becomes txt2img after source removal', (tester) async {
     final api = _RecordingFailureApiService();
-    final viewmodel = GenerationPageViewmodel(apiService: api);
+    final viewmodel = _testGenerationViewmodel(apiService: api);
     final config = GetIt.I<PayloadConfig>();
     config.i2iConfig.setImage(_solidPng(255, 0, 0));
     config.setI2iEnabled(true);
@@ -602,16 +692,21 @@ void main() {
   testWidgets('Director next run uses B after failed A request',
       (tester) async {
     final api = _RecordingFailureApiService();
-    final viewmodel = GenerationPageViewmodel(apiService: api);
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      prepareDirectorToolRequest:
+          const _PassthroughPrepareDirectorToolRequestUseCase(),
+      preparationFeedbackBarrier: _skipPreparationFeedbackBarrier,
+    );
     final config = GetIt.I<PayloadConfig>().directorToolConfig;
     final a = _solidPng(255, 0, 0);
     final b = _solidPng(0, 0, 255);
 
     config.setImage(a);
-    viewmodel.runDirectorTool();
+    expect(await viewmodel.runDirectorTool(), isTrue);
     await tester.pumpAndSettle();
     config.setImage(b);
-    viewmodel.runDirectorTool();
+    expect(await viewmodel.runDirectorTool(), isTrue);
     await tester.pumpAndSettle();
 
     expect(api.payloads, hasLength(2));
@@ -633,6 +728,40 @@ void main() {
 
     expect(started, isFalse);
     expect(viewmodel.capturedBatch, isNull);
+    viewmodel.dispose();
+  });
+
+  test('Director preparation rejects duplicates and cancels after changes',
+      () async {
+    final api = _RecordingFailureApiService();
+    final preparer = _BlockingPrepareDirectorToolRequestUseCase();
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      prepareDirectorToolRequest: preparer,
+      preparationFeedbackBarrier: _skipPreparationFeedbackBarrier,
+    );
+    final config = GetIt.I<PayloadConfig>().directorToolConfig;
+    final a = _solidPng(255, 0, 0);
+    final b = _solidPng(0, 0, 255);
+    config
+      ..setImage(a)
+      ..setType('lineart');
+
+    final pending = viewmodel.runDirectorTool();
+    expect(viewmodel.isPreparingDirector, isTrue);
+    expect(await viewmodel.runDirectorTool(), isFalse);
+    config
+      ..setImage(b)
+      ..setType('sketch');
+    preparer.release.complete(PreparedDirectorToolImage(
+      imageB64: base64Encode(a),
+      width: 1024,
+      height: 1024,
+    ));
+
+    expect(await pending, isFalse);
+    expect(viewmodel.isPreparingDirector, isFalse);
+    expect(api.payloads, isEmpty);
     viewmodel.dispose();
   });
 
@@ -860,7 +989,7 @@ void main() {
   testWidgets('I2I retry becomes img2img after its mask is removed',
       (tester) async {
     final api = _RecordingFailureApiService();
-    final viewmodel = GenerationPageViewmodel(apiService: api);
+    final viewmodel = _testGenerationViewmodel(apiService: api);
     final config = GetIt.I<PayloadConfig>();
     config.i2iConfig.setImage(_solidPng(80, 90, 100));
     config.i2iConfig.setMask(_maskPng(left: true), const []);
@@ -883,7 +1012,7 @@ void main() {
 
   testWidgets('I2I retry applies changed strength and noise', (tester) async {
     final api = _RecordingFailureApiService();
-    final viewmodel = GenerationPageViewmodel(apiService: api);
+    final viewmodel = _testGenerationViewmodel(apiService: api);
     final config = GetIt.I<PayloadConfig>();
     config.i2iConfig.setImage(_solidPng(80, 90, 100));
     config.i2iConfig
@@ -911,7 +1040,7 @@ void main() {
 
   testWidgets('I2I retry applies changed request size', (tester) async {
     final api = _RecordingFailureApiService();
-    final viewmodel = GenerationPageViewmodel(apiService: api);
+    final viewmodel = _testGenerationViewmodel(apiService: api);
     final config = GetIt.I<PayloadConfig>();
     config.i2iConfig
       ..setImage(_solidPng(80, 90, 100))
@@ -939,7 +1068,7 @@ void main() {
   testWidgets('I2I retry applies a newly selected manual focus frame',
       (tester) async {
     final api = _RecordingFailureApiService();
-    final viewmodel = GenerationPageViewmodel(apiService: api);
+    final viewmodel = _testGenerationViewmodel(apiService: api);
     final config = GetIt.I<PayloadConfig>();
     config.i2iConfig.setImage(_solidPng(80, 90, 100));
     config.setI2iEnabled(true);
@@ -992,6 +1121,43 @@ void main() {
     viewmodel.dispose();
   });
 
+  for (final testCase in <({
+    String name,
+    void Function(PayloadConfig config) change,
+  })>[
+    (
+      name: 'prompt',
+      change: (config) => config.rootPromptConfig.strs = ['changed prompt'],
+    ),
+    (
+      name: 'model',
+      change: (config) => config.paramConfig.model = 'nai-diffusion-3',
+    ),
+    (
+      name: 'API token',
+      change: (config) => config.settings.updatePrimaryApiKey('pst-changed'),
+    ),
+  ]) {
+    test('Enhance preparation is cancelled when ${testCase.name} changes',
+        () async {
+      final barrier = Completer<void>();
+      final viewmodel = _EnhanceRecordingViewmodel(
+        preparationFeedbackBarrier: () => barrier.future,
+      );
+      final config = GetIt.I<PayloadConfig>();
+      config.enhanceConfig.setImage(_solidPng(255, 0, 0));
+
+      final pending = viewmodel.runEnhanceGeneration();
+      expect(viewmodel.isPreparingEnhance, isTrue);
+      testCase.change(config);
+      barrier.complete();
+
+      expect(await pending, isFalse);
+      expect(viewmodel.capturedBatch, isNull);
+      viewmodel.dispose();
+    });
+  }
+
   testWidgets(
       'Director response keeps the request snapshot while config changes',
       (tester) async {
@@ -999,6 +1165,9 @@ void main() {
     final viewmodel = GenerationPageViewmodel(
       apiService: api,
       fileService: _NoopFileService(),
+      prepareDirectorToolRequest:
+          const _PassthroughPrepareDirectorToolRequestUseCase(),
+      preparationFeedbackBarrier: _skipPreparationFeedbackBarrier,
     );
     final config = GetIt.I<PayloadConfig>().directorToolConfig;
     final a = _solidPng(255, 0, 0);
@@ -1007,7 +1176,7 @@ void main() {
       ..setImage(a)
       ..setType('lineart');
 
-    viewmodel.runDirectorTool();
+    expect(await viewmodel.runDirectorTool(), isTrue);
     for (var attempt = 0; attempt < 20 && api.payloads.isEmpty; attempt++) {
       await tester.pump(const Duration(milliseconds: 1));
     }

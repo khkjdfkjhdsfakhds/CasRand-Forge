@@ -33,7 +33,7 @@ class SettingsPageViewmodel extends ChangeNotifier {
   }
 
   void setApiKey(String value) {
-    payloadConfig.settings.apiKey = value;
+    payloadConfig.settings.updatePrimaryApiKey(value);
     notifyListeners();
   }
 

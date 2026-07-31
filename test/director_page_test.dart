@@ -201,10 +201,10 @@ void main() {
       expect(find.byKey(Key('director-tool-$tool')), findsOneWidget,
           reason: tool);
     }
-    // Measured prices at 512x512: bg-removal 20, everything else 5.
-    expect(find.text('Remove BG · Est. 20'), findsOneWidget);
-    expect(find.text('Line Art · Est. 5'), findsOneWidget);
-    expect(find.text('Declutter (keep bubbles) · Est. 5'), findsOneWidget);
+    // The website enlarges 512x512 sources to 1024x1024 before billing.
+    expect(find.text('Remove BG · Est. 65'), findsOneWidget);
+    expect(find.text('Line Art · Est. 20'), findsOneWidget);
+    expect(find.text('Declutter (keep bubbles) · Est. 20'), findsOneWidget);
   });
 
   testWidgets('the current Director source can be deleted without hiding tools',
@@ -241,10 +241,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('Run tool · Est. 20'), findsOneWidget);
+    expect(find.textContaining('Run tool · Est. 65'), findsOneWidget);
     expect(
       tester.widget<Tooltip>(find.byType(Tooltip).first).message,
-      contains('20'),
+      contains('65'),
     );
   });
 
@@ -258,7 +258,7 @@ void main() {
       localizedApp(DirectorPageView(viewmodel: DirectorPageViewmodel())),
     );
     await tester.pumpAndSettle();
-    expect(find.textContaining('Run tool · Est. 20'), findsOneWidget);
+    expect(find.textContaining('Run tool · Est. 65'), findsOneWidget);
 
     final lineart = find.byKey(const Key('director-tool-lineart'));
     await tester.ensureVisible(lineart);
@@ -266,7 +266,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(config.type, 'lineart');
-    expect(find.textContaining('Run tool · Est. 5'), findsOneWidget);
+    expect(find.textContaining('Run tool · Est. 20'), findsOneWidget);
   });
 
   testWidgets('emotion exposes its emotion picker and defry', (tester) async {
@@ -293,7 +293,9 @@ void main() {
     expect(find.byKey(const Key('director-override-enabled')), findsOneWidget);
   });
 
-  testWidgets('a larger source raises the quoted cost', (tester) async {
+  testWidgets('a source already at 1MP keeps the same quoted cost', (
+    tester,
+  ) async {
     await tester.binding.setSurfaceSize(const Size(1000, 1400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     GetIt.I<PayloadConfig>().directorToolConfig.setImage(solidPng(1024, 1024));

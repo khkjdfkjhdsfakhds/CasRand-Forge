@@ -54,10 +54,10 @@ jobs:
             throw "NAICasRandForge.exe is missing from the release directory"
           }
           $version = (Get-Item $exePath).VersionInfo
-          if ($version.FileVersion -ne "0.9.5+60") {
+          if ($version.FileVersion -ne "0.9.5+65") {
             throw "Unexpected Windows file version: $($version.FileVersion)"
           }
-          if ($version.ProductVersion -ne "0.9.5+60") {
+          if ($version.ProductVersion -ne "0.9.5+65") {
             throw "Unexpected Windows product version: $($version.ProductVersion)"
           }
           tar.exe -t -f "$env:ASSET_NAME" | Out-Null

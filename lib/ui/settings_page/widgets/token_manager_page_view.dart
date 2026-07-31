@@ -48,59 +48,96 @@ class _TokenManagerPageViewState extends State<TokenManagerPageView> {
         listenable: viewmodel,
         builder: (context, _) {
           final tokens = viewmodel.tokens;
-          return ListView(
-            padding: const EdgeInsets.only(bottom: 96),
+          return Column(
             children: [
-              ListTile(
-                leading: const Icon(Icons.bolt_outlined),
-                title: Text(tr('api_tokens_concurrent_note')),
-                subtitle: Text(tr('api_tokens_manage_hint')),
+              SwitchListTile(
+                key: const Key('token-manager-parallel-switch'),
+                secondary: const Icon(Icons.bolt_outlined),
+                title: Text(tr('api_tokens_parallel_enabled')),
+                subtitle: Text(tr('api_tokens_parallel_hint')),
+                value: viewmodel.parallelApiEnabled,
+                onChanged: tokens.any((entry) => entry.enabled)
+                    ? viewmodel.setParallelApiEnabled
+                    : null,
               ),
-              const Divider(),
-              if (tokens.isEmpty)
-                ListTile(
-                  leading: const Icon(Icons.info_outline),
-                  title: Text(tr('api_tokens_empty_note')),
-                  trailing: TextButton(
-                    key: const Key('token-manager-import-legacy'),
-                    onPressed: viewmodel.importLegacyApiKey,
-                    child: Text(tr('api_token_import_legacy')),
+              ListTile(
+                dense: true,
+                leading: const Icon(Icons.info_outline),
+                title: Text(
+                  tr(
+                    'api_tokens_limit_note',
+                    namedArgs: {
+                      'count': viewmodel.enabledTokenCount.toString(),
+                    },
                   ),
                 ),
-              for (final (index, entry) in tokens.indexed)
-                ListTile(
-                  key: Key('token-manager-entry-$index'),
-                  leading: Icon(
-                    entry.enabled ? Icons.key : Icons.key_off_outlined,
-                  ),
-                  title: Text(entry.label),
-                  subtitle: Text(
-                    '${entry.maskedToken} · ${_balanceText(entry.token)}',
-                  ),
-                  onTap: () => _showRenameDialog(context, index),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        tooltip: tr('anlas_balance_refresh'),
-                        onPressed: viewmodel.isBalanceLoading(entry.token)
-                            ? null
-                            : () => viewmodel.refreshBalance(entry.token),
-                        icon: const Icon(Icons.refresh),
+                subtitle: Text(tr('api_tokens_priority_note')),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: ReorderableListView.builder(
+                  padding: const EdgeInsets.only(bottom: 96),
+                  itemCount: tokens.length,
+                  onReorderItem: viewmodel.reorderToken,
+                  itemBuilder: (context, index) {
+                    final entry = tokens[index];
+                    return ListTile(
+                      key: ValueKey(entry.token),
+                      leading: Icon(
+                        entry.enabled ? Icons.key : Icons.key_off_outlined,
                       ),
-                      Switch(
-                        value: entry.enabled,
-                        onChanged: (value) =>
-                            viewmodel.setTokenEnabled(index, value),
+                      title: Row(
+                        children: [
+                          Flexible(child: Text(entry.label)),
+                          if (entry.isPrimary) ...[
+                            const SizedBox(width: 8),
+                            Chip(
+                              visualDensity: VisualDensity.compact,
+                              label: Text(tr('api_token_primary_badge')),
+                            ),
+                          ],
+                        ],
                       ),
-                      IconButton(
-                        tooltip: tr('delete'),
-                        onPressed: () => _confirmDelete(context, index),
-                        icon: const Icon(Icons.delete_outline),
+                      subtitle: Text(
+                        '${entry.maskedToken} · ${_balanceText(entry.token)}',
                       ),
-                    ],
-                  ),
+                      onTap: () => _showRenameDialog(context, index),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            tooltip: tr('anlas_balance_refresh'),
+                            onPressed: viewmodel.isBalanceLoading(entry.token)
+                                ? null
+                                : () => viewmodel.refreshBalance(entry.token),
+                            icon: const Icon(Icons.refresh),
+                          ),
+                          Switch(
+                            value: entry.enabled,
+                            onChanged: (value) =>
+                                viewmodel.setTokenEnabled(index, value),
+                          ),
+                          if (!entry.isPrimary)
+                            IconButton(
+                              tooltip: tr('delete'),
+                              onPressed: () => _confirmDelete(context, index),
+                              icon: const Icon(Icons.delete_outline),
+                            )
+                          else
+                            Tooltip(
+                              message: tr('api_token_primary_delete_hint'),
+                              child: const Padding(
+                                padding: EdgeInsets.all(12),
+                                child: Icon(Icons.lock_outline),
+                              ),
+                            ),
+                          const Icon(Icons.drag_handle),
+                        ],
+                      ),
+                    );
+                  },
                 ),
+              ),
             ],
           );
         },

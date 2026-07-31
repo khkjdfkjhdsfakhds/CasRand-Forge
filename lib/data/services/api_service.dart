@@ -37,7 +37,7 @@ class ApiService {
 
   Future<ApiResponse> fetchData(ApiRequest request) async {
     final url = Uri.parse(request.endpoint);
-    final client = clientForProxy(request.proxy);
+    final client = _clientForRoute(request.proxy, request.headers);
     http.Response response;
     try {
       final responseFuture = client.post(
@@ -113,12 +113,25 @@ class ApiService {
 
   /// Returns a persistent client for the selected proxy route.
   ///
-  /// NovelAI generation, Vibe extraction and balance refreshes share this
-  /// pool so sequential images can reuse established TCP/TLS connections.
+  /// Requests without credentials share this proxy route. Authenticated
+  /// requests are isolated by credential in [_clientForRoute] so one account
+  /// never reuses another account's persistent NovelAI connection.
   http.Client clientForProxy(String proxy) {
+    return _clientForRoute(proxy, const {});
+  }
+
+  http.Client _clientForRoute(
+    String proxy,
+    Map<String, String> headers,
+  ) {
     final key = kIsWeb ? '' : proxy.trim();
+    final authorization = headers.entries
+        .where((entry) => entry.key.toLowerCase() == 'authorization')
+        .map((entry) => entry.value.trim())
+        .firstOrNull;
+    final routeKey = '$key\u0000${authorization ?? ''}';
     return _clients.putIfAbsent(
-      key,
+      routeKey,
       () => _clientFactory?.call(key) ?? _createHttpClient(key),
     );
   }
@@ -140,7 +153,10 @@ class ApiService {
     required String proxy,
     Map<String, String>? headers,
   }) {
-    return clientForProxy(proxy).get(url, headers: headers);
+    return _clientForRoute(proxy, headers ?? const {}).get(
+      url,
+      headers: headers,
+    );
   }
 
   @visibleForTesting

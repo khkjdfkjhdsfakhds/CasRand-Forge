@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nai_casrand/data/use_cases/anlas_cost.dart';
+import 'package:nai_casrand/ui/generation_page/widgets/result_actions.dart';
 
 void main() {
   test('matches the measured cost of a real request', () {
@@ -23,6 +24,16 @@ void main() {
     expect(cost.isFreeUnderOpus, isTrue);
     // The per-image price is still known even when it is waived.
     expect(cost.perImageAnlas, greaterThan(0));
+  });
+
+  test('a waived request is displayed as an estimated numeric zero', () {
+    const cost = AnlasCost(
+      anlas: 0,
+      isFreeUnderOpus: true,
+      perImageAnlas: 20,
+    );
+
+    expect(formatAnlasBadge(cost), '0');
   });
 
   test('an expired or unverified Opus tier is never treated as free', () {
@@ -75,7 +86,7 @@ void main() {
     expect(large.isFreeUnderOpus, isFalse);
   });
 
-  test('img2img and ordinary infill stay outside the Opus free allowance', () {
+  test('img2img and ordinary infill use the Opus free allowance', () {
     final full = estimateAnlasCost(
       width: 1024,
       height: 1024,
@@ -111,8 +122,20 @@ void main() {
       tier: opusTier,
       subscriptionActive: true,
     );
-    expect(opusImg2img.anlas, half.anlas);
-    expect(opusImg2img.isFreeUnderOpus, isFalse);
+    expect(opusImg2img.anlas, 0);
+    expect(opusImg2img.isFreeUnderOpus, isTrue);
+
+    final opusInfill = estimateAnlasCost(
+      width: 832,
+      height: 1216,
+      steps: 28,
+      action: 'infill',
+      strength: 1,
+      tier: 3,
+      subscriptionActive: true,
+    );
+    expect(opusInfill.anlas, 0);
+    expect(opusInfill.isFreeUnderOpus, isTrue);
   });
 
   test('official Focused Inpainting is free for active Opus in the window', () {
@@ -124,7 +147,6 @@ void main() {
       strength: 0.7,
       tier: opusTier,
       subscriptionActive: true,
-      opusFocusedInpaint: true,
     );
 
     expect(focused.anlas, 0);
@@ -188,7 +210,6 @@ void main() {
       strength: 0.8,
       tier: opusTier,
       subscriptionActive: true,
-      opusFocusedInpaint: true,
     );
     expect(cost.anlas, 0);
     expect(cost.isFreeUnderOpus, isTrue);
@@ -220,7 +241,6 @@ void main() {
       steps: 28,
       tier: opusTier,
       subscriptionActive: true,
-      opusFocusedInpaint: true,
     );
     expect(cost.anlas, greaterThan(0));
     expect(cost.isFreeUnderOpus, isFalse);

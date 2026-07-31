@@ -67,6 +67,8 @@ class DirectorToolConfig with ChangeNotifier {
   String? _imageB64Cache;
   int _imageRevision = 0;
   int get imageRevision => _imageRevision;
+  int _requestRevision = 0;
+  int get requestRevision => _requestRevision;
 
   int width = 0;
   int height = 0;
@@ -121,6 +123,7 @@ class DirectorToolConfig with ChangeNotifier {
     _imageBytes = bytes;
     _imageB64Cache = null;
     _imageRevision++;
+    _requestRevision++;
     notifyListeners();
   }
 
@@ -130,12 +133,15 @@ class DirectorToolConfig with ChangeNotifier {
     width = 0;
     height = 0;
     _imageRevision++;
+    _requestRevision++;
     notifyListeners();
   }
 
   void setType(String value) {
     if (!toolTypes.any((t) => t.type == value)) return;
+    if (type == value) return;
     type = value;
+    _requestRevision++;
     notifyListeners();
   }
 
@@ -146,21 +152,29 @@ class DirectorToolConfig with ChangeNotifier {
     } else if (selectedEmotions.length > 1) {
       selectedEmotions.remove(emotion);
     }
+    _requestRevision++;
     notifyListeners();
   }
 
   void setDefry(int value) {
-    defry = value.clamp(0, maxDefry);
+    final next = value.clamp(0, maxDefry);
+    if (defry == next) return;
+    defry = next;
+    _requestRevision++;
     notifyListeners();
   }
 
   void setOverrideEnabled(bool value) {
+    if (overrideEnabled == value) return;
     overrideEnabled = value;
+    _requestRevision++;
     notifyListeners();
   }
 
   void setOverridePrompt(String value) {
+    if (overridePrompt == value) return;
     overridePrompt = value;
+    _requestRevision++;
     notifyListeners();
   }
 
@@ -172,12 +186,18 @@ class DirectorToolConfig with ChangeNotifier {
     if (!hasImage) {
       throw Exception('Director Tools needs a source image.');
     }
-    final payload = <String, dynamic>{
-      'req_type': type,
+    return <String, dynamic>{
+      ...getRequestParameters(),
       'width': width,
       'height': height,
       'image': imageB64,
     };
+  }
+
+  /// Fields that are independent from image preparation. Calling this before
+  /// an asynchronous resize also freezes randomized emotion selection.
+  Map<String, dynamic> getRequestParameters() {
+    final payload = <String, dynamic>{'req_type': type};
     if (!withPrompt) return payload;
 
     final extra = overrideEnabled ? overridePrompt : '';

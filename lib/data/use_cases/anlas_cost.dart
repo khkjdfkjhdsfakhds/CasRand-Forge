@@ -2,10 +2,9 @@ import 'dart:math';
 
 /// Anlas cost model, mirroring NovelAI's own calculation.
 ///
-/// Opus (tier 3+) covers one text-to-image sample per request for free while
-/// the request stays within the 1 MP / 28-step window. Official Focused
-/// Inpainting gets the same allowance; ordinary img2img and whole-image infill
-/// do not.
+/// Opus (tier 3+) covers one generated sample per request for free while the
+/// request stays within the 1 MP / 28-step window. This applies to text-to-
+/// image, img2img, infill, and Enhance requests alike.
 const int opusTier = 3;
 const int opusFreeMaxArea = 1024 * 1024;
 const int opusFreeMaxSteps = 28;
@@ -67,7 +66,6 @@ AnlasCost estimateAnlasCost({
   bool subscriptionActive = false,
   int preciseReferenceCount = 0,
   int vibeCount = 0,
-  bool opusFocusedInpaint = false,
 }) {
   final area = width * height;
   final smMultiplier = smDyn
@@ -83,11 +81,9 @@ AnlasCost estimateAnlasCost({
       (action == 'infill' || action == 'img2img') ? strength : 1.0;
   final perImage = max((baseSteps * strengthMultiplier).ceil(), 2);
 
-  final free =
-      (action == 'generate' || (action == 'infill' && opusFocusedInpaint)) &&
-          subscriptionActive &&
-          (tier ?? 0) >= opusTier &&
-          fitsOpusFreeWindow(width: width, height: height, steps: steps);
+  final free = subscriptionActive &&
+      (tier ?? 0) >= opusTier &&
+      fitsOpusFreeWindow(width: width, height: height, steps: steps);
   final freeImages = free ? 1 : 0;
   final int imageCost = perImage * max(nSamples - freeImages, 0);
   final int preciseCost =
@@ -114,7 +110,6 @@ AnlasCost estimateBatchAnlasCost({
   int? tier,
   bool subscriptionActive = false,
   int nSamples = 1,
-  bool opusFocusedInpaint = false,
 }) {
   var total = 0;
   var allFree = tiles.isNotEmpty;
@@ -131,7 +126,6 @@ AnlasCost estimateBatchAnlasCost({
       tier: tier,
       subscriptionActive: subscriptionActive,
       nSamples: nSamples,
-      opusFocusedInpaint: opusFocusedInpaint,
     );
     total += cost.anlas;
     perImage = max(perImage, cost.perImageAnlas);
