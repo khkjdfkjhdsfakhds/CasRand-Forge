@@ -74,7 +74,7 @@ jobs:
           BADGING="$("$AAPT" dump badging "$ASSET_NAME")"
           grep -Fq "package: name='io.github.khkjdfkjhdsfakhds.casrandforge.beta' versionCode='72' versionName='0.9.5'" <<<"$BADGING"
           grep -Fq "application-label:'NAI CasRand Forge'" <<<"$BADGING"
-          grep -Fq "Signer #1 certificate SHA-256 digest: aa180c392642bf83b47eac1b7ec6756b6e0cefe2b4443ac8e1e22b3a24c31b3e" < <("$APKSIGNER" verify --verbose --print-certs "$ASSET_NAME")
+          grep -Fq "certificate SHA-256 digest: aa180c392642bf83b47eac1b7ec6756b6e0cefe2b4443ac8e1e22b3a24c31b3e" < <("$APKSIGNER" verify --verbose --print-certs "$ASSET_NAME")
 
       - name: Upload Android artifact
         uses: actions/upload-artifact@v4
