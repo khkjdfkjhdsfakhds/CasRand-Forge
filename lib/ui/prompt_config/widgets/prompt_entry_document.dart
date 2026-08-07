@@ -6,15 +6,57 @@ class _PromptDocumentController extends TextEditingController {
         super(text: _textForEntries(initialEntries));
 
   final Set<int> _boundaryOffsets;
-  int _layoutRevision = 0;
+  List<int>? _sortedBoundaryCache;
 
   Set<int> get boundaryOffsets => Set.unmodifiable(_boundaryOffsets);
 
-  int get layoutRevision => _layoutRevision;
-
   List<int> get sortedBoundaryOffsets {
-    final result = _boundaryOffsets.toList()..sort();
-    return result;
+    return List.unmodifiable(_sortedBoundaries);
+  }
+
+  List<int> get _sortedBoundaries =>
+      _sortedBoundaryCache ??= (_boundaryOffsets.toList()..sort());
+
+  int? crossedEntryBoundary(
+    int from,
+    int to, {
+    required bool moveDown,
+  }) {
+    if (from == to) return null;
+    final start = from < to ? from : to;
+    final end = from < to ? to : from;
+    final boundaries = _sortedBoundaries;
+    final firstIndex = _lowerBound(boundaries, start);
+    if (firstIndex == boundaries.length || boundaries[firstIndex] >= end) {
+      return null;
+    }
+    if (moveDown) return boundaries[firstIndex];
+    final endIndex = _lowerBound(boundaries, end);
+    return boundaries[endIndex - 1];
+  }
+
+  ({int start, int end}) entryRangeAcrossBoundary(
+    int boundary, {
+    required bool moveDown,
+  }) {
+    final boundaries = _sortedBoundaries;
+    final boundaryIndex = _lowerBound(boundaries, boundary);
+    assert(
+      boundaryIndex < boundaries.length &&
+          boundaries[boundaryIndex] == boundary,
+    );
+    if (moveDown) {
+      return (
+        start: boundary + 1,
+        end: boundaryIndex + 1 < boundaries.length
+            ? boundaries[boundaryIndex + 1]
+            : text.length,
+      );
+    }
+    return (
+      start: boundaryIndex == 0 ? 0 : boundaries[boundaryIndex - 1] + 1,
+      end: boundary,
+    );
   }
 
   List<String> get entries {
@@ -71,14 +113,14 @@ class _PromptDocumentController extends TextEditingController {
             offset < newValue.text.length &&
             newValue.text.codeUnitAt(offset) == 0x0A,
       ));
-    _layoutRevision++;
+    _sortedBoundaryCache = null;
   }
 
   void restore(_EditorSnapshot snapshot) {
     _boundaryOffsets
       ..clear()
       ..addAll(snapshot.boundaryOffsets);
-    _layoutRevision++;
+    _sortedBoundaryCache = null;
     value = TextEditingValue(
       text: snapshot.text,
       selection: snapshot.selection,
@@ -110,29 +152,34 @@ class _PromptDocumentController extends TextEditingController {
         );
       }
       if (atLineBreak) {
-        final breakStyle = _boundaryOffsets.contains(offset)
-            ? _entryBoundaryStyle(lineStyle)
-            : lineStyle;
-        spans.add(
-          _styledSpan(
-            text: '\n',
-            start: offset,
-            style: breakStyle,
-            withComposing: withComposing,
-          ),
-        );
+        if (_boundaryOffsets.contains(offset)) {
+          spans.add(
+            TextSpan(
+              style: const TextStyle(fontSize: 1, height: 1),
+              children: [
+                WidgetSpan(
+                  alignment: PlaceholderAlignment.middle,
+                  child: PromptEntryDividerPlaceholder(
+                    textStyleFontSize: style.fontSize ?? 14,
+                  ),
+                ),
+              ],
+            ),
+          );
+        } else {
+          spans.add(
+            _styledSpan(
+              text: '\n',
+              start: offset,
+              style: lineStyle,
+              withComposing: withComposing,
+            ),
+          );
+        }
       }
       lineStart = offset + 1;
     }
-    return TextSpan(style: style, children: spans);
-  }
-
-  TextStyle _entryBoundaryStyle(TextStyle style) {
-    final fontSize = style.fontSize ?? 14;
-    final baseHeight = style.height ?? 1.2;
-    return style.copyWith(
-      height: baseHeight + PromptEntryDivider.height / fontSize,
-    );
+    return TextSpan(children: spans);
   }
 
   TextSpan _styledSpan({
@@ -198,6 +245,20 @@ class _PromptDocumentController extends TextEditingController {
       offset++;
     }
     return boundaries;
+  }
+
+  static int _lowerBound(List<int> values, int target) {
+    var low = 0;
+    var high = values.length;
+    while (low < high) {
+      final middle = low + ((high - low) >> 1);
+      if (values[middle] < target) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    return low;
   }
 }
 

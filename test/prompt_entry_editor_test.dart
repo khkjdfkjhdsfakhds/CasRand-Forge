@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nai_casrand/ui/prompt_config/widgets/prompt_entry_divider.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_entry_editor.dart';
 
 void main() {
@@ -61,7 +62,7 @@ void main() {
     expect(find.text('Comment'), findsNothing);
   });
 
-  testWidgets('entry dividers are visual only and ignore pointer input', (
+  testWidgets('entry dividers are visual only and keep plain text input', (
     tester,
   ) async {
     await pumpEditor(
@@ -70,12 +71,302 @@ void main() {
       onChanged: (_) {},
     );
 
-    final overlay = find.byKey(const Key('prompt-entry-divider-overlay'));
-    expect(overlay, findsOneWidget);
-    final ignorePointers = tester.widgetList<IgnorePointer>(
-      find.ancestor(of: overlay, matching: find.byType(IgnorePointer)),
+    expect(find.byType(PromptEntryDividerPlaceholder), findsOneWidget);
+    expect(controllerFor(tester).text, 'one\ntwo');
+    const painter = PromptEntryDividerPainter(Colors.black);
+    expect(painter.hitTest(Offset.zero), isFalse);
+    const extremeScalePainter = PromptEntryDividerPainter(
+      Colors.black,
+      verticalOffset: -100,
     );
-    expect(ignorePointers.any((widget) => widget.ignoring), isTrue);
+    expect(extremeScalePainter.lineY(const Size(100, 2)), 0.5);
+  });
+
+  testWidgets('divider spacing stays centered when text is scaled', (
+    tester,
+  ) async {
+    final scalers = <TextScaler>[
+      const TextScaler.linear(1.5),
+      const TextScaler.linear(2),
+      const _NonlinearTextScaler(),
+    ];
+    for (final textScaler in scalers) {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MediaQuery(
+            data: MediaQueryData(
+              textScaler: textScaler,
+            ),
+            child: Scaffold(
+              body: SizedBox(
+                width: 640,
+                height: 700,
+                child: PromptEntryEditor(
+                  initialEntries: const ['one', 'two'],
+                  onChanged: (_) {},
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final editable = tester
+          .state<EditableTextState>(find.byType(EditableText))
+          .renderEditable;
+      final firstEntryBox = editable
+          .getBoxesForSelection(
+            const TextSelection(baseOffset: 0, extentOffset: 3),
+          )
+          .first;
+      final secondEntryBox = editable
+          .getBoxesForSelection(
+            const TextSelection(baseOffset: 4, extentOffset: 7),
+          )
+          .first;
+      final dividerPaint = find.descendant(
+        of: find.byType(PromptEntryDividerPlaceholder),
+        matching: find.byType(CustomPaint),
+      );
+      final divider = tester.renderObject<RenderBox>(dividerPaint);
+      final dividerPainter = tester.widget<CustomPaint>(dividerPaint).painter!
+          as PromptEntryDividerPainter;
+      final dividerY = divider
+          .localToGlobal(Offset(0, dividerPainter.lineY(divider.size)))
+          .dy;
+      final topGap =
+          dividerY - editable.localToGlobal(Offset(0, firstEntryBox.bottom)).dy;
+      final bottomGap =
+          editable.localToGlobal(Offset(0, secondEntryBox.top)).dy - dividerY;
+
+      expect(
+        (topGap - bottomGap).abs(),
+        lessThanOrEqualTo(1),
+        reason: 'text scaler $textScaler, top=$topGap, bottom=$bottomGap',
+      );
+    }
+  });
+
+  testWidgets('vertical arrows cross a divider without an extra stop', (
+    tester,
+  ) async {
+    await pumpEditor(
+      tester,
+      entries: const ['one', 'two'],
+      onChanged: (_) {},
+    );
+
+    final controller = controllerFor(tester);
+    await tester.tap(find.byKey(const Key('prompt-entry-editor')));
+    controller.selection = const TextSelection.collapsed(offset: 1);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(controller.selection, const TextSelection.collapsed(offset: 5));
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+    expect(controller.selection, const TextSelection.collapsed(offset: 1));
+  });
+
+  testWidgets('vertical arrows preserve the visual column after soft wrapping',
+      (
+    tester,
+  ) async {
+    const firstEntry = 'abcdefghij klmnopqrst uvwxyz';
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 150,
+            height: 300,
+            child: PromptEntryEditor(
+              initialEntries: const [firstEntry, 'ABCDEFGHIJ'],
+              onChanged: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final controller = controllerFor(tester);
+    final editable = tester
+        .state<EditableTextState>(find.byType(EditableText))
+        .renderEditable;
+    const beforeOffset = firstEntry.length - 2;
+    controller.selection = const TextSelection.collapsed(offset: beforeOffset);
+    final beforeX = editable
+        .localToGlobal(
+          editable
+              .getLocalRectForCaret(
+                const TextPosition(offset: beforeOffset),
+              )
+              .topLeft,
+        )
+        .dx;
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+
+    final afterOffset = controller.selection.extentOffset;
+    final afterX = editable
+        .localToGlobal(
+          editable
+              .getLocalRectForCaret(TextPosition(offset: afterOffset))
+              .topLeft,
+        )
+        .dx;
+    expect(afterOffset, greaterThan(firstEntry.length));
+    expect(
+      afterX,
+      closeTo(beforeX, 2),
+      reason: 'afterOffset=$afterOffset',
+    );
+  });
+
+  testWidgets('vertical arrows traverse a leading empty entry', (
+    tester,
+  ) async {
+    await pumpEditor(
+      tester,
+      entries: const ['', 'two'],
+      onChanged: (_) {},
+    );
+
+    final controller = controllerFor(tester);
+    await tester.tap(find.byKey(const Key('prompt-entry-editor')));
+    controller.selection = const TextSelection.collapsed(offset: 2);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+    expect(controller.selection, const TextSelection.collapsed(offset: 0));
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(controller.selection, const TextSelection.collapsed(offset: 1));
+  });
+
+  testWidgets('vertical arrows traverse a consecutive empty entry', (
+    tester,
+  ) async {
+    await pumpEditor(
+      tester,
+      entries: const ['one', '', 'two'],
+      onChanged: (_) {},
+    );
+
+    final controller = controllerFor(tester);
+    await tester.tap(find.byKey(const Key('prompt-entry-editor')));
+    controller.selection = const TextSelection.collapsed(offset: 1);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(controller.selection, const TextSelection.collapsed(offset: 4));
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(controller.selection, const TextSelection.collapsed(offset: 5));
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+    expect(controller.selection, const TextSelection.collapsed(offset: 4));
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+    expect(controller.selection, const TextSelection.collapsed(offset: 0));
+  });
+
+  testWidgets('Shift vertical arrows extend through an empty entry', (
+    tester,
+  ) async {
+    await pumpEditor(
+      tester,
+      entries: const ['one', '', 'two'],
+      onChanged: (_) {},
+    );
+
+    final controller = controllerFor(tester);
+    await tester.tap(find.byKey(const Key('prompt-entry-editor')));
+    controller.selection = const TextSelection.collapsed(offset: 1);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(controller.selection,
+        const TextSelection(baseOffset: 1, extentOffset: 4));
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(controller.selection,
+        const TextSelection(baseOffset: 1, extentOffset: 5));
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+    expect(controller.selection,
+        const TextSelection(baseOffset: 1, extentOffset: 4));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+  });
+
+  testWidgets('arrow up reaches an entry trailing internal empty line', (
+    tester,
+  ) async {
+    await pumpEditor(
+      tester,
+      entries: const ['one\n', 'two'],
+      onChanged: (_) {},
+    );
+
+    final controller = controllerFor(tester);
+    await tester.tap(find.byKey(const Key('prompt-entry-editor')));
+    controller.selection = const TextSelection.collapsed(offset: 6);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+    expect(controller.selection, const TextSelection.collapsed(offset: 4));
+  });
+
+  testWidgets('Shift arrow up reaches the last of trailing internal lines', (
+    tester,
+  ) async {
+    await pumpEditor(
+      tester,
+      entries: const ['one\n\n', 'two'],
+      onChanged: (_) {},
+    );
+
+    final controller = controllerFor(tester);
+    await tester.tap(find.byKey(const Key('prompt-entry-editor')));
+    controller.selection = const TextSelection.collapsed(offset: 7);
+    await tester.pump();
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+    expect(
+      controller.selection,
+      const TextSelection(baseOffset: 7, extentOffset: 5),
+    );
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+  });
+
+  testWidgets('repeated vertical arrows keep crossing entry dividers', (
+    tester,
+  ) async {
+    await pumpEditor(
+      tester,
+      entries: const ['one', 'two', 'three'],
+      onChanged: (_) {},
+    );
+
+    final controller = controllerFor(tester);
+    await tester.tap(find.byKey(const Key('prompt-entry-editor')));
+    controller.selection = const TextSelection.collapsed(offset: 1);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(controller.selection, const TextSelection.collapsed(offset: 5));
+    await tester.sendKeyRepeatEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(controller.selection, const TextSelection.collapsed(offset: 9));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowDown);
   });
 
   testWidgets('Enter splits at the caret and Backspace merges the boundary', (
@@ -406,13 +697,7 @@ void main() {
       onChanged: (_) {},
     );
 
-    final overlayFinder = find.byKey(
-      const Key('prompt-entry-divider-overlay'),
-    );
-    final overlayBefore = tester.widget<CustomPaint>(overlayFinder);
-    final dynamic painterBefore = overlayBefore.painter;
-    final int initialLayoutPassCount = painterBefore.debugLayoutPassCount;
-    expect(initialLayoutPassCount, 1);
+    expect(find.byType(PromptEntryDividerPlaceholder), findsNWidgets(2999));
 
     final gesture = await tester.startGesture(
       tester.getCenter(find.byKey(const Key('prompt-entry-editor'))),
@@ -427,11 +712,18 @@ void main() {
     }
     await gesture.up();
 
-    final overlayAfter = tester.widget<CustomPaint>(overlayFinder);
-    final dynamic painterAfter = overlayAfter.painter;
-
     expect(worstFrame, lessThan(const Duration(milliseconds: 100)));
-    expect(identical(painterBefore, painterAfter), isTrue);
-    expect(painterAfter.debugLayoutPassCount, initialLayoutPassCount);
   });
+}
+
+class _NonlinearTextScaler extends TextScaler {
+  const _NonlinearTextScaler();
+
+  @override
+  double scale(double fontSize) =>
+      fontSize <= 1 ? fontSize * 1.25 : fontSize * 2;
+
+  @override
+  // Only required by Flutter's backward-compatibility interface.
+  double get textScaleFactor => 2;
 }

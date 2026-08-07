@@ -2,12 +2,12 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_entry_divider.dart';
 
 part 'prompt_entry_document.dart';
-part 'prompt_entry_divider_overlay.dart';
 
 class PromptEntryEditor extends StatefulWidget {
   const PromptEntryEditor({
@@ -26,6 +26,11 @@ class PromptEntryEditor extends StatefulWidget {
 class _PromptEntryEditorState extends State<PromptEntryEditor> {
   static const _maxHistoryLength = 100;
   static const _contentPadding = EdgeInsets.symmetric(vertical: 8);
+  static const _strutStyle = StrutStyle(
+    fontSize: 1,
+    height: 1,
+    forceStrutHeight: false,
+  );
 
   late final _PromptDocumentController _controller;
   late final _PromptDocumentFormatter _formatter;
@@ -57,11 +62,15 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
   }
 
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final isKeyDown = event is KeyDownEvent;
+    final isKeyRepeat = event is KeyRepeatEvent;
+    if (!isKeyDown && !isKeyRepeat) return KeyEventResult.ignored;
 
     final hardware = HardwareKeyboard.instance;
     final modifierPressed = hardware.isMetaPressed || hardware.isControlPressed;
-    if (modifierPressed && event.logicalKey == LogicalKeyboardKey.keyZ) {
+    if (isKeyDown &&
+        modifierPressed &&
+        event.logicalKey == LogicalKeyboardKey.keyZ) {
       if (hardware.isShiftPressed) {
         _redo();
       } else {
@@ -69,11 +78,27 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
       }
       return KeyEventResult.handled;
     }
-    if (hardware.isControlPressed &&
+    if (isKeyDown &&
+        hardware.isControlPressed &&
         event.logicalKey == LogicalKeyboardKey.keyY) {
       _redo();
       return KeyEventResult.handled;
     }
+
+    if (!_hasComposingText &&
+        (event.logicalKey == LogicalKeyboardKey.arrowUp ||
+            event.logicalKey == LogicalKeyboardKey.arrowDown)) {
+      _scheduleVerticalBoundaryCorrection(
+        before: _safeSelection(_controller.value),
+        moveDown: event.logicalKey == LogicalKeyboardKey.arrowDown,
+        extendSelection: hardware.isShiftPressed,
+      );
+      return KeyEventResult.ignored;
+    }
+
+    // Repeated key events are only meaningful here for vertical navigation.
+    // Editing shortcuts below must continue to run once per physical key-down.
+    if (isKeyRepeat) return KeyEventResult.ignored;
 
     if (_hasComposingText) {
       if (_isEnter(event.logicalKey)) {
@@ -100,6 +125,96 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
     }
 
     return KeyEventResult.ignored;
+  }
+
+  void _scheduleVerticalBoundaryCorrection({
+    required TextSelection before,
+    required bool moveDown,
+    required bool extendSelection,
+  }) {
+    if ((!before.isCollapsed && !extendSelection) ||
+        HardwareKeyboard.instance.isMetaPressed ||
+        HardwareKeyboard.instance.isControlPressed ||
+        HardwareKeyboard.instance.isAltPressed) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final after = _safeSelection(_controller.value);
+      final boundary = _controller.crossedEntryBoundary(
+        before.extentOffset,
+        after.extentOffset,
+        moveDown: moveDown,
+      );
+      if (boundary == null) return;
+      final targetRange = _controller.entryRangeAcrossBoundary(
+        boundary,
+        moveDown: moveDown,
+      );
+      if (targetRange.start == targetRange.end) {
+        _setVerticalSelection(
+          before: before,
+          desiredOffset: targetRange.start,
+          extendSelection: extendSelection,
+        );
+        return;
+      }
+      final renderEditable = _findRenderEditable();
+      if (renderEditable == null) return;
+      final beforeCaret = renderEditable.getLocalRectForCaret(
+        TextPosition(offset: before.extentOffset),
+      );
+      final targetLineCaret = renderEditable.getLocalRectForCaret(
+        TextPosition(
+          offset: moveDown ? targetRange.start : targetRange.end,
+          affinity: moveDown ? TextAffinity.downstream : TextAffinity.upstream,
+        ),
+      );
+      final desiredOffset = renderEditable
+          .getPositionForPoint(
+            renderEditable.localToGlobal(
+              Offset(beforeCaret.left, targetLineCaret.center.dy),
+            ),
+          )
+          .offset;
+      if (after.extentOffset == desiredOffset) return;
+      _setVerticalSelection(
+        before: before,
+        desiredOffset: desiredOffset.clamp(
+          targetRange.start,
+          targetRange.end,
+        ),
+        extendSelection: extendSelection,
+      );
+    });
+  }
+
+  void _setVerticalSelection({
+    required TextSelection before,
+    required int desiredOffset,
+    required bool extendSelection,
+  }) {
+    _controller.selection = extendSelection
+        ? TextSelection(
+            baseOffset: before.baseOffset,
+            extentOffset: desiredOffset,
+          )
+        : TextSelection.collapsed(offset: desiredOffset);
+  }
+
+  RenderEditable? _findRenderEditable() {
+    RenderEditable? result;
+    void visit(RenderObject child) {
+      if (result != null) return;
+      if (child is RenderEditable) {
+        result = child;
+        return;
+      }
+      child.visitChildren(visit);
+    }
+
+    context.findRenderObject()?.visitChildren(visit);
+    return result;
   }
 
   bool _isEnter(LogicalKeyboardKey key) =>
@@ -231,54 +346,32 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final style = theme.textTheme.bodyLarge ?? const TextStyle(fontSize: 16);
-    final commentStyle = style.copyWith(
-      color: theme.colorScheme.onSurfaceVariant,
-      fontStyle: FontStyle.italic,
-    );
-    final textDirection = Directionality.of(context);
-    final textScaler = MediaQuery.textScalerOf(context);
 
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        TextField(
-          key: const Key('prompt-entry-editor'),
-          controller: _controller,
-          focusNode: _focusNode,
-          scrollController: _scrollController,
-          inputFormatters: [_formatter],
-          keyboardType: TextInputType.multiline,
-          textInputAction: TextInputAction.newline,
-          expands: true,
-          minLines: null,
-          maxLines: null,
-          autofocus: true,
-          style: style,
-          textAlignVertical: TextAlignVertical.top,
-          onChanged: _handleTextChanged,
-          decoration: const InputDecoration(
-            border: InputBorder.none,
-            enabledBorder: InputBorder.none,
-            focusedBorder: InputBorder.none,
-            contentPadding: _contentPadding,
-          ),
+    return Padding(
+      padding: _contentPadding,
+      child: TextField(
+        key: const Key('prompt-entry-editor'),
+        controller: _controller,
+        focusNode: _focusNode,
+        scrollController: _scrollController,
+        inputFormatters: [_formatter],
+        keyboardType: TextInputType.multiline,
+        textInputAction: TextInputAction.newline,
+        expands: true,
+        minLines: null,
+        maxLines: null,
+        autofocus: true,
+        style: style,
+        strutStyle: _strutStyle,
+        textAlignVertical: TextAlignVertical.top,
+        onChanged: _handleTextChanged,
+        decoration: const InputDecoration(
+          isCollapsed: true,
+          border: InputBorder.none,
+          enabledBorder: InputBorder.none,
+          focusedBorder: InputBorder.none,
         ),
-        IgnorePointer(
-          child: CustomPaint(
-            key: const Key('prompt-entry-divider-overlay'),
-            painter: _PromptEntryDividerOverlayPainter(
-              controller: _controller,
-              scrollController: _scrollController,
-              style: style,
-              commentStyle: commentStyle,
-              color: promptEntryDividerColor(context),
-              textDirection: textDirection,
-              textScaler: textScaler,
-              contentPadding: _contentPadding,
-            ),
-          ),
-        ),
-      ],
+      ),
     );
   }
 
