@@ -28,15 +28,13 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  TextEditingController controllerFor(WidgetTester tester, int index) {
+  TextEditingController controllerFor(WidgetTester tester) {
     return tester
-        .widget<TextField>(
-          find.byKey(Key('prompt-entry-field-$index')),
-        )
+        .widget<TextField>(find.byKey(const Key('prompt-entry-editor')))
         .controller!;
   }
 
-  testWidgets('text fields alone distinguish prompt entries', (
+  testWidgets('all prompt entries share one plain text editing surface', (
     tester,
   ) async {
     await pumpEditor(
@@ -50,15 +48,37 @@ void main() {
       onChanged: (_) {},
     );
 
-    expect(find.byType(TextField), findsNWidgets(4));
+    expect(find.byType(TextField), findsOneWidget);
+    expect(
+      controllerFor(tester).text,
+      'red hair\n# private note\nblue eyes\n# keep this cool\n  ',
+    );
+    final textField = tester.widget<TextField>(
+      find.byKey(const Key('prompt-entry-editor')),
+    );
+    expect(textField.decoration?.border, InputBorder.none);
     expect(find.text('1'), findsNothing);
-    expect(find.text('2'), findsNothing);
     expect(find.text('Comment'), findsNothing);
-    expect(find.byType(Divider), findsNothing);
   });
 
-  testWidgets('Enter splits at the caret and Backspace merges at the boundary',
-      (
+  testWidgets('entry dividers are visual only and ignore pointer input', (
+    tester,
+  ) async {
+    await pumpEditor(
+      tester,
+      entries: const ['one', 'two'],
+      onChanged: (_) {},
+    );
+
+    final overlay = find.byKey(const Key('prompt-entry-divider-overlay'));
+    expect(overlay, findsOneWidget);
+    final ignorePointers = tester.widgetList<IgnorePointer>(
+      find.ancestor(of: overlay, matching: find.byType(IgnorePointer)),
+    );
+    expect(ignorePointers.any((widget) => widget.ignoring), isTrue);
+  });
+
+  testWidgets('Enter splits at the caret and Backspace merges the boundary', (
     tester,
   ) async {
     var entries = <String>[];
@@ -68,25 +88,25 @@ void main() {
       onChanged: (value) => entries = value,
     );
 
-    final first = controllerFor(tester, 0);
-    await tester.tap(find.byKey(const Key('prompt-entry-field-0')));
-    first.selection = const TextSelection.collapsed(offset: 4);
+    final controller = controllerFor(tester);
+    await tester.tap(find.byKey(const Key('prompt-entry-editor')));
+    controller.selection = const TextSelection.collapsed(offset: 4);
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
 
     expect(entries, ['red ', 'hair']);
-    expect(find.byType(TextField), findsNWidgets(2));
-    expect(controllerFor(tester, 1).selection.baseOffset, 0);
+    expect(controller.text, 'red \nhair');
+    expect(controller.selection.baseOffset, 5);
 
     await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
     await tester.pump();
 
     expect(entries, ['red hair']);
-    expect(find.byType(TextField), findsOneWidget);
-    expect(controllerFor(tester, 0).selection.baseOffset, 4);
+    expect(controller.text, 'red hair');
+    expect(controller.selection.baseOffset, 4);
   });
 
-  testWidgets('Shift Enter inserts an internal newline', (
+  testWidgets('Shift Enter inserts an internal newline without a divider', (
     tester,
   ) async {
     var entries = <String>[];
@@ -96,31 +116,122 @@ void main() {
       onChanged: (value) => entries = value,
     );
 
-    final first = controllerFor(tester, 0);
-    await tester.tap(find.byKey(const Key('prompt-entry-field-0')));
-    first.selection = const TextSelection.collapsed(offset: 4);
+    final controller = controllerFor(tester);
+    await tester.tap(find.byKey(const Key('prompt-entry-editor')));
+    controller.selection = const TextSelection.collapsed(offset: 4);
     await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
     await tester.pump();
 
     expect(entries, ['red \nhair']);
-    expect(find.byType(TextField), findsOneWidget);
+    expect(controller.text, 'red \nhair');
   });
 
-  testWidgets('editor omits help and touch action chrome', (
+  testWidgets('deleting a boundary preserves an adjacent internal newline', (
     tester,
   ) async {
+    var entries = <String>[];
     await pumpEditor(
       tester,
-      entries: const ['one'],
+      entries: const ['one', '\ntwo'],
+      onChanged: (value) => entries = value,
+    );
+
+    final controller = controllerFor(tester);
+    await tester.tap(find.byKey(const Key('prompt-entry-editor')));
+    controller.selection = const TextSelection.collapsed(offset: 4);
+    await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+    await tester.pump();
+
+    expect(controller.text, 'one\ntwo');
+    expect(entries, ['one\ntwo']);
+  });
+
+  testWidgets('select all can delete every entry in one operation', (
+    tester,
+  ) async {
+    var entries = <String>[];
+    await pumpEditor(
+      tester,
+      entries: const ['one', 'two', 'three'],
+      onChanged: (value) => entries = value,
+    );
+
+    final controller = controllerFor(tester);
+    await tester.tap(find.byKey(const Key('prompt-entry-editor')));
+    controller.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: controller.text.length,
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+    await tester.pump();
+
+    expect(controller.text, isEmpty);
+    expect(entries, ['']);
+  });
+
+  testWidgets('copying across entries returns only the plain text document', (
+    tester,
+  ) async {
+    String? clipboardText;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          clipboardText =
+              (call.arguments as Map<Object?, Object?>)['text'] as String?;
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    await pumpEditor(
+      tester,
+      entries: const ['one', 'two', 'three'],
       onChanged: (_) {},
     );
 
-    expect(find.byKey(const Key('prompt-entry-help')), findsNothing);
-    expect(find.byKey(const Key('insert-prompt-line-break')), findsNothing);
-    expect(find.byKey(const Key('next-prompt-entry')), findsNothing);
-    expect(find.byType(TextField), findsOneWidget);
+    final controller = controllerFor(tester);
+    await tester.tap(find.byKey(const Key('prompt-entry-editor')));
+    controller.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: controller.text.length,
+    );
+    final editableText = tester.state<EditableTextState>(
+      find.byType(EditableText),
+    );
+    editableText.copySelection(SelectionChangedCause.keyboard);
+    await tester.pump();
+
+    expect(clipboardText, 'one\ntwo\nthree');
+  });
+
+  testWidgets('selection can replace text across entry boundaries', (
+    tester,
+  ) async {
+    var entries = <String>[];
+    await pumpEditor(
+      tester,
+      entries: const ['one', 'two', 'three'],
+      onChanged: (value) => entries = value,
+    );
+
+    await tester.tap(find.byKey(const Key('prompt-entry-editor')));
+    tester.testTextInput.updateEditingValue(
+      const TextEditingValue(
+        text: 'onXwo\nthree',
+        selection: TextSelection.collapsed(offset: 3),
+      ),
+    );
+    await tester.pump();
+
+    expect(entries, ['onXwo', 'three']);
   });
 
   testWidgets('pasted newlines become entry boundaries', (tester) async {
@@ -132,13 +243,13 @@ void main() {
     );
 
     await tester.enterText(
-      find.byKey(const Key('prompt-entry-field-0')),
+      find.byKey(const Key('prompt-entry-editor')),
       'first\nsecond\nthird',
     );
     await tester.pumpAndSettle();
 
     expect(entries, ['first', 'second', 'third']);
-    expect(find.byType(TextField), findsNWidgets(3));
+    expect(find.byType(TextField), findsOneWidget);
   });
 
   testWidgets('composing text can contain a newline without splitting', (
@@ -151,7 +262,7 @@ void main() {
       onChanged: (value) => entries = value,
     );
 
-    await tester.tap(find.byKey(const Key('prompt-entry-field-0')));
+    await tester.tap(find.byKey(const Key('prompt-entry-editor')));
     tester.testTextInput.updateEditingValue(
       const TextEditingValue(
         text: '候\n',
@@ -162,7 +273,6 @@ void main() {
     await tester.pump();
 
     expect(entries, ['候\n']);
-    expect(find.byType(TextField), findsOneWidget);
 
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     tester.testTextInput.updateEditingValue(
@@ -174,7 +284,6 @@ void main() {
     await tester.pump();
 
     expect(entries, ['候']);
-    expect(find.byType(TextField), findsOneWidget);
   });
 
   testWidgets('IME candidate confirmation does not create an entry', (
@@ -187,7 +296,7 @@ void main() {
       onChanged: (value) => entries = value,
     );
 
-    await tester.tap(find.byKey(const Key('prompt-entry-field-0')));
+    await tester.tap(find.byKey(const Key('prompt-entry-editor')));
     tester.testTextInput.updateEditingValue(
       const TextEditingValue(
         text: 'hou',
@@ -206,7 +315,6 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(entries, ['候']);
-    expect(find.byType(TextField), findsOneWidget);
   });
 
   testWidgets('multiline paste during composition still creates entries', (
@@ -219,7 +327,7 @@ void main() {
       onChanged: (value) => entries = value,
     );
 
-    await tester.tap(find.byKey(const Key('prompt-entry-field-0')));
+    await tester.tap(find.byKey(const Key('prompt-entry-editor')));
     tester.testTextInput.updateEditingValue(
       const TextEditingValue(
         text: 'hou',
@@ -237,41 +345,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(entries, ['first', 'second']);
-    expect(find.byType(TextField), findsNWidgets(2));
   });
 
-  testWidgets('trailing newline paste during composition keeps the boundary', (
-    tester,
-  ) async {
-    var entries = <String>[];
-    await pumpEditor(
-      tester,
-      entries: const [''],
-      onChanged: (value) => entries = value,
-    );
-
-    await tester.tap(find.byKey(const Key('prompt-entry-field-0')));
-    tester.testTextInput.updateEditingValue(
-      const TextEditingValue(
-        text: 'hou',
-        selection: TextSelection.collapsed(offset: 3),
-        composing: TextRange(start: 0, end: 3),
-      ),
-    );
-    await tester.pump();
-    tester.testTextInput.updateEditingValue(
-      const TextEditingValue(
-        text: 'first\n',
-        selection: TextSelection.collapsed(offset: 6),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(entries, ['first', '']);
-    expect(find.byType(TextField), findsNWidgets(2));
-  });
-
-  testWidgets('undo and redo restore structural edits', (tester) async {
+  testWidgets('undo and redo restore entry boundaries', (tester) async {
     var entries = <String>[];
     await pumpEditor(
       tester,
@@ -279,9 +355,9 @@ void main() {
       onChanged: (value) => entries = value,
     );
 
-    final first = controllerFor(tester, 0);
-    await tester.tap(find.byKey(const Key('prompt-entry-field-0')));
-    first.selection = const TextSelection.collapsed(offset: 4);
+    final controller = controllerFor(tester);
+    await tester.tap(find.byKey(const Key('prompt-entry-editor')));
+    controller.selection = const TextSelection.collapsed(offset: 4);
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
     expect(entries, ['one ', 'two']);
@@ -291,7 +367,7 @@ void main() {
     await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
     await tester.pump();
     expect(entries, ['one two']);
-    expect(controllerFor(tester, 0).selection.baseOffset, 4);
+    expect(controller.selection.baseOffset, 4);
 
     await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
     await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
@@ -302,23 +378,60 @@ void main() {
     expect(entries, ['one ', 'two']);
   });
 
-  testWidgets('large entry lists remain lazy and editable', (tester) async {
-    var entries = <String>[];
+  testWidgets('large entry collections remain one editable document', (
+    tester,
+  ) async {
     await pumpEditor(
       tester,
       entries: List.generate(1000, (index) => 'entry $index'),
-      onChanged: (value) => entries = value,
+      onChanged: (_) {},
     );
 
-    expect(find.byType(TextField).evaluate().length, lessThan(20));
-    await tester.enterText(
-      find.byKey(const Key('prompt-entry-field-0')),
-      'updated',
-    );
-    await tester.pump();
+    expect(find.byType(TextField), findsOneWidget);
+    final lines = controllerFor(tester).text.split('\n');
+    expect(lines, hasLength(1000));
+    expect(lines.first, 'entry 0');
+    expect(lines.last, 'entry 999');
+  });
 
-    expect(entries, hasLength(1000));
-    expect(entries.first, 'updated');
-    expect(entries.last, 'entry 999');
+  testWidgets('scrolling a large prompt document keeps paint frames bounded', (
+    tester,
+  ) async {
+    await pumpEditor(
+      tester,
+      entries: List.generate(
+        3000,
+        (index) => 'entry $index with enough text to exercise layout',
+      ),
+      onChanged: (_) {},
+    );
+
+    final overlayFinder = find.byKey(
+      const Key('prompt-entry-divider-overlay'),
+    );
+    final overlayBefore = tester.widget<CustomPaint>(overlayFinder);
+    final dynamic painterBefore = overlayBefore.painter;
+    final int initialLayoutPassCount = painterBefore.debugLayoutPassCount;
+    expect(initialLayoutPassCount, 1);
+
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.byKey(const Key('prompt-entry-editor'))),
+    );
+    var worstFrame = Duration.zero;
+    for (var frame = 0; frame < 12; frame++) {
+      final stopwatch = Stopwatch()..start();
+      await gesture.moveBy(const Offset(0, -40));
+      await tester.pump(const Duration(milliseconds: 16));
+      stopwatch.stop();
+      if (stopwatch.elapsed > worstFrame) worstFrame = stopwatch.elapsed;
+    }
+    await gesture.up();
+
+    final overlayAfter = tester.widget<CustomPaint>(overlayFinder);
+    final dynamic painterAfter = overlayAfter.painter;
+
+    expect(worstFrame, lessThan(const Duration(milliseconds: 100)));
+    expect(identical(painterBefore, painterAfter), isTrue);
+    expect(painterAfter.debugLayoutPassCount, initialLayoutPassCount);
   });
 }

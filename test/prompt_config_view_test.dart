@@ -64,8 +64,8 @@ void main() {
 
     expect(find.byType(PromptEntryEditor), findsOneWidget);
     await tester.enterText(
-      find.byKey(const Key('prompt-entry-field-0')),
-      'first\nsecond',
+      find.byKey(const Key('prompt-entry-editor')),
+      'first\nsecond\n# saved note',
     );
     await tester.pumpAndSettle();
     await tester.tap(find.text('Confirm'));

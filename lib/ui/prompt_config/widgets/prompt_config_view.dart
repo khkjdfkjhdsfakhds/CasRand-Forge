@@ -1,5 +1,6 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:nai_casrand/ui/prompt_config/widgets/prompt_entry_divider.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_entry_editor.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_config_delete_view.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_config_edit_view.dart';
@@ -255,63 +256,19 @@ class _PromptEntryPreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dividerColor =
-        Theme.of(context).colorScheme.outlineVariant.withAlpha(128);
+    final dividerColor = promptEntryDividerColor(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         for (final (index, entry) in entries.indexed) ...[
           Text(entry),
           if (index < entries.length - 1)
-            _PromptPreviewDivider(
+            PromptEntryDivider(
               key: Key('prompt-preview-divider-$index'),
               color: dividerColor,
             ),
         ],
       ],
     );
-  }
-}
-
-class _PromptPreviewDivider extends StatelessWidget {
-  const _PromptPreviewDivider({super.key, required this.color});
-
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 10,
-      width: double.infinity,
-      child: CustomPaint(
-        painter: _PromptPreviewDividerPainter(color),
-      ),
-    );
-  }
-}
-
-class _PromptPreviewDividerPainter extends CustomPainter {
-  const _PromptPreviewDividerPainter(this.color);
-
-  final Color color;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = 1
-      ..style = PaintingStyle.stroke;
-    const dashWidth = 8.0;
-    const gapWidth = 2.0;
-    final y = size.height / 2;
-    for (var x = 0.0; x < size.width; x += dashWidth + gapWidth) {
-      final end = (x + dashWidth).clamp(0.0, size.width);
-      canvas.drawLine(Offset(x, y), Offset(end, y), paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(_PromptPreviewDividerPainter oldDelegate) {
-    return oldDelegate.color != color;
   }
 }
