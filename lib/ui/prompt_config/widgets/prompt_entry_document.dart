@@ -7,8 +7,11 @@ class _PromptDocumentController extends TextEditingController {
 
   final Set<int> _boundaryOffsets;
   List<int>? _sortedBoundaryCache;
+  int _layoutRevision = 0;
 
   Set<int> get boundaryOffsets => Set.unmodifiable(_boundaryOffsets);
+
+  int get layoutRevision => _layoutRevision;
 
   List<int> get sortedBoundaryOffsets {
     return List.unmodifiable(_sortedBoundaries);
@@ -114,6 +117,7 @@ class _PromptDocumentController extends TextEditingController {
             newValue.text.codeUnitAt(offset) == 0x0A,
       ));
     _sortedBoundaryCache = null;
+    _layoutRevision++;
   }
 
   void restore(_EditorSnapshot snapshot) {
@@ -121,6 +125,7 @@ class _PromptDocumentController extends TextEditingController {
       ..clear()
       ..addAll(snapshot.boundaryOffsets);
     _sortedBoundaryCache = null;
+    _layoutRevision++;
     value = TextEditingValue(
       text: snapshot.text,
       selection: snapshot.selection,
@@ -142,44 +147,60 @@ class _PromptDocumentController extends TextEditingController {
       final line = text.substring(lineStart, offset);
       final lineStyle = PromptConfig.isCommentLine(line) ? commentStyle : style;
       if (line.isNotEmpty) {
-        spans.add(
-          _styledSpan(
-            text: line,
-            start: lineStart,
-            style: lineStyle,
-            withComposing: withComposing,
-          ),
-        );
-      }
-      if (atLineBreak) {
-        if (_boundaryOffsets.contains(offset)) {
-          spans.add(
-            TextSpan(
-              style: const TextStyle(fontSize: 1, height: 1),
-              children: [
-                WidgetSpan(
-                  alignment: PlaceholderAlignment.middle,
-                  child: PromptEntryDividerPlaceholder(
-                    textStyleFontSize: style.fontSize ?? 14,
-                  ),
-                ),
-              ],
-            ),
-          );
+        final followsBoundary =
+            lineStart > 0 && _boundaryOffsets.contains(lineStart - 1);
+        if (followsBoundary) {
+          spans
+            ..add(
+              _styledSpan(
+                text: line.substring(0, 1),
+                start: lineStart,
+                style: _entryBoundaryStyle(lineStyle),
+                withComposing: withComposing,
+              ),
+            )
+            ..add(
+              _styledSpan(
+                text: line.substring(1),
+                start: lineStart + 1,
+                style: lineStyle,
+                withComposing: withComposing,
+              ),
+            );
         } else {
           spans.add(
             _styledSpan(
-              text: '\n',
-              start: offset,
+              text: line,
+              start: lineStart,
               style: lineStyle,
               withComposing: withComposing,
             ),
           );
         }
       }
+      if (atLineBreak) {
+        spans.add(
+          _styledSpan(
+            text: '\n',
+            start: offset,
+            style: lineStyle,
+            withComposing: withComposing,
+          ),
+        );
+      }
       lineStart = offset + 1;
     }
     return TextSpan(children: spans);
+  }
+
+  TextStyle _entryBoundaryStyle(TextStyle style) {
+    final fontSize = style.fontSize ?? 14;
+    final baseHeight = style.height ?? 1.2;
+    return style.copyWith(
+      height:
+          baseHeight + PromptEntryDivider.editorBoundaryExtraLeading / fontSize,
+      leadingDistribution: TextLeadingDistribution.even,
+    );
   }
 
   TextSpan _styledSpan({

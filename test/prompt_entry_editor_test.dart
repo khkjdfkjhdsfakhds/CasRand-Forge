@@ -71,7 +71,12 @@ void main() {
       onChanged: (_) {},
     );
 
-    expect(find.byType(PromptEntryDividerPlaceholder), findsOneWidget);
+    final overlay = find.byKey(const Key('prompt-entry-divider-overlay'));
+    expect(overlay, findsOneWidget);
+    final ignorePointers = tester.widgetList<IgnorePointer>(
+      find.ancestor(of: overlay, matching: find.byType(IgnorePointer)),
+    );
+    expect(ignorePointers.any((widget) => widget.ignoring), isTrue);
     expect(controllerFor(tester).text, 'one\ntwo');
     const painter = PromptEntryDividerPainter(Colors.black);
     expect(painter.hitTest(Offset.zero), isFalse);
@@ -80,6 +85,64 @@ void main() {
       verticalOffset: -100,
     );
     expect(extremeScalePainter.lineY(const Size(100, 2)), 0.5);
+  });
+
+  testWidgets('caret beside an entry boundary stays aligned with the text', (
+    tester,
+  ) async {
+    await pumpEditor(
+      tester,
+      entries: const ['one', 'two'],
+      onChanged: (_) {},
+    );
+
+    final editable = tester
+        .state<EditableTextState>(find.byType(EditableText))
+        .renderEditable;
+    final glyphBox = editable
+        .getBoxesForSelection(
+          const TextSelection(baseOffset: 0, extentOffset: 3),
+        )
+        .first;
+    final caret = editable.getLocalRectForCaret(
+      const TextPosition(offset: 3),
+    );
+
+    expect(
+      caret.top,
+      greaterThanOrEqualTo(glyphBox.top - 1),
+      reason: 'caret=$caret, glyph=$glyphBox',
+    );
+    expect(caret.bottom, lessThanOrEqualTo(glyphBox.bottom + 1));
+    expect(
+      caret.center.dy,
+      closeTo((glyphBox.top + glyphBox.bottom) / 2, 2),
+      reason: 'caret=$caret, glyph=$glyphBox',
+    );
+  });
+
+  testWidgets('selecting across a divider adds no wide empty selection box', (
+    tester,
+  ) async {
+    await pumpEditor(
+      tester,
+      entries: const ['one', 'two'],
+      onChanged: (_) {},
+    );
+
+    final editable = tester
+        .state<EditableTextState>(find.byType(EditableText))
+        .renderEditable;
+    final boundaryBoxes = editable.getBoxesForSelection(
+      const TextSelection(baseOffset: 3, extentOffset: 4),
+    );
+
+    expect(boundaryBoxes, isNotEmpty);
+    expect(
+      boundaryBoxes.every((box) => box.right - box.left <= 2),
+      isTrue,
+      reason: 'boundary selection boxes: $boundaryBoxes',
+    );
   });
 
   testWidgets('divider spacing stays centered when text is scaled', (
@@ -115,30 +178,26 @@ void main() {
       final editable = tester
           .state<EditableTextState>(find.byType(EditableText))
           .renderEditable;
-      final firstEntryBox = editable
-          .getBoxesForSelection(
-            const TextSelection(baseOffset: 0, extentOffset: 3),
-          )
-          .first;
-      final secondEntryBox = editable
-          .getBoxesForSelection(
-            const TextSelection(baseOffset: 4, extentOffset: 7),
-          )
-          .first;
-      final dividerPaint = find.descendant(
-        of: find.byType(PromptEntryDividerPlaceholder),
-        matching: find.byType(CustomPaint),
+      final firstEntryCaret = editable.getLocalRectForCaret(
+        const TextPosition(offset: 3, affinity: TextAffinity.upstream),
       );
+      final secondEntryCaret = editable.getLocalRectForCaret(
+        const TextPosition(offset: 4),
+      );
+      final dividerPaint =
+          find.byKey(const Key('prompt-entry-divider-overlay'));
       final divider = tester.renderObject<RenderBox>(dividerPaint);
-      final dividerPainter = tester.widget<CustomPaint>(dividerPaint).painter!
-          as PromptEntryDividerPainter;
+      final dynamic dividerPainter =
+          tester.widget<CustomPaint>(dividerPaint).painter;
       final dividerY = divider
-          .localToGlobal(Offset(0, dividerPainter.lineY(divider.size)))
+          .localToGlobal(
+            Offset(0, dividerPainter.debugDividerYPositions.first as double),
+          )
           .dy;
       final topGap =
-          dividerY - editable.localToGlobal(Offset(0, firstEntryBox.bottom)).dy;
+          dividerY - editable.localToGlobal(firstEntryCaret.bottomLeft).dy;
       final bottomGap =
-          editable.localToGlobal(Offset(0, secondEntryBox.top)).dy - dividerY;
+          editable.localToGlobal(secondEntryCaret.topLeft).dy - dividerY;
 
       expect(
         (topGap - bottomGap).abs(),
@@ -697,7 +756,13 @@ void main() {
       onChanged: (_) {},
     );
 
-    expect(find.byType(PromptEntryDividerPlaceholder), findsNWidgets(2999));
+    final overlayFinder = find.byKey(
+      const Key('prompt-entry-divider-overlay'),
+    );
+    final overlayBefore = tester.widget<CustomPaint>(overlayFinder);
+    final dynamic painterBefore = overlayBefore.painter;
+    final int initialLayoutPassCount = painterBefore.debugLayoutPassCount;
+    expect(initialLayoutPassCount, 1);
 
     final gesture = await tester.startGesture(
       tester.getCenter(find.byKey(const Key('prompt-entry-editor'))),
@@ -712,7 +777,12 @@ void main() {
     }
     await gesture.up();
 
+    final overlayAfter = tester.widget<CustomPaint>(overlayFinder);
+    final dynamic painterAfter = overlayAfter.painter;
+
     expect(worstFrame, lessThan(const Duration(milliseconds: 100)));
+    expect(identical(painterBefore, painterAfter), isTrue);
+    expect(painterAfter.debugLayoutPassCount, initialLayoutPassCount);
   });
 }
 

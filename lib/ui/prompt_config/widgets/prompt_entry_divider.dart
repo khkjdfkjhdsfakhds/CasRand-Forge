@@ -8,18 +8,9 @@ class PromptEntryDivider extends StatelessWidget {
 
   static const height = 10.0;
 
-  // An inline placeholder forms its own visual line. With the editor's normal
-  // line leading, 11px produces the same glyph-to-divider spacing as the 10px
-  // standalone preview slot.
-  static const inlinePlaceholderHeight = 11.0;
-
-  // Flutter scales WidgetSpan children independently from the surrounding
-  // line metrics. This keeps the painted stroke optically centered between
-  // the adjacent glyph boxes at both normal and enlarged text scales.
-  static double inlineStrokeOffset(double scale) {
-    final opticalCorrection = 0.5 + (1.5 * (scale - 1));
-    return -opticalCorrection.clamp(0.5, 1.25).toDouble();
-  }
+  // Font line metrics absorb part of the added leading. An extra 22px on
+  // the first glyph after a boundary leaves the same ~8px per side as preview.
+  static const editorBoundaryExtraLeading = 22.0;
 
   final Color color;
 
@@ -30,34 +21,6 @@ class PromptEntryDivider extends StatelessWidget {
       width: double.infinity,
       child: CustomPaint(
         painter: PromptEntryDividerPainter(color),
-      ),
-    );
-  }
-}
-
-class PromptEntryDividerPlaceholder extends StatelessWidget {
-  const PromptEntryDividerPlaceholder({
-    super.key,
-    required this.textStyleFontSize,
-  });
-
-  final double textStyleFontSize;
-
-  @override
-  Widget build(BuildContext context) {
-    final textScaler = MediaQuery.textScalerOf(context);
-    final placeholderScale = textScaler.scale(1);
-    final bodyScale = textScaler.scale(textStyleFontSize) / textStyleFontSize;
-    return SizedBox(
-      width: double.infinity,
-      height: PromptEntryDivider.inlinePlaceholderHeight / placeholderScale,
-      child: CustomPaint(
-        painter: PromptEntryDividerPainter(
-          promptEntryDividerColor(context),
-          verticalOffset: PromptEntryDivider.inlineStrokeOffset(bodyScale) *
-              bodyScale /
-              placeholderScale,
-        ),
       ),
     );
   }

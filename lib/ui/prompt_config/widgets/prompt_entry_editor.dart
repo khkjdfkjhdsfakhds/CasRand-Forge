@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -8,6 +9,7 @@ import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_entry_divider.dart';
 
 part 'prompt_entry_document.dart';
+part 'prompt_entry_divider_overlay.dart';
 
 class PromptEntryEditor extends StatefulWidget {
   const PromptEntryEditor({
@@ -27,8 +29,7 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
   static const _maxHistoryLength = 100;
   static const _contentPadding = EdgeInsets.symmetric(vertical: 8);
   static const _strutStyle = StrutStyle(
-    fontSize: 1,
-    height: 1,
+    height: 1.2,
     forceStrutHeight: false,
   );
 
@@ -36,6 +37,7 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
   late final _PromptDocumentFormatter _formatter;
   late final FocusNode _focusNode;
   late final ScrollController _scrollController;
+  late final GlobalKey _editorLayoutKey;
   late final List<_EditorSnapshot> _history;
   int _historyIndex = 0;
   bool _restoringHistory = false;
@@ -53,6 +55,7 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
     );
     _focusNode = FocusNode(onKeyEvent: _handleKeyEvent);
     _scrollController = ScrollController();
+    _editorLayoutKey = GlobalKey();
     _history = [_snapshot()];
   }
 
@@ -347,31 +350,46 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
     final theme = Theme.of(context);
     final style = theme.textTheme.bodyLarge ?? const TextStyle(fontSize: 16);
 
-    return Padding(
-      padding: _contentPadding,
-      child: TextField(
-        key: const Key('prompt-entry-editor'),
-        controller: _controller,
-        focusNode: _focusNode,
-        scrollController: _scrollController,
-        inputFormatters: [_formatter],
-        keyboardType: TextInputType.multiline,
-        textInputAction: TextInputAction.newline,
-        expands: true,
-        minLines: null,
-        maxLines: null,
-        autofocus: true,
-        style: style,
-        strutStyle: _strutStyle,
-        textAlignVertical: TextAlignVertical.top,
-        onChanged: _handleTextChanged,
-        decoration: const InputDecoration(
-          isCollapsed: true,
-          border: InputBorder.none,
-          enabledBorder: InputBorder.none,
-          focusedBorder: InputBorder.none,
+    return Stack(
+      key: _editorLayoutKey,
+      fit: StackFit.expand,
+      children: [
+        TextField(
+          key: const Key('prompt-entry-editor'),
+          controller: _controller,
+          focusNode: _focusNode,
+          scrollController: _scrollController,
+          inputFormatters: [_formatter],
+          keyboardType: TextInputType.multiline,
+          textInputAction: TextInputAction.newline,
+          expands: true,
+          minLines: null,
+          maxLines: null,
+          autofocus: true,
+          style: style,
+          strutStyle: _strutStyle,
+          selectionHeightStyle: ui.BoxHeightStyle.strut,
+          textAlignVertical: TextAlignVertical.top,
+          onChanged: _handleTextChanged,
+          decoration: const InputDecoration(
+            border: InputBorder.none,
+            enabledBorder: InputBorder.none,
+            focusedBorder: InputBorder.none,
+            contentPadding: _contentPadding,
+          ),
         ),
-      ),
+        IgnorePointer(
+          child: CustomPaint(
+            key: const Key('prompt-entry-divider-overlay'),
+            painter: _PromptEntryDividerOverlayPainter(
+              controller: _controller,
+              scrollController: _scrollController,
+              color: promptEntryDividerColor(context),
+              editorLayoutKey: _editorLayoutKey,
+            ),
+          ),
+        ),
+      ],
     );
   }
 

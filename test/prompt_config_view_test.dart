@@ -6,7 +6,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/ui/prompt_config/view_models/prompt_config_viewmodel.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_config_view.dart';
-import 'package:nai_casrand/ui/prompt_config/widgets/prompt_entry_divider.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_entry_editor.dart';
 
 void main() {
@@ -92,37 +91,33 @@ void main() {
     final editable = tester
         .state<EditableTextState>(find.byType(EditableText))
         .renderEditable;
-    final firstEntryBox = editable
-        .getBoxesForSelection(
-          const TextSelection(baseOffset: 0, extentOffset: 3),
-        )
-        .first;
-    final secondEntryBox = editable
-        .getBoxesForSelection(
-          const TextSelection(baseOffset: 4, extentOffset: 16),
-        )
-        .first;
-    final editorDividerPaint = find.descendant(
-      of: find.byType(PromptEntryDividerPlaceholder),
-      matching: find.byType(CustomPaint),
+    final firstEntryCaret = editable.getLocalRectForCaret(
+      const TextPosition(offset: 3, affinity: TextAffinity.upstream),
     );
+    final secondEntryCaret = editable.getLocalRectForCaret(
+      const TextPosition(offset: 4),
+    );
+    final editorDividerPaint =
+        find.byKey(const Key('prompt-entry-divider-overlay'));
     final editorDivider = tester.renderObject<RenderBox>(editorDividerPaint);
-    final editorDividerPainter = tester
-        .widget<CustomPaint>(editorDividerPaint)
-        .painter! as PromptEntryDividerPainter;
+    final dynamic editorDividerPainter =
+        tester.widget<CustomPaint>(editorDividerPaint).painter;
     final dividerY = editorDivider
         .localToGlobal(
-          Offset(0, editorDividerPainter.lineY(editorDivider.size)),
+          Offset(
+            0,
+            editorDividerPainter.debugDividerYPositions.first as double,
+          ),
         )
         .dy;
     final firstEntryBottom = editable
         .localToGlobal(
-          Offset(0, firstEntryBox.bottom),
+          firstEntryCaret.bottomLeft,
         )
         .dy;
     final secondEntryTop = editable
         .localToGlobal(
-          Offset(0, secondEntryBox.top),
+          secondEntryCaret.topLeft,
         )
         .dy;
 
