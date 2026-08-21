@@ -13,6 +13,7 @@ import 'package:nai_casrand/data/models/api_token_config.dart';
 import 'package:nai_casrand/data/models/api_request.dart';
 import 'package:nai_casrand/data/models/command_status.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
+import 'package:nai_casrand/data/models/opus_usage.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
@@ -195,6 +196,30 @@ class _FakeAccountService extends AccountService {
     final pending = blocker;
     if (pending != null) return pending.future;
     return null;
+  }
+}
+
+class _ChangingOpusAccountService extends AccountService {
+  int calls = 0;
+
+  @override
+  Future<SubscriptionInfo?> fetchSubscription({
+    required String token,
+    required String proxy,
+    bool forceRefresh = false,
+  }) async {
+    calls++;
+    return SubscriptionInfo(
+      anlas: 100 - calls,
+      tier: 3,
+      active: true,
+      usage: OpusUsage(
+        percent: 80 - calls.toDouble(),
+        isNegative: false,
+        secondsPerPercent: 6048,
+        observedAt: DateTime(2026, 8, 21).add(Duration(seconds: calls)),
+      ),
+    );
   }
 }
 
@@ -662,6 +687,183 @@ void main() {
     viewmodel.dispose();
   });
 
+  testWidgets('V5 result appears before Opus usage settles in the background', (
+    tester,
+  ) async {
+    final outputImage = img.Image(width: 64, height: 64, numChannels: 3);
+    final api = _FakeApiService(ApiResponse(
+      status: '200',
+      data: directorResponseZip([
+        Uint8List.fromList(img.encodePng(outputImage)),
+      ]),
+    ));
+    final observedAt = DateTime.now();
+    final settlement = Completer<SubscriptionInfo?>();
+    final accounts = _FakeAccountService(responses: [
+      SubscriptionInfo(
+        anlas: 100,
+        tier: 3,
+        active: true,
+        usage: OpusUsage(
+          percent: 73,
+          isNegative: false,
+          secondsPerPercent: 6048,
+          observedAt: observedAt,
+        ),
+      ),
+    ], blocker: settlement);
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      accountService: accounts,
+      fileService: _RecordingFileService(),
+    );
+    final config = GetIt.I<PayloadConfig>();
+    config.paramConfig.model = 'nai-diffusion-5-full';
+    config.settings
+      ..apiKey = 'pst-test'
+      ..debugApiEnabled = false;
+    await viewmodel.refreshSubscriptionSnapshot();
+
+    viewmodel.runSingleGeneration();
+    final command = viewmodel.currentCommand!;
+    await waitForCurrentCommand(tester, viewmodel);
+
+    expect(command.value.imageBytes, isNotNull);
+    expect(command.value.opusUsage?.visiblePercent.round(), 73);
+    expect(command.value.opusUsageIsEstimated, isTrue);
+    expect(command.value.opusUsageSettling, isTrue);
+
+    settlement.complete(SubscriptionInfo(
+      anlas: 100,
+      tier: 3,
+      active: true,
+      usage: OpusUsage(
+        percent: 72,
+        isNegative: false,
+        secondsPerPercent: 6048,
+        observedAt: observedAt.add(const Duration(seconds: 1)),
+      ),
+    ));
+
+    await tester.runAsync(() async {
+      final deadline = DateTime.now().add(const Duration(seconds: 2));
+      while (command.value.opusUsageSettling &&
+          DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    });
+    await tester.pump();
+
+    expect(command.value.opusUsage?.visiblePercent.round(), 72);
+    expect(command.value.opusUsageIsEstimated, isFalse);
+    expect(command.value.opusUsageSettling, isFalse);
+    viewmodel.dispose();
+  });
+
+  testWidgets('finite V5 batch coalesces per-result subscription refreshes', (
+    tester,
+  ) async {
+    final outputImage = img.Image(width: 64, height: 64, numChannels: 3);
+    final api = _FakeApiService(ApiResponse(
+      status: '200',
+      data: directorResponseZip([
+        Uint8List.fromList(img.encodePng(outputImage)),
+      ]),
+    ));
+    final accounts = _ChangingOpusAccountService();
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      accountService: accounts,
+      fileService: _RecordingFileService(),
+    );
+    final config = GetIt.I<PayloadConfig>();
+    config.paramConfig.model = 'nai-diffusion-5-full';
+    config.settings
+      ..apiKey = 'pst-test'
+      ..debugApiEnabled = false
+      ..generationCount = 4
+      ..generationIntervalSec = 0;
+    await viewmodel.refreshSubscriptionSnapshot();
+
+    viewmodel.startGeneration();
+    for (var attempt = 0;
+        attempt < 500 &&
+            (viewmodel.commandStatus.isGenerationActive.value ||
+                viewmodel.commandList.any(
+                  (command) => command.value.opusUsageSettling,
+                ));
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 10));
+    }
+    await tester.pump();
+
+    expect(api.calls, 4);
+    expect(
+      viewmodel.commandList.where(
+        (command) => command.value.imageBytes != null,
+      ),
+      hasLength(4),
+    );
+    expect(
+      viewmodel.commandList
+          .where((command) => command.value.imageBytes != null)
+          .map((command) => command.value.opusUsageSettling),
+      everyElement(isFalse),
+    );
+    // Initial snapshot + one batch baseline + one final settlement.
+    expect(accounts.calls, 3);
+    viewmodel.dispose();
+  });
+
+  testWidgets('longer V5 batch refreshes Opus usage every five results', (
+    tester,
+  ) async {
+    final outputImage = img.Image(width: 64, height: 64, numChannels: 3);
+    final api = _FakeApiService(ApiResponse(
+      status: '200',
+      data: directorResponseZip([
+        Uint8List.fromList(img.encodePng(outputImage)),
+      ]),
+    ));
+    final accounts = _ChangingOpusAccountService();
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      accountService: accounts,
+      fileService: _RecordingFileService(),
+    );
+    final config = GetIt.I<PayloadConfig>();
+    config.paramConfig.model = 'nai-diffusion-5-full';
+    config.settings
+      ..apiKey = 'pst-test'
+      ..debugApiEnabled = false
+      ..generationCount = 5
+      ..generationIntervalSec = 0;
+    await viewmodel.refreshSubscriptionSnapshot();
+
+    viewmodel.startGeneration();
+    for (var attempt = 0;
+        attempt < 500 &&
+            (viewmodel.commandStatus.isGenerationActive.value ||
+                viewmodel.commandList.any(
+                  (command) => command.value.opusUsageSettling,
+                ));
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 10));
+    }
+    await tester.pump();
+
+    expect(api.calls, 5);
+    expect(
+      viewmodel.commandList
+          .where((command) => command.value.imageBytes != null)
+          .map((command) => command.value.opusUsageSettling),
+      everyElement(isFalse),
+    );
+    // Initial snapshot + baseline + one five-result refresh + final settlement.
+    expect(accounts.calls, 4);
+    viewmodel.dispose();
+  });
+
   testWidgets('a winning generation is published through image storage',
       (tester) async {
     final outputImage = img.Image(width: 64, height: 64, numChannels: 3);
@@ -1045,6 +1247,7 @@ void main() {
     tester,
   ) async {
     final config = GetIt.I<PayloadConfig>();
+    config.paramConfig.model = 'nai-diffusion-4-5-full';
     config.settings
       ..subscriptionTier = 3
       ..subscriptionActive = true
@@ -1086,6 +1289,7 @@ void main() {
       fileService: _RecordingFileService(),
     );
     final settings = GetIt.I<PayloadConfig>().settings;
+    GetIt.I<PayloadConfig>().paramConfig.model = 'nai-diffusion-4-5-full';
     settings
       ..apiKey = 'pst-test'
       ..debugApiEnabled = false
@@ -1313,6 +1517,7 @@ void main() {
       'pst-standard': SubscriptionInfo(anlas: 100, tier: 1, active: true),
     });
     final settings = GetIt.I<PayloadConfig>().settings;
+    GetIt.I<PayloadConfig>().paramConfig.model = 'nai-diffusion-4-5-full';
     settings.updatePrimaryApiKey('pst-opus');
     settings.apiTokens.first.label = 'Opus';
     settings.apiTokens.add(
@@ -1504,6 +1709,7 @@ void main() {
     final fake = _FakeEncodeVibeUseCase();
     final viewmodel = GenerationPageViewmodel(encodeVibeUseCase: fake);
     final config = GetIt.I<PayloadConfig>();
+    config.paramConfig.model = 'nai-diffusion-4-5-full';
     final vibe = VibeConfigV4(
       fileName: 'reference.png',
       imageBytes: Uint8List.fromList([1, 2, 3]),
@@ -1540,6 +1746,7 @@ void main() {
     final fake = _FakeEncodeVibeUseCase();
     final viewmodel = GenerationPageViewmodel(encodeVibeUseCase: fake);
     final config = GetIt.I<PayloadConfig>();
+    config.paramConfig.model = 'nai-diffusion-4-5-full';
     config.vibeConfigListV4.add(
       VibeConfigV4(
         fileName: 'reference.png',
@@ -1561,6 +1768,7 @@ void main() {
     final fake = _FakeEncodeVibeUseCase()..blocker = Completer<String>();
     final viewmodel = GenerationPageViewmodel(encodeVibeUseCase: fake);
     final config = GetIt.I<PayloadConfig>();
+    config.paramConfig.model = 'nai-diffusion-4-5-full';
     final vibe = VibeConfigV4(
       fileName: 'reference.png',
       imageBytes: Uint8List.fromList([1]),
@@ -1585,6 +1793,7 @@ void main() {
     final fake = _FakeEncodeVibeUseCase()..failuresRemaining = 1;
     final viewmodel = GenerationPageViewmodel(encodeVibeUseCase: fake);
     final config = GetIt.I<PayloadConfig>();
+    config.paramConfig.model = 'nai-diffusion-4-5-full';
     final vibe = VibeConfigV4(
       fileName: 'reference.png',
       imageBytes: Uint8List.fromList([1]),

@@ -13,6 +13,7 @@ import 'package:nai_casrand/data/models/director_tool_config.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/models/i2i_config.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
+import 'package:nai_casrand/data/models/opus_usage.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
 import 'package:lorem_ipsum/lorem_ipsum.dart';
@@ -30,6 +31,7 @@ import 'package:nai_casrand/data/use_cases/prepare_director_tool_request_use_cas
 import 'package:nai_casrand/ui/generation_page/view_models/generation_scheduler.dart';
 
 const infoCardContentListLength = 200;
+const _opusUsageRefreshResultThreshold = 5;
 const _balanceSettlementRetryDelays = [
   Duration(milliseconds: 300),
   Duration(seconds: 1),
@@ -110,6 +112,10 @@ class _BatchAccounting {
   final Map<String, Command<void, InfoCardContent>> lastCommands = {};
   final Map<String, int> lastSuccessfulTaskNumbers = {};
   final Map<String, Future<void>> baselineFutures = {};
+  final Map<String, List<Command<void, InfoCardContent>>>
+      pendingOpusUsageCommands = {};
+  final Map<String, Future<void>> opusUsageRefreshes = {};
+  final Map<String, int> resultsSinceOpusUsageRefresh = {};
   int activeRequests = 0;
   bool stopped = false;
   Future<void>? finalization;
@@ -222,10 +228,11 @@ class GenerationPageViewmodel extends ChangeNotifier {
       payloadConfig.paramConfig.sizes.length > 1 &&
       !(payloadConfig.i2iEnabled && payloadConfig.i2iConfig.hasImage);
 
-  /// Whether SMEA multipliers apply to the current model (V4 models drop the
+  /// Whether SMEA multipliers apply to the current model (V4/V5 drop the
   /// sm flags from the payload entirely).
   bool get _smActive =>
-      !payloadConfig.paramConfig.model.contains('diffusion-4');
+      !payloadConfig.paramConfig.model.contains('diffusion-4') &&
+      !payloadConfig.paramConfig.model.contains('diffusion-5');
 
   int get _pendingVibeEncodingAnlas {
     final config = payloadConfig;
@@ -266,6 +273,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
       paramConfig.model,
       payloadConfig.settings.subscriptionTier,
       payloadConfig.settings.subscriptionActive,
+      payloadConfig.settings.opusUsageAvailable,
       payloadConfig.preciseReferenceEnabled
           ? payloadConfig.preciseReferenceConfigList
               .where((reference) => reference.enabled)
@@ -288,15 +296,25 @@ class GenerationPageViewmodel extends ChangeNotifier {
     final i2i = payloadConfig.i2iConfig;
     final tier = payloadConfig.settings.subscriptionTier;
     final subscriptionActive = payloadConfig.settings.subscriptionActive;
+    final primaryToken = payloadConfig.settings.effectiveApiTokens.firstOrNull;
+    final usage = primaryToken == null
+        ? null
+        : _freshSubscriptionSnapshot(primaryToken.token)?.usage;
+    final opusUsageAvailable = usage == null
+        ? payloadConfig.settings.opusUsageAvailable == true
+        : !usage.isNegative;
     final sm = _smActive && paramConfig.sm;
     final smDyn = _smActive && paramConfig.smDyn;
-    final preciseCount = payloadConfig.preciseReferenceEnabled
-        ? payloadConfig.preciseReferenceConfigList
-            .where((reference) => reference.enabled)
-            .length
+    final supportsReferences = !paramConfig.model.contains('diffusion-5');
+    final preciseCount =
+        supportsReferences && payloadConfig.preciseReferenceEnabled
+            ? payloadConfig.preciseReferenceConfigList
+                .where((reference) => reference.enabled)
+                .length
+            : 0;
+    final vibeCount = supportsReferences && payloadConfig.vibeEnabled
+        ? payloadConfig.vibeConfigListV4.length
         : 0;
-    final vibeCount =
-        payloadConfig.vibeEnabled ? payloadConfig.vibeConfigListV4.length : 0;
     final vibeEncodingAnlas = _pendingVibeEncodingAnlas;
     // With several sizes one is picked at random per request; estimate the
     // most expensive so the display is an honest upper bound.
@@ -320,6 +338,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
           smDyn: smDyn,
           tier: tier,
           subscriptionActive: subscriptionActive,
+          model: paramConfig.model,
+          opusUsageAvailable: opusUsageAvailable,
           nSamples: paramConfig.nSamples,
           preciseReferenceCount: preciseCount,
           vibeCount: vibeCount,
@@ -342,6 +362,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
             smDyn: smDyn,
             tier: tier,
             subscriptionActive: subscriptionActive,
+            model: paramConfig.model,
+            opusUsageAvailable: opusUsageAvailable,
             nSamples: paramConfig.nSamples,
           );
           // Precise references and extra vibes are billed per request, so a
@@ -380,6 +402,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
       settings.subscriptionTier = 0;
       settings.subscriptionActive = false;
       settings.subscriptionStatusKnown = true;
+      settings.opusUsageAvailable = false;
       return;
     }
     final now = DateTime.now();
@@ -395,6 +418,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
       settings.subscriptionTier = 0;
       settings.subscriptionActive = false;
       settings.subscriptionStatusKnown = true;
+      settings.opusUsageAvailable = false;
       return;
     }
     _subscriptionRefreshInFlight = true;
@@ -423,6 +447,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
       settings.subscriptionTier = info.tier;
       settings.subscriptionActive = info.active;
       settings.subscriptionStatusKnown = true;
+      settings.opusUsageAvailable =
+          info.usage == null ? null : !info.usage!.isNegative;
     }
     if (info.anlas != null) {
       _lastAnlasBalances[token] = info.anlas!;
@@ -870,6 +896,13 @@ class GenerationPageViewmodel extends ChangeNotifier {
           batch: i2iBatch,
           vibeExtractionAnlas: vibeExtractionAnlas,
         );
+        final model = payloadResult.payload['model']?.toString() ?? '';
+        final opusPreview = _opusPreviewFor(token: token, model: model);
+        final settleOpusUsage = _shouldSettleOpusUsage(
+          token: token,
+          model: model,
+          debugApiEnabled: settings.debugApiEnabled,
+        );
         final previewContent = InfoCardContent(
           title: fileName,
           info: payloadResult.comment,
@@ -878,6 +911,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
           anlasCost: estimatedCost,
           anlasCostIsEstimated: true,
           tokenLabel: _tokenLabelForWorker(workerIndex),
+          opusUsage: opusPreview,
+          opusUsageIsEstimated: settleOpusUsage,
+          opusUsageSettling: settleOpusUsage,
         );
         command.value = previewContent;
         if (scheduledLease != null) {
@@ -914,6 +950,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
           anlasCost: estimatedCost,
           anlasCostIsEstimated: true,
           tokenLabel: _tokenLabelForWorker(workerIndex),
+          opusUsage: opusPreview,
+          opusUsageIsEstimated: settleOpusUsage,
+          opusUsageSettling: settleOpusUsage,
         );
       } catch (e) {
         final scheduledFailure = scheduledLease == null
@@ -936,8 +975,6 @@ class GenerationPageViewmodel extends ChangeNotifier {
           anlasCostIsEstimated: vibeExtractionAnlas != 0,
           tokenLabel: _tokenLabelForWorker(workerIndex),
         );
-      } finally {
-        if (batchAccounting != null) batchAccounting.activeRequests--;
       }
     }
 
@@ -1045,6 +1082,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
       final snapshot = _freshSubscriptionSnapshot(token);
       final tier = snapshot?.tier;
       final subscriptionActive = snapshot?.active ?? false;
+      final opusUsageAvailable = snapshot?.usage?.isNegative == false;
+      final model = payloadResult.payload['model']?.toString() ?? '';
       final sm = parameters['sm'] == true;
       final smDyn = parameters['sm_dyn'] == true;
       final plans = batch?.plans ?? const <I2iRequestPlan>[];
@@ -1065,6 +1104,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
           smDyn: smDyn,
           tier: tier,
           subscriptionActive: subscriptionActive,
+          model: model,
+          opusUsageAvailable: opusUsageAvailable,
           nSamples: nSamples,
         );
         final referenceCostPerRequest = (preciseCount * preciseReferenceAnlas +
@@ -1086,6 +1127,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
             smDyn: smDyn,
             tier: tier,
             subscriptionActive: subscriptionActive,
+            model: model,
+            opusUsageAvailable: opusUsageAvailable,
             preciseReferenceCount: preciseCount,
             vibeCount: vibeCount,
           ).anlas +
@@ -1104,6 +1147,28 @@ class GenerationPageViewmodel extends ChangeNotifier {
     return _subscriptionSnapshots[token];
   }
 
+  OpusUsage? _opusPreviewFor({
+    required String token,
+    required String model,
+  }) {
+    if (!model.contains('diffusion-5')) return null;
+    final snapshot = _freshSubscriptionSnapshot(token);
+    if (snapshot == null || !snapshot.active || snapshot.tier < opusTier) {
+      return null;
+    }
+    return snapshot.usage?.projectedAt(DateTime.now());
+  }
+
+  bool _shouldSettleOpusUsage({
+    required String token,
+    required String model,
+    required bool debugApiEnabled,
+  }) {
+    if (debugApiEnabled || !model.contains('diffusion-5')) return false;
+    final snapshot = _freshSubscriptionSnapshot(token);
+    return snapshot == null || (snapshot.active && snapshot.tier >= opusTier);
+  }
+
   bool _hasFreshInsufficientBalance(String token, int estimatedCost) {
     if (estimatedCost <= 0) return false;
     final snapshot = _freshSubscriptionSnapshot(token);
@@ -1118,9 +1183,17 @@ class GenerationPageViewmodel extends ChangeNotifier {
     required DateTime? startingBalanceTime,
     required _BatchAccounting? batch,
   }) {
+    if (batch != null) batch.activeRequests--;
     final content = command.value;
     if (content.imageBytes != null && batch != null) {
       batch.lastCommands[token] = command;
+      if (content.opusUsageSettling) {
+        _queueBatchOpusUsageRefresh(
+          batch: batch,
+          command: command,
+          token: token,
+        );
+      }
     } else if (content.imageBytes != null &&
         !payloadConfig.settings.debugApiEnabled) {
       unawaited(_refreshSingleResultBalance(
@@ -1146,11 +1219,19 @@ class GenerationPageViewmodel extends ChangeNotifier {
       token: token,
       startingBalance: startingBalance,
       estimatedCost: estimatedCost,
+      startingUsage: command.value.opusUsage,
+      settleUsage: command.value.opusUsageSettling,
     );
-    if (info == null) return;
+    if (info == null) {
+      _finishUsageSettlementWithoutSnapshot(command);
+      return;
+    }
     _recordSubscriptionInfo(token, info);
     final remaining = info.anlas;
-    if (remaining == null) return;
+    if (remaining == null) {
+      _applyUsageSettlement(command, info.usage);
+      return;
+    }
     final baselineIsFresh = startingBalanceTime != null &&
         DateTime.now().difference(startingBalanceTime) <
             const Duration(minutes: 2);
@@ -1163,8 +1244,155 @@ class GenerationPageViewmodel extends ChangeNotifier {
       anlasCost: exactCost ?? command.value.anlasCost,
       anlasCostIsEstimated: exactCost == null,
       anlasRemaining: remaining,
+      opusUsage: info.usage,
+      opusUsageIsEstimated: info.usage == null,
+      opusUsageSettling: false,
     );
+    _applyUsageSettlement(command, info.usage);
     notifyListeners();
+  }
+
+  void _queueBatchOpusUsageRefresh({
+    required _BatchAccounting batch,
+    required Command<void, InfoCardContent> command,
+    required String token,
+  }) {
+    batch.pendingOpusUsageCommands.putIfAbsent(token, () => []).add(command);
+    final resultCount = (batch.resultsSinceOpusUsageRefresh[token] ?? 0) + 1;
+    batch.resultsSinceOpusUsageRefresh[token] = resultCount;
+    if (resultCount >= _opusUsageRefreshResultThreshold) {
+      _startBatchOpusUsageRefresh(batch, token);
+    }
+  }
+
+  void _startBatchOpusUsageRefresh(
+    _BatchAccounting batch,
+    String token,
+  ) {
+    if (batch.opusUsageRefreshes.containsKey(token)) return;
+    final pending = batch.pendingOpusUsageCommands[token];
+    if (pending == null || pending.isEmpty) return;
+    final commands = List<Command<void, InfoCardContent>>.of(pending);
+    pending.clear();
+    batch.resultsSinceOpusUsageRefresh[token] = 0;
+
+    late final Future<void> refresh;
+    refresh = _refreshBatchOpusUsage(
+      batch: batch,
+      token: token,
+      commands: commands,
+    ).whenComplete(() {
+      if (identical(batch.opusUsageRefreshes[token], refresh)) {
+        batch.opusUsageRefreshes.remove(token);
+      }
+      if (!batch.stopped &&
+          (batch.resultsSinceOpusUsageRefresh[token] ?? 0) >=
+              _opusUsageRefreshResultThreshold) {
+        _startBatchOpusUsageRefresh(batch, token);
+      }
+    });
+    batch.opusUsageRefreshes[token] = refresh;
+    unawaited(refresh);
+  }
+
+  Future<void> _refreshBatchOpusUsage({
+    required _BatchAccounting batch,
+    required String token,
+    required List<Command<void, InfoCardContent>> commands,
+  }) async {
+    SubscriptionInfo? info;
+    try {
+      info = await _accountService.fetchSubscription(
+        token: token,
+        proxy: payloadConfig.settings.proxy,
+        forceRefresh: true,
+      );
+    } catch (_) {
+      info = null;
+    }
+    if (info == null) {
+      batch.pendingOpusUsageCommands
+          .putIfAbsent(token, () => [])
+          .insertAll(0, commands);
+      return;
+    }
+    _recordSubscriptionInfo(token, info);
+    for (final command in commands) {
+      _applyUsageSettlement(command, info.usage);
+    }
+    notifyListeners();
+  }
+
+  List<Command<void, InfoCardContent>> _takePendingOpusUsageCommands(
+    _BatchAccounting batch,
+    String token,
+  ) {
+    final commands = batch.pendingOpusUsageCommands.remove(token);
+    batch.resultsSinceOpusUsageRefresh.remove(token);
+    return commands ?? const <Command<void, InfoCardContent>>[];
+  }
+
+  void _settlePendingBatchOpusUsage(
+    _BatchAccounting batch,
+    String token,
+    OpusUsage? usage,
+  ) {
+    for (final command in _takePendingOpusUsageCommands(batch, token)) {
+      _applyUsageSettlement(command, usage);
+    }
+  }
+
+  void _finishPendingBatchOpusUsageWithoutSnapshot(
+    _BatchAccounting batch,
+    String token,
+  ) {
+    for (final command in _takePendingOpusUsageCommands(batch, token)) {
+      _finishUsageSettlementWithoutSnapshot(command);
+    }
+  }
+
+  Future<void> _awaitBatchOpusUsageRefresh(
+    _BatchAccounting batch,
+    String token,
+  ) async {
+    final refresh = batch.opusUsageRefreshes[token];
+    if (refresh != null) await refresh;
+  }
+
+  void _finishUsageSettlementWithoutSnapshot(
+    Command<void, InfoCardContent> command,
+  ) {
+    final title = command.value.title;
+    void update(Command<void, InfoCardContent> target) {
+      if (target.value.title != title) return;
+      target.value = target.value.copyWith(opusUsageSettling: false);
+    }
+
+    update(command);
+    for (final target in commandList) {
+      update(target);
+    }
+    notifyListeners();
+  }
+
+  void _applyUsageSettlement(
+    Command<void, InfoCardContent> command,
+    OpusUsage? usage,
+  ) {
+    final title = command.value.title;
+    void update(Command<void, InfoCardContent> target) {
+      if (target.value.title != title) return;
+      target.value = target.value.copyWith(
+        opusUsage: usage,
+        opusUsageIsEstimated: usage == null,
+        opusUsageSettling: false,
+      );
+    }
+
+    update(command);
+    for (final target in commandList) {
+      update(target);
+    }
   }
 
   Future<void> _captureBatchStartingBalance(
@@ -1200,11 +1428,14 @@ class GenerationPageViewmodel extends ChangeNotifier {
     required String token,
     required int? startingBalance,
     required int estimatedCost,
+    OpusUsage? startingUsage,
+    bool settleUsage = false,
   }) async {
     SubscriptionInfo? lastUsableInfo;
-    final retryDelays = startingBalance == null
-        ? const <Duration>[]
-        : _balanceSettlementRetryDelays;
+    final shouldRetry =
+        startingBalance != null || (settleUsage && startingUsage != null);
+    final retryDelays =
+        !shouldRetry ? const <Duration>[] : _balanceSettlementRetryDelays;
     for (var attempt = 0; attempt <= retryDelays.length; attempt++) {
       if (attempt > 0) await Future<void>.delayed(retryDelays[attempt - 1]);
       final info = await _accountService.fetchSubscription(
@@ -1212,10 +1443,19 @@ class GenerationPageViewmodel extends ChangeNotifier {
         proxy: payloadConfig.settings.proxy,
         forceRefresh: true,
       );
-      final remaining = info?.anlas;
-      if (info == null || remaining == null) continue;
+      if (info == null) continue;
       lastUsableInfo = info;
-      final mayStillBeStale = estimatedCost > 0 && remaining == startingBalance;
+      final remaining = info.anlas;
+      final usage = info.usage;
+      final balanceMayStillBeStale = estimatedCost > 0 &&
+          startingBalance != null &&
+          remaining == startingBalance;
+      final usageMayStillBeStale = settleUsage &&
+          startingUsage != null &&
+          usage != null &&
+          usage.isNegative == startingUsage.isNegative &&
+          (usage.percent - startingUsage.percent).abs() < 0.0001;
+      final mayStillBeStale = balanceMayStillBeStale || usageMayStillBeStale;
       if (!mayStillBeStale || attempt == retryDelays.length) return info;
     }
     return lastUsableInfo;
@@ -1232,6 +1472,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
     String token,
   ) async {
     await batch.baselineFutures[token];
+    await _awaitBatchOpusUsageRefresh(batch, token);
     final command = batch.lastCommands[token];
     if (command == null) return;
     final starting = batch.startingBalances[token];
@@ -1240,10 +1481,17 @@ class GenerationPageViewmodel extends ChangeNotifier {
       startingBalance: starting,
       estimatedCost: batch.estimatedTotals[token] ?? 0,
     );
-    if (info == null) return;
+    if (info == null) {
+      _finishPendingBatchOpusUsageWithoutSnapshot(batch, token);
+      return;
+    }
     _recordSubscriptionInfo(token, info);
+    _settlePendingBatchOpusUsage(batch, token, info.usage);
     final remaining = info.anlas;
-    if (remaining == null) return;
+    if (remaining == null) {
+      notifyListeners();
+      return;
+    }
     final actual =
         starting != null && starting >= remaining ? starting - remaining : null;
     final successCount = batch.successCounts[token] ?? 0;

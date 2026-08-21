@@ -570,8 +570,13 @@ void main() {
         requests++;
         return http.Response(
           jsonEncode({
-            'tier': 1,
+            'tier': 3,
             'active': true,
+            'usage': {
+              'percent': 73,
+              'isNegative': false,
+              'timeUntilNextPercent': 6048,
+            },
             'trainingStepsLeft': {
               'fixedTrainingStepsLeft': 100,
               'purchasedTrainingSteps': requests,
@@ -598,6 +603,9 @@ void main() {
     );
 
     expect(first?.anlas, 101);
+    expect(first?.usage?.percent, 73);
+    expect(first?.usage?.isNegative, isFalse);
+    expect(first?.usage?.secondsPerPercent, 6048);
     expect(cached?.anlas, 101);
     expect(refreshed?.anlas, 102);
     expect(requests, 2);

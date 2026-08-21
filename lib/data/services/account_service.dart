@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:nai_casrand/data/services/api_service.dart';
+import 'package:nai_casrand/data/models/opus_usage.dart';
 
 /// Subscription snapshot: Anlas balance plus the tier that decides whether
 /// generations fall under the Opus free allowance.
@@ -8,11 +9,13 @@ class SubscriptionInfo {
   final int? anlas;
   final int tier;
   final bool active;
+  final OpusUsage? usage;
 
   const SubscriptionInfo({
     required this.anlas,
     required this.tier,
     required this.active,
+    this.usage,
   });
 }
 
@@ -118,7 +121,27 @@ class AccountService {
       } else if (steps is num) {
         anlas = steps.toInt();
       }
-      return SubscriptionInfo(anlas: anlas, tier: tier, active: active);
+
+      OpusUsage? usage;
+      final usageData = data['usage'];
+      if (usageData is Map) {
+        final percent = usageData['percent'];
+        final secondsPerPercent = usageData['timeUntilNextPercent'];
+        if (percent is num && secondsPerPercent is num) {
+          usage = OpusUsage(
+            percent: percent.toDouble(),
+            isNegative: usageData['isNegative'] == true,
+            secondsPerPercent: secondsPerPercent.toDouble(),
+            observedAt: DateTime.now(),
+          );
+        }
+      }
+      return SubscriptionInfo(
+        anlas: anlas,
+        tier: tier,
+        active: active,
+        usage: usage,
+      );
     } catch (_) {
       return null;
     }

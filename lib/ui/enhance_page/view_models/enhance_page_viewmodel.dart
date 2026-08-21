@@ -133,7 +133,8 @@ class EnhancePageViewmodel extends ChangeNotifier {
     if (!payloadConfig.settings.subscriptionStatusKnown) return null;
     final paramConfig = payloadConfig.paramConfig;
     final target = targetSize;
-    final smActive = !paramConfig.model.contains('diffusion-4');
+    final smActive = !paramConfig.model.contains('diffusion-4') &&
+        !paramConfig.model.contains('diffusion-5');
     return estimateAnlasCost(
       width: target.width,
       height: target.height,
@@ -144,6 +145,8 @@ class EnhancePageViewmodel extends ChangeNotifier {
       smDyn: smActive && paramConfig.smDyn,
       tier: payloadConfig.settings.subscriptionTier,
       subscriptionActive: payloadConfig.settings.subscriptionActive,
+      model: paramConfig.model,
+      opusUsageAvailable: payloadConfig.settings.opusUsageAvailable,
     );
   }
 }

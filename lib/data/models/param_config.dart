@@ -4,7 +4,7 @@ import '../../core/constants/defaults.dart';
 import 'generation_size.dart';
 
 class ParamConfig {
-  static const String defaultModel = 'nai-diffusion-4-5-full';
+  static const String defaultModel = 'nai-diffusion-5-full';
   static const double defaultScale = 5.0;
   static const double defaultCfgRescale = 0.0;
 
@@ -165,10 +165,10 @@ class ParamConfig {
     };
     payload['legacy_v3_extend'] = false;
     payload.removeWhere((k, v) => v == null);
-    if (model.contains('diffusion-4')) {
+    if (model.contains('diffusion-4') || model.contains('diffusion-5')) {
       payload.remove('sm');
       payload.remove('sm_dyn');
-      if (noiseSchedule.contains('native')) {
+      if (model.contains('diffusion-4') && noiseSchedule.contains('native')) {
         payload['noise_schedule'] = 'karras';
       }
     }

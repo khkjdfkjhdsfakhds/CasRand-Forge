@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:nai_casrand/data/services/generated_image_storage.dart';
+import 'package:nai_casrand/data/models/opus_usage.dart';
 
 class InfoCardContent {
   final String title;
@@ -31,6 +32,12 @@ class InfoCardContent {
   /// Label of the API token that produced this result (multi-token mode).
   final String? tokenLabel;
 
+  /// Opus V5 generation allowance after this image. While settlement is in
+  /// progress this is a projection of the most recent server snapshot.
+  final OpusUsage? opusUsage;
+  final bool opusUsageIsEstimated;
+  final bool opusUsageSettling;
+
   const InfoCardContent({
     required this.title,
     required this.info,
@@ -42,6 +49,9 @@ class InfoCardContent {
     this.anlasRemaining,
     this.batchAnlasCost,
     this.tokenLabel,
+    this.opusUsage,
+    this.opusUsageIsEstimated = false,
+    this.opusUsageSettling = false,
   }) : _imageBytes = imageBytes;
 
   InfoCardContent copyWith({
@@ -49,6 +59,9 @@ class InfoCardContent {
     bool? anlasCostIsEstimated,
     int? anlasRemaining,
     int? batchAnlasCost,
+    OpusUsage? opusUsage,
+    bool? opusUsageIsEstimated,
+    bool? opusUsageSettling,
   }) {
     return InfoCardContent(
       title: title,
@@ -61,6 +74,9 @@ class InfoCardContent {
       anlasRemaining: anlasRemaining ?? this.anlasRemaining,
       batchAnlasCost: batchAnlasCost ?? this.batchAnlasCost,
       tokenLabel: tokenLabel,
+      opusUsage: opusUsage ?? this.opusUsage,
+      opusUsageIsEstimated: opusUsageIsEstimated ?? this.opusUsageIsEstimated,
+      opusUsageSettling: opusUsageSettling ?? this.opusUsageSettling,
     );
   }
 

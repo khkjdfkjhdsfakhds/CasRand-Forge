@@ -20,7 +20,10 @@ void main() {
         negativePromptConfig: PromptConfig(strs: [], prompts: []),
         characterConfigList: [],
         savedPromptConfigList: [],
-        paramConfig: ParamConfig(nSamples: 2),
+        paramConfig: ParamConfig(
+          model: 'nai-diffusion-4-5-full',
+          nSamples: 2,
+        ),
         settings: Settings.fromJson({}),
         overridePrompt: '',
         useOverridePrompt: false,

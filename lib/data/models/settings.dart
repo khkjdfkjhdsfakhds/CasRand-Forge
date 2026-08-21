@@ -50,6 +50,10 @@ class Settings {
   bool subscriptionActive;
   bool subscriptionStatusKnown;
 
+  /// Runtime-only V5 quota availability from the latest subscription
+  /// snapshot. Null means the server has not supplied usage information yet.
+  bool? opusUsageAvailable;
+
   // Output dir, for windows only
   String outputFolderPath;
 
@@ -108,6 +112,7 @@ class Settings {
     this.subscriptionTier = 0,
     this.subscriptionActive = false,
     this.subscriptionStatusKnown = false,
+    this.opusUsageAvailable,
     this.parallelApiEnabled = false,
     List<ApiTokenConfig>? apiTokens,
   })  : navigation = navigation ?? NavigationConfiguration.fromJson({}),

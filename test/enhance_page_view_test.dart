@@ -254,7 +254,8 @@ void main() {
     payload.settings
       ..subscriptionTier = 3
       ..subscriptionActive = true
-      ..subscriptionStatusKnown = true;
+      ..subscriptionStatusKnown = true
+      ..opusUsageAvailable = true;
     payload.enhanceConfig
       ..setImage(solidPng(512, 512))
       ..setScale(2);

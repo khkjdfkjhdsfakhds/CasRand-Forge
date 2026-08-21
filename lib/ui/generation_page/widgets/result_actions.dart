@@ -95,7 +95,8 @@ class ResultActions {
     final targetW = snap((width * enhance.scale).round());
     final targetH = snap((height * enhance.scale).round());
     final paramConfig = _payloadConfig.paramConfig;
-    final smActive = !paramConfig.model.contains('diffusion-4');
+    final smActive = !paramConfig.model.contains('diffusion-4') &&
+        !paramConfig.model.contains('diffusion-5');
     return estimateAnlasCost(
       width: targetW,
       height: targetH,
@@ -106,6 +107,8 @@ class ResultActions {
       smDyn: smActive && paramConfig.smDyn,
       tier: _payloadConfig.settings.subscriptionTier,
       subscriptionActive: _payloadConfig.settings.subscriptionActive,
+      model: paramConfig.model,
+      opusUsageAvailable: _payloadConfig.settings.opusUsageAvailable,
     );
   }
 }

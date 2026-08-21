@@ -85,6 +85,8 @@ class ParametersConfigViewmodel extends ChangeNotifier {
   }
 
   bool get isV4 => config.model.contains('-4-');
+  bool get isV5 => config.model.contains('-5-');
+  bool get isModern => isV4 || isV5;
 
   void setLegacyUc(bool? value) {
     if (value == null) return;

@@ -48,6 +48,37 @@ void main() {
     expect(cost.isFreeUnderOpus, isFalse);
   });
 
+  test('V5 applies its price multiplier and requires available Opus usage', () {
+    final v45 = estimateAnlasCost(
+      width: 832,
+      height: 1216,
+      steps: 28,
+    );
+    final paidV5 = estimateAnlasCost(
+      width: 832,
+      height: 1216,
+      steps: 28,
+      model: 'nai-diffusion-5-full',
+      tier: opusTier,
+      subscriptionActive: true,
+      opusUsageAvailable: false,
+    );
+    final freeV5 = estimateAnlasCost(
+      width: 832,
+      height: 1216,
+      steps: 28,
+      model: 'nai-diffusion-5-full',
+      tier: opusTier,
+      subscriptionActive: true,
+      opusUsageAvailable: true,
+    );
+
+    expect(paidV5.perImageAnlas, (v45.perImageAnlas * 1.5).ceil());
+    expect(paidV5.anlas, paidV5.perImageAnlas);
+    expect(freeV5.anlas, 0);
+    expect(freeV5.isFreeUnderOpus, isTrue);
+  });
+
   test('opus only waives one image per request', () {
     final cost = estimateAnlasCost(
       width: 832,

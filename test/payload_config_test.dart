@@ -384,7 +384,7 @@ void main() {
   });
 
   test(
-      'built-in defaults use the requested prompts, interval, and NAI 4.5 Full parameters',
+      'built-in defaults use the requested prompts, interval, and NAI 5 Full parameters',
       () async {
     const qualityPrompt = 'very aesthetic, masterpiece, no text';
     const negativePrompt =
@@ -398,7 +398,7 @@ void main() {
     );
 
     expect(config.characterConfigList, isEmpty);
-    expect(config.paramConfig.model, 'nai-diffusion-4-5-full');
+    expect(config.paramConfig.model, 'nai-diffusion-5-full');
     expect(config.paramConfig.scale, 5.0);
     expect(config.paramConfig.cfgRescale, 0.0);
     expect(config.settings.generationIntervalSec, 2);

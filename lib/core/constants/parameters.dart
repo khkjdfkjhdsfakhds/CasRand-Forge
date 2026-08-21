@@ -1,4 +1,6 @@
 const models = [
+  'nai-diffusion-5-full',
+  'nai-diffusion-5-curated',
   'nai-diffusion-4-5-full',
   'nai-diffusion-4-5-curated',
   'nai-diffusion-4-full',
@@ -61,6 +63,9 @@ const List<String> commentKeys = [
 
 /// Inpainting model variants, matching the official web frontend.
 const Map<String, String> inpaintModelMapping = {
+  'nai-diffusion-5-full': 'nai-diffusion-5-full-inpainting',
+  // Curated V5 temporarily uses the V4.5 Curated inpainting endpoint.
+  'nai-diffusion-5-curated': 'nai-diffusion-4-5-curated-inpainting',
   'nai-diffusion-4-5-full': 'nai-diffusion-4-5-full-inpainting',
   'nai-diffusion-4-5-curated': 'nai-diffusion-4-5-curated-inpainting',
   'nai-diffusion-4-full': 'nai-diffusion-4-full-inpainting',

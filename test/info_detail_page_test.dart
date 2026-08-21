@@ -12,6 +12,7 @@ import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/models/image_handoff_coordinator.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
+import 'package:nai_casrand/data/models/opus_usage.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
@@ -156,6 +157,54 @@ void main() {
         reason: 'the prompt column sits to the right of the image');
     // Both are visible at once, without scrolling.
     expect(find.text('Prompt blocks'), findsOneWidget);
+  });
+
+  testWidgets('key parameters show predicted then settled Opus usage', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final predicted = InfoCardContent(
+      title: 'v5.png',
+      info: 'prompt',
+      additionalInfo: const {
+        'width': 832,
+        'height': 1216,
+        'model': 'nai-diffusion-5-full',
+      },
+      imageBytes: solidPng(64, 96),
+      opusUsage: OpusUsage(
+        percent: 73,
+        isNegative: false,
+        secondsPerPercent: 6048,
+        observedAt: DateTime(2026, 8, 21),
+      ),
+      opusUsageIsEstimated: true,
+      opusUsageSettling: true,
+    );
+
+    await tester.pumpWidget(localizedApp(InfoDetailPage(content: predicted)));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('opus-usage-limit-bar')), findsOneWidget);
+    expect(find.textContaining('Estimated'), findsWidgets);
+    expect(find.textContaining('73%'), findsOneWidget);
+
+    final settled = predicted.copyWith(
+      opusUsage: OpusUsage(
+        percent: 72,
+        isNegative: false,
+        secondsPerPercent: 6048,
+        observedAt: DateTime(2026, 8, 21),
+      ),
+      opusUsageIsEstimated: false,
+      opusUsageSettling: false,
+    );
+    await tester.pumpWidget(localizedApp(InfoDetailPage(content: settled)));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('72%'), findsOneWidget);
+    expect(find.textContaining('Actual'), findsWidgets);
   });
 
   testWidgets('a narrow window keeps the stacked layout', (tester) async {

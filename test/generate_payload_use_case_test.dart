@@ -665,6 +665,35 @@ void main() {
     expect(parameters['extra_noise_seed'], 4);
   });
 
+  test('V5 inpainting uses Full and launch-safe Curated model routing', () {
+    const plan = I2iRequestPlan(
+      imageB64: 'aW1hZ2U=',
+      maskB64: 'bWFzaw==',
+      width: 1024,
+      height: 1024,
+      strength: 1,
+      noise: 0,
+      addOriginalImage: false,
+      composite: null,
+      summary: 'V5 inpaint',
+    );
+
+    final full = GeneratePayloadUseCase(
+      payloadConfig: buildPlainConfig(model: 'nai-diffusion-5-full'),
+      i2iPlan: plan,
+    )();
+    final curated = GeneratePayloadUseCase(
+      payloadConfig: buildPlainConfig(model: 'nai-diffusion-5-curated'),
+      i2iPlan: plan,
+    )();
+
+    expect(full.payload['model'], 'nai-diffusion-5-full-inpainting');
+    expect(
+      curated.payload['model'],
+      'nai-diffusion-4-5-curated-inpainting',
+    );
+  });
+
   test('inpaint plan at full strength omits the img2img blend object', () {
     final config = buildPlainConfig(model: 'nai-diffusion-3');
     const plan = I2iRequestPlan(
@@ -690,7 +719,9 @@ void main() {
     expect(parameters.containsKey('img2img'), isFalse);
   });
 
-  test('suggestedFileName extracts prefixes from checked prompt nodes across base and character configs', () {
+  test(
+      'suggestedFileName extracts prefixes from checked prompt nodes across base and character configs',
+      () {
     final artist = PromptConfig(
       comment: '画师',
       useAsFileNamePrefix: true,

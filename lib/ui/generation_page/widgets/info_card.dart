@@ -598,7 +598,9 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
         content.batchAnlasCost.toString(),
       ));
     }
-    if (chips.isEmpty) return const SizedBox.shrink();
+    final showOpusUsage =
+        content.opusUsage != null || content.opusUsageSettling;
+    if (chips.isEmpty && !showOpusUsage) return const SizedBox.shrink();
 
     return Card(
       child: Padding(
@@ -612,8 +614,73 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
             ),
             const SizedBox(height: 8),
             Wrap(spacing: 8, runSpacing: 8, children: chips),
+            if (showOpusUsage) ...[
+              const SizedBox(height: 14),
+              _buildOpusUsageBar(context),
+            ],
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildOpusUsageBar(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final usage = content.opusUsage;
+    final percent = usage?.visiblePercent;
+    final percentLabel = percent == null ? '—' : '${percent.round()}%';
+    final stateLabel = content.opusUsageIsEstimated
+        ? tr('opus_usage_estimated')
+        : tr('opus_usage_actual');
+    final settlingLabel =
+        content.opusUsageSettling ? ' · ${tr('opus_usage_settling')}' : '';
+    return Container(
+      key: const Key('opus-usage-limit-bar'),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: colors.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  tr('opus_generation_usage_limit'),
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+              ),
+              Text(
+                '$stateLabel · $percentLabel$settlingLabel',
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: colors.outline,
+                    ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          LinearProgressIndicator(
+            value: percent == null ? null : percent / 100,
+            minHeight: 8,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          if (usage != null && usage.refillPercentPerHour > 0) ...[
+            const SizedBox(height: 6),
+            Text(
+              tr(
+                'opus_usage_refill_rate',
+                namedArgs: {
+                  'rate': usage.refillPercentPerHour.toStringAsFixed(1),
+                },
+              ),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: colors.outline,
+                  ),
+            ),
+          ],
+        ],
       ),
     );
   }

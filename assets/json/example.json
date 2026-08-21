@@ -156,7 +156,7 @@
         "prompts": []
     },
     "param_config": {
-        "model": "nai-diffusion-4-5-full",
+        "model": "nai-diffusion-5-full",
         "width": 832,
         "height": 1216,
         "scale": 5.0,

@@ -4,6 +4,15 @@
 
 ---
 
+## [0.9.7+90] - 2026-08-21
+
+### NovelAI Diffusion V5
+- 本版本只完成 NAI Diffusion V5 的最基础适配，目标是支持模型选择与基本生成；并非完整对齐 NovelAI 官网，V5 高级功能仍待后续版本补齐。
+- 新增 NAI Diffusion V5 Full 与 V5 Curated，并将 V5 Full 设为新配置默认模型。
+- 对齐 V5 的采样器、原生 Noise Schedule、计费倍率与当前功能边界；V5 暂不展示 Vibe Transfer 和 Precise Reference。
+- 结果详情“关键参数”新增 Opus Generation Usage Limit：图片完成后立即显示预计值，后台异步结算后原位更新为实际值，不延长图片显示时间。
+- 合并批量生成中的 Opus 用量查询：每个 API 账号最多每 5 张刷新一次，并复用批次最终结算，避免逐图轮询放大代理与订阅接口负载。
+
 ## [0.9.6+88] - 2026-08-21
 
 0.9.6 冻结为 NovelAI V4.5 的最后稳定基线，并作为后续 NovelAI V5 适配的起点。

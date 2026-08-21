@@ -3,7 +3,7 @@ import 'package:nai_casrand/core/constants/parameters.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 
 void main() {
-  test('generation defaults use NAI 4.5 Full guidance 5 and rescale 0', () {
+  test('generation defaults use NAI 5 Full guidance 5 and rescale 0', () {
     final defaults = ParamConfig();
     final missingDefaults = defaults.toJson()
       ..remove('model')
@@ -14,12 +14,12 @@ void main() {
       ..['scale'] = 6.5
       ..['cfg_rescale'] = 0.1;
 
-    expect(defaults.model, 'nai-diffusion-4-5-full');
+    expect(defaults.model, 'nai-diffusion-5-full');
     expect(defaults.scale, 5.0);
     expect(defaults.cfgRescale, 0.0);
 
     final migratedDefaults = ParamConfig.fromJson(missingDefaults);
-    expect(migratedDefaults.model, 'nai-diffusion-4-5-full');
+    expect(migratedDefaults.model, 'nai-diffusion-5-full');
     expect(migratedDefaults.scale, 5.0);
     expect(migratedDefaults.cfgRescale, 0.0);
 
@@ -27,6 +27,24 @@ void main() {
     expect(preservedValues.model, 'nai-diffusion-4-curated-preview');
     expect(preservedValues.scale, 6.5);
     expect(preservedValues.cfgRescale, 0.1);
+  });
+
+  test('V5 payload drops SMEA flags and keeps the native schedule', () {
+    final config = ParamConfig(
+      model: 'nai-diffusion-5-full',
+      sampler: 'k_euler_ancestral',
+      noiseSchedule: 'native',
+      sm: true,
+      smDyn: true,
+      randomSeed: false,
+      seed: 7,
+    );
+
+    final payload = config.getPayload();
+
+    expect(payload.containsKey('sm'), isFalse);
+    expect(payload.containsKey('sm_dyn'), isFalse);
+    expect(payload['noise_schedule'], 'native');
   });
 
   test('AI character position choice defaults on and preserves saved choices',

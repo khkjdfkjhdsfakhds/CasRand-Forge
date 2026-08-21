@@ -66,7 +66,7 @@ class ParametersConfigView extends StatelessWidget {
               leading: const Icon(Icons.search),
               title: context.tr('sampler'),
               currentValue: viewmodel.config.sampler,
-              options: viewmodel.isV4 ? samplersV4 : samplers,
+              options: viewmodel.isModern ? samplersV4 : samplers,
               onSelectComplete: (value) => viewmodel.setSampler(value)),
           SelectableListTile(
               leading: const Icon(Icons.search),
@@ -75,14 +75,14 @@ class ParametersConfigView extends StatelessWidget {
               options: viewmodel.isV4 ? noiseSchedulesV4 : noiseSchedules,
               onSelectComplete: (value) => viewmodel.setNoiseScheduler(value)),
           // SMEA
-          if (!viewmodel.isV4)
+          if (!viewmodel.isModern)
             _buildSwitchTile(
               context.tr('sm'),
               viewmodel.config.sm,
               (newValue) => viewmodel.setSm(newValue),
               const Icon(Icons.keyboard_double_arrow_right),
             ),
-          if (!viewmodel.isV4)
+          if (!viewmodel.isModern)
             _buildSwitchTile(
               context.tr('sm_dyn'),
               viewmodel.config.smDyn,

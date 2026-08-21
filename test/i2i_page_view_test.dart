@@ -200,7 +200,8 @@ void main() {
     payload.settings
       ..subscriptionTier = 3
       ..subscriptionActive = true
-      ..subscriptionStatusKnown = true;
+      ..subscriptionStatusKnown = true
+      ..opusUsageAvailable = true;
     payload.i2iConfig.setImage(solidPng(832, 1216));
     payload.i2iEnabled = true;
 

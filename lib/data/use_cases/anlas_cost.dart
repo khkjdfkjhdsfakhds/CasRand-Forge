@@ -13,6 +13,7 @@ const double _stepCoefficient = 2951823174884865e-21;
 const double _stepPerStepCoefficient = 5753298233447344e-22;
 const double _smMultiplier = 1.2;
 const double _smDynMultiplier = 1.4;
+const double _nai5Multiplier = 1.5;
 
 /// Anlas per Precise Reference, per image.
 const int preciseReferenceAnlas = 5;
@@ -64,6 +65,8 @@ AnlasCost estimateAnlasCost({
   bool smDyn = false,
   int? tier,
   bool subscriptionActive = false,
+  String model = 'nai-diffusion-4-5-full',
+  bool? opusUsageAvailable,
   int preciseReferenceCount = 0,
   int vibeCount = 0,
 }) {
@@ -79,10 +82,13 @@ AnlasCost estimateAnlasCost({
           smMultiplier;
   final strengthMultiplier =
       (action == 'infill' || action == 'img2img') ? strength : 1.0;
-  final perImage = max((baseSteps * strengthMultiplier).ceil(), 2);
+  final modelMultiplier = model.contains('diffusion-5') ? _nai5Multiplier : 1;
+  final perImage =
+      max((baseSteps * strengthMultiplier * modelMultiplier).ceil(), 2);
 
   final free = subscriptionActive &&
       (tier ?? 0) >= opusTier &&
+      (!model.contains('diffusion-5') || opusUsageAvailable == true) &&
       fitsOpusFreeWindow(width: width, height: height, steps: steps);
   final freeImages = free ? 1 : 0;
   final int imageCost = perImage * max(nSamples - freeImages, 0);
@@ -109,6 +115,8 @@ AnlasCost estimateBatchAnlasCost({
   bool smDyn = false,
   int? tier,
   bool subscriptionActive = false,
+  String model = 'nai-diffusion-4-5-full',
+  bool? opusUsageAvailable,
   int nSamples = 1,
 }) {
   var total = 0;
@@ -125,6 +133,8 @@ AnlasCost estimateBatchAnlasCost({
       smDyn: smDyn,
       tier: tier,
       subscriptionActive: subscriptionActive,
+      model: model,
+      opusUsageAvailable: opusUsageAvailable,
       nSamples: nSamples,
     );
     total += cost.anlas;
