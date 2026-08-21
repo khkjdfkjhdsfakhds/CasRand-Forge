@@ -30,7 +30,7 @@ class PromptConfigEditView extends StatelessWidget {
       listenable: viewModel,
       builder: (context, _) => AlertDialog(
         title: title,
-        content: _buildBody(context),
+        content: SingleChildScrollView(child: _buildBody(context)),
         actions: [
           TextButton(
             onPressed: () {
@@ -49,18 +49,21 @@ class PromptConfigEditView extends StatelessWidget {
   }
 
   Widget _buildBody(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        _buildToolTip(context),
-        _buildSelectionMethodTile(viewModel, context),
-        _buildShuffledTile(viewModel, context),
-        _buildNumTile(viewModel, context),
-        _buildProbTile(viewModel, context),
-        _buildRandomBrackets(viewModel, context),
-        _buildTypeTile(viewModel, context),
-      ],
+    return SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          _buildToolTip(context),
+          _buildSelectionMethodTile(viewModel, context),
+          _buildShuffledTile(viewModel, context),
+          _buildNumTile(viewModel, context),
+          _buildProbTile(viewModel, context),
+          _buildRandomBrackets(viewModel, context),
+          _buildUseAsFileNamePrefixTile(viewModel, context),
+          _buildTypeTile(viewModel, context),
+        ],
+      ),
     );
   }
 
@@ -132,6 +135,20 @@ class PromptConfigEditView extends StatelessWidget {
       ],
       onSelectComplete: (value) => viewModel.setType(value),
       leading: const Icon(Icons.type_specimen),
+    );
+  }
+
+  Widget _buildUseAsFileNamePrefixTile(
+      PromptConfigViewModel viewModel, BuildContext context) {
+    return CheckboxListTile(
+      key: const Key('prompt-config-use-as-file-name-prefix'),
+      title: Text(context.tr('use_as_file_name_prefix')),
+      value: viewModel.config.useAsFileNamePrefix,
+      onChanged: (value) {
+        if (value == null) return;
+        viewModel.setUseAsFileNamePrefix(value);
+      },
+      secondary: const Icon(Icons.drive_file_rename_outline),
     );
   }
 

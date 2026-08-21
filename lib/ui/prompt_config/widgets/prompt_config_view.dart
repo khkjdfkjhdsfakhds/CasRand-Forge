@@ -1,5 +1,6 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:nai_casrand/ui/prompt_assistance/prompt_editing_assistance.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_entry_divider.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_entry_editor.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_config_delete_view.dart';
@@ -10,8 +11,15 @@ import 'package:provider/provider.dart';
 
 class PromptConfigView extends StatelessWidget {
   final PromptConfigViewModel viewModel;
+  final PromptEditingAssistance? promptAssistance;
+  final bool autocompleteEnabled;
 
-  const PromptConfigView({super.key, required this.viewModel});
+  const PromptConfigView({
+    super.key,
+    required this.viewModel,
+    this.promptAssistance,
+    this.autocompleteEnabled = true,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -69,7 +77,13 @@ class PromptConfigView extends StatelessWidget {
     if (viewModel.config.type == 'config') {
       List<Widget> children = [];
       for (var subViewModel in viewModel.subConfigs) {
-        children.add(PromptConfigView(viewModel: subViewModel));
+        children.add(
+          PromptConfigView(
+            viewModel: subViewModel,
+            promptAssistance: promptAssistance,
+            autocompleteEnabled: autocompleteEnabled,
+          ),
+        );
       }
       children.add(_buildButtonsRow(viewModel, context));
       return children;
@@ -91,7 +105,11 @@ class PromptConfigView extends StatelessWidget {
   void _editStrList(BuildContext context) {
     showDialog(
       context: context,
-      builder: (context) => _PromptEntryEditorDialog(viewModel: viewModel),
+      builder: (context) => _PromptEntryEditorDialog(
+        viewModel: viewModel,
+        promptAssistance: promptAssistance,
+        autocompleteEnabled: autocompleteEnabled,
+      ),
     );
   }
 
@@ -199,9 +217,15 @@ class PromptConfigView extends StatelessWidget {
 }
 
 class _PromptEntryEditorDialog extends StatefulWidget {
-  const _PromptEntryEditorDialog({required this.viewModel});
+  const _PromptEntryEditorDialog({
+    required this.viewModel,
+    this.promptAssistance,
+    required this.autocompleteEnabled,
+  });
 
   final PromptConfigViewModel viewModel;
+  final PromptEditingAssistance? promptAssistance;
+  final bool autocompleteEnabled;
 
   @override
   State<_PromptEntryEditorDialog> createState() =>
@@ -227,9 +251,26 @@ class _PromptEntryEditorDialogState extends State<_PromptEntryEditorDialog> {
       content: SizedBox(
         width: availableWidth.clamp(240, 620),
         height: availableHeight.clamp(180, 680),
-        child: PromptEntryEditor(
-          initialEntries: _entries,
-          onChanged: (value) => _entries = value,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Align(
+              alignment: Alignment.centerRight,
+              child: Text(
+                context.tr('edit_cascaded_config_str_notice'),
+                key: const Key('prompt-entry-help'),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: PromptEntryEditor(
+                initialEntries: _entries,
+                onChanged: (value) => _entries = value,
+                promptAssistance: widget.promptAssistance,
+                autocompleteEnabled: widget.autocompleteEnabled,
+              ),
+            ),
+          ],
         ),
       ),
       actions: [

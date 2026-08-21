@@ -10,7 +10,6 @@ import 'package:nai_casrand/core/constants/parameters.dart';
 import 'package:nai_casrand/data/services/image_service.dart';
 import 'package:nai_casrand/data/use_cases/anlas_cost.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
-import 'package:image/image.dart' as img;
 
 class EnhancePageViewmodel extends ChangeNotifier {
   PayloadConfig get payloadConfig => GetIt.I<PayloadConfig>();
@@ -47,9 +46,8 @@ class EnhancePageViewmodel extends ChangeNotifier {
 
   Future<void> _tryImportMetadata(Uint8List bytes) async {
     try {
-      final decoded = img.decodeImage(bytes);
-      if (decoded == null) return;
-      final metadataString = await ImageService().extractMetadata(decoded);
+      final metadataString =
+          await ImageService().extractMetadataFromBytes(bytes);
       if (metadataString == null) return;
       final decodedOuter = json.decode(metadataString);
       if (decodedOuter is! Map<String, dynamic>) return;

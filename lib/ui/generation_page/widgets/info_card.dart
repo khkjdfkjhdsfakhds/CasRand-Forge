@@ -26,7 +26,7 @@ class InfoCard extends StatelessWidget {
     final cardBody = ListenableBuilder(
       listenable: command.isExecuting,
       builder: (context, child) {
-        if (command.isExecuting.value) {
+        if (command.isExecuting.value && command.value.imageBytes == null) {
           // Loading
           return ListTile(
             leading: const CircularProgressIndicator(),
@@ -218,6 +218,43 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
   void initState() {
     super.initState();
     _currentIndex = widget.initialIndex.clamp(0, widget.contents.length - 1);
+  }
+
+  @override
+  void didUpdateWidget(covariant InfoDetailPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (identical(oldWidget.contents, widget.contents)) return;
+    _currentIndex = _preserveCurrentIndex(
+      oldContents: oldWidget.contents,
+      newContents: widget.contents,
+    );
+  }
+
+  /// Keeps the gallery on the result the user is already viewing when the
+  /// underlying list changes (for example new generations are prepended while
+  /// this page is open). Contents are immutable, so identity handles the
+  /// normal case; title matching also survives balance refreshes that replace
+  /// the viewed [InfoCardContent] with a `copyWith` sibling.
+  int _preserveCurrentIndex({
+    required List<InfoCardContent> oldContents,
+    required List<InfoCardContent> newContents,
+  }) {
+    if (oldContents.isEmpty || newContents.isEmpty) return 0;
+    final oldIndex = _currentIndex.clamp(0, oldContents.length - 1);
+    final current = oldContents[oldIndex];
+    var nextIndex = newContents.indexOf(current);
+    if (nextIndex < 0) {
+      nextIndex = newContents.indexWhere(
+        (content) => content.title == current.title,
+      );
+    }
+    if (nextIndex < 0) {
+      // The viewed result left the list (for example it fell off the
+      // 200-item history). Stay at the closest surviving position instead
+      // of jumping back to the newest result.
+      nextIndex = oldIndex;
+    }
+    return nextIndex.clamp(0, newContents.length - 1);
   }
 
   @override

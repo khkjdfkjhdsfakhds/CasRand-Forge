@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
+import 'package:nai_casrand/data/services/generated_image_jpeg_encoder.dart';
 import 'package:nai_casrand/data/services/image_service.dart';
 
 Uint8List responseArchive(Map<String, Uint8List> files) {
@@ -74,5 +75,63 @@ void main() {
     expect(decoded.getPixel(0, 0).a, lessThanOrEqualTo(1));
     expect(decoded.getPixel(10, 10).a, inInclusiveRange(128, 129));
     expect(decoded.getPixel(20, 20).a, inInclusiveRange(254, 255));
+  });
+
+  test('byte metadata import preserves the existing PNG stealth contract',
+      () async {
+    const metadata =
+        '{"Description":"png prompt","Software":"NovelAI","Comment":"{\\"steps\\":28}"}';
+    final image = img.Image(width: 96, height: 96, numChannels: 4);
+    img.fill(image, color: img.ColorRgba8(20, 40, 60, 255));
+    final png = await ImageService().embedMetadata(
+      Uint8List.fromList(img.encodePng(image)),
+      metadata,
+    );
+
+    expect(await ImageService().extractMetadataFromBytes(png), metadata);
+  });
+
+  test('reads the authoritative NovelAI outer JSON from JPEG UserComment',
+      () async {
+    const metadata =
+        '{"Description":"prompt","Software":"NovelAI","Source":"Stable Diffusion XL","Comment":"{\\"uc\\":\\"negative\\",\\"seed\\":42,\\"steps\\":28}"}';
+    final image = img.Image(width: 128, height: 128, numChannels: 4);
+    img.fill(image, color: img.ColorRgba8(80, 120, 160, 255));
+    final png = await ImageService().embedMetadata(
+      Uint8List.fromList(img.encodePng(image)),
+      metadata,
+    );
+    expect(await ImageService().extractMetadata(img.decodePng(png)!), metadata);
+    final encoded = await const IsolateGeneratedImageJpegEncoder().encode(png);
+    expect(encoded.status, GeneratedImageJpegEncodingStatus.encoded,
+        reason: encoded.errorMessage);
+    expect(encoded.metadataJson, isNotNull);
+
+    final extracted = await ImageService().extractMetadataFromBytes(
+      encoded.jpegBytes!,
+    );
+
+    expect(jsonDecode(extracted!), jsonDecode(metadata));
+  });
+
+  test('malformed or unrelated JPEG UserComment is rejected safely', () async {
+    final image = img.Image(width: 8, height: 8, numChannels: 3);
+    image.exif.exifIfd.userComment = 'not NovelAI JSON';
+    final jpeg = Uint8List.fromList(img.encodeJpg(image));
+
+    expect(await ImageService().extractMetadataFromBytes(jpeg), isNull);
+    expect(
+      await ImageService().extractMetadataFromBytes(
+        Uint8List.fromList([0xff, 0xd8, 0x00, 0x01]),
+      ),
+      isNull,
+    );
+  });
+
+  test('JPEG without metadata remains an ordinary importable image', () async {
+    final image = img.Image(width: 8, height: 8, numChannels: 3);
+    final jpeg = Uint8List.fromList(img.encodeJpg(image));
+
+    expect(await ImageService().extractMetadataFromBytes(jpeg), isNull);
   });
 }

@@ -1,8 +1,10 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:adaptive_theme/adaptive_theme.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/core/constants/settings.dart';
@@ -16,6 +18,9 @@ import 'package:nai_casrand/ui/core/utils/flushbar.dart';
 
 class SettingsPageViewmodel extends ChangeNotifier {
   final ProxyDetectionService _proxyDetectionService;
+  final Future<String?> Function() _pickDirectory;
+  final Future<bool> Function(String path) _validateDirectory;
+  int _jpegToggleRevision = 0;
 
   PayloadConfig get payloadConfig => GetIt.I();
   ConfigService get configService => GetIt.I();
@@ -23,9 +28,31 @@ class SettingsPageViewmodel extends ChangeNotifier {
   double navigationDirectoryScrollOffset = 0;
   AppDestination? navigationDirectoryAnchor;
 
-  SettingsPageViewmodel({ProxyDetectionService? proxyDetectionService})
-      : _proxyDetectionService =
-            proxyDetectionService ?? ProxyDetectionService();
+  SettingsPageViewmodel({
+    ProxyDetectionService? proxyDetectionService,
+    Future<String?> Function()? pickDirectory,
+    Future<bool> Function(String path)? validateDirectory,
+  })  : _proxyDetectionService =
+            proxyDetectionService ?? ProxyDetectionService(),
+        _pickDirectory =
+            pickDirectory ?? (() => FilePicker.platform.getDirectoryPath()),
+        _validateDirectory = validateDirectory ?? _isWritableDirectory;
+
+  /// JPEG storage is intentionally a desktop-only option. `defaultTargetPlatform`
+  /// is used instead of `Platform.is*` so the UI seam remains testable.
+  bool supportsDesktopJpegStorage({TargetPlatform? platform}) {
+    if (kIsWeb) return false;
+    switch (platform ?? defaultTargetPlatform) {
+      case TargetPlatform.macOS:
+      case TargetPlatform.windows:
+        return true;
+      case TargetPlatform.linux:
+      case TargetPlatform.android:
+      case TargetPlatform.iOS:
+      case TargetPlatform.fuchsia:
+        return false;
+    }
+  }
 
   Settings get settings {
     return payloadConfig.settings;
@@ -44,11 +71,19 @@ class SettingsPageViewmodel extends ChangeNotifier {
   void setRememberSequentialProgress(bool? value) {
     if (value == null) return;
     payloadConfig.settings.rememberSequentialProgress = value;
+    configService.saveConfig(payloadConfig.toJson());
     notifyListeners();
   }
 
   void setConfirmPromptModeSwitch(bool value) {
     payloadConfig.settings.confirmPromptModeSwitch = value;
+    configService.saveConfig(payloadConfig.toJson());
+    notifyListeners();
+  }
+
+  void setPromptAutocompleteEnabled(bool? value) {
+    if (value == null) return;
+    payloadConfig.settings.promptAutocompleteEnabled = value;
     configService.saveConfig(payloadConfig.toJson());
     notifyListeners();
   }
@@ -94,7 +129,83 @@ class SettingsPageViewmodel extends ChangeNotifier {
     final pickResult = await FilePicker.platform.getDirectoryPath();
     if (pickResult == null) return;
     payloadConfig.settings.outputFolderPath = pickResult;
+    await configService.saveConfig(payloadConfig.toJson());
     notifyListeners();
+  }
+
+  /// Enables JPEG publication only after the output folder has passed a
+  /// write probe. JPEG is always published to the shared output folder; a
+  /// cancelled or invalid picker result leaves PNG-only mode untouched.
+  Future<void> setJpegStorageEnabled(bool? value) async {
+    if (value == null) return;
+    final revision = ++_jpegToggleRevision;
+    if (!value) {
+      payloadConfig.settings.jpegStorageEnabled = false;
+      await configService.saveConfig(payloadConfig.toJson());
+      notifyListeners();
+      return;
+    }
+
+    var directory = payloadConfig.settings.outputFolderPath.trim();
+    var valid = directory.isNotEmpty && await _validateDirectory(directory);
+    if (revision != _jpegToggleRevision) return;
+    if (!valid) {
+      directory = (await _pickDirectory())?.trim() ?? '';
+      if (revision != _jpegToggleRevision || directory.isEmpty) return;
+      valid = await _validateDirectory(directory);
+      if (!valid || revision != _jpegToggleRevision) return;
+    }
+
+    payloadConfig.settings
+      ..outputFolderPath = directory
+      ..jpegStorageEnabled = true;
+    await configService.saveConfig(payloadConfig.toJson());
+    notifyListeners();
+  }
+
+  Future<void> setRetainOriginalPng(bool? value) async {
+    if (value == null) return;
+    if (!value) {
+      payloadConfig.settings.retainOriginalPng = false;
+      await configService.saveConfig(payloadConfig.toJson());
+      notifyListeners();
+      return;
+    }
+    var directory = payloadConfig.settings.outputFolderPath.trim();
+    var valid = directory.isNotEmpty && await _validateDirectory(directory);
+    if (!valid) {
+      directory = (await _pickDirectory())?.trim() ?? '';
+      if (directory.isEmpty) return;
+      valid = await _validateDirectory(directory);
+      if (!valid) return;
+    }
+    payloadConfig.settings
+      ..outputFolderPath = directory
+      ..retainOriginalPng = true;
+    await configService.saveConfig(payloadConfig.toJson());
+    notifyListeners();
+  }
+
+  static Future<bool> _isWritableDirectory(String path) async {
+    final directory = Directory(path);
+    if (!await directory.exists()) return false;
+    final probe = File(
+      '$path${Platform.pathSeparator}.casrand-write-test-'
+      '${DateTime.now().microsecondsSinceEpoch}',
+    );
+    try {
+      await probe.writeAsBytes(const <int>[0], flush: true);
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      try {
+        if (await probe.exists()) await probe.delete();
+      } catch (_) {
+        // A failed cleanup should not turn a successful write probe into a
+        // false negative; the next validation can remove the stale probe.
+      }
+    }
   }
 
   void setProxy(String value) {

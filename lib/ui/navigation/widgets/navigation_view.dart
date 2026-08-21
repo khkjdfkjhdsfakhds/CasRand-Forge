@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:ui' show AppExitResponse;
+
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -25,6 +28,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../data/models/payload_config.dart';
 import '../../../data/services/config_service.dart';
+import '../../../data/services/generated_image_storage.dart';
 
 class NavigationView extends StatefulWidget {
   final NavigationViewModel viewModel;
@@ -35,8 +39,10 @@ class NavigationView extends StatefulWidget {
   State<StatefulWidget> createState() => NavigationViewState();
 }
 
-class NavigationViewState extends State<NavigationView> {
+class NavigationViewState extends State<NavigationView>
+    with WidgetsBindingObserver {
   DateTime? _lastBackButtonPressTime;
+  bool _exitInProgress = false;
   final GlobalKey<ApplicationNavigationShellState> _navigationShellKey =
       GlobalKey();
 
@@ -66,9 +72,23 @@ class NavigationViewState extends State<NavigationView> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _showWelcomeDialog();
     });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  Future<AppExitResponse> didRequestAppExit() async {
+    return await _prepareGeneratedImageStorageForExit()
+        ? AppExitResponse.exit
+        : AppExitResponse.cancel;
   }
 
   @override
@@ -91,12 +111,94 @@ class NavigationViewState extends State<NavigationView> {
             showInfoBar(context, tr('press_again_to_exit')); // 提示用户双击退出
             return; // 阻止默认的 pop 行为
           } else {
-            SystemNavigator.pop(); // 双击，退出应用
+            unawaited(_exitAfterStorageIsReady());
           }
         },
         child: MetadataDropArea(
           childBuilder: (context) => getBody(),
         ));
+  }
+
+  Future<void> _exitAfterStorageIsReady() async {
+    if (await _prepareGeneratedImageStorageForExit()) {
+      await SystemNavigator.pop();
+    }
+  }
+
+  Future<bool> _prepareGeneratedImageStorageForExit() async {
+    if (_exitInProgress || !mounted) return false;
+    if (!GetIt.I.isRegistered<GeneratedImageStorageService>()) return true;
+    final storage = GetIt.I<GeneratedImageStorageService>();
+    _exitInProgress = true;
+    try {
+      var abandon = false;
+      if (storage.hasPendingWork) {
+        final choice = await showDialog<_StorageExitChoice>(
+          context: context,
+          barrierDismissible: false,
+          builder: (dialogContext) => AlertDialog(
+            title: Text(tr('jpeg_storage_exit_title')),
+            content: Text(tr('jpeg_storage_exit_message')),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(
+                  dialogContext,
+                  _StorageExitChoice.cancel,
+                ),
+                child: Text(tr('cancel')),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(
+                  dialogContext,
+                  _StorageExitChoice.abandon,
+                ),
+                child: Text(tr('jpeg_storage_exit_abandon')),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(
+                  dialogContext,
+                  _StorageExitChoice.wait,
+                ),
+                child: Text(tr('jpeg_storage_exit_wait')),
+              ),
+            ],
+          ),
+        );
+        if (choice == null || choice == _StorageExitChoice.cancel) return false;
+        abandon = choice == _StorageExitChoice.abandon;
+      }
+
+      final closeFuture = storage.close(abandon: abandon);
+      if (storage.hasPendingWork && mounted) {
+        unawaited(showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => PopScope(
+            canPop: false,
+            child: AlertDialog(
+              title: Text(tr('jpeg_storage_exit_finishing')),
+              content: const Row(
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(width: 20),
+                  Expanded(child: LinearProgressIndicator()),
+                ],
+              ),
+            ),
+          ),
+        ));
+      }
+      await closeFuture;
+      if (mounted && Navigator.of(context, rootNavigator: true).canPop()) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+      return true;
+    } catch (error) {
+      if (mounted) showErrorBar(context, '$error');
+      return false;
+    } finally {
+      _exitInProgress = false;
+    }
   }
 
   void _restoreWelcomeMessage() {
@@ -179,3 +281,5 @@ class NavigationViewState extends State<NavigationView> {
         });
   }
 }
+
+enum _StorageExitChoice { cancel, wait, abandon }

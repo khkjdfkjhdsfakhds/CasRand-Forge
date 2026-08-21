@@ -170,4 +170,113 @@ void main() {
       'character-negative-1',
     );
   });
+
+  test('useAsFileNamePrefix serializes and collects prefix comments in order', () {
+    final artistConfig = PromptConfig(
+      comment: '画师',
+      useAsFileNamePrefix: true,
+      strs: ['artist:anmi', 'artist:tite kubo'],
+      prompts: [],
+    );
+    final costumeConfig = PromptConfig(
+      comment: '服装',
+      useAsFileNamePrefix: true,
+      strs: ['school uniform', 'maid dress'],
+      prompts: [],
+    );
+    final bgConfig = PromptConfig(
+      comment: '背景',
+      useAsFileNamePrefix: false,
+      strs: ['beach', 'forest'],
+      prompts: [],
+    );
+    final root = PromptConfig(
+      type: 'config',
+      comment: 'Root',
+      strs: [],
+      prompts: [artistConfig, costumeConfig, bgConfig],
+    );
+
+    expect(root.collectPrefixComments(), ['画师', '服装']);
+
+    final json = root.toJson();
+    final restored = PromptConfig.fromJson(json);
+    expect(restored.collectPrefixComments(), ['画师', '服装']);
+    expect(restored.prompts[0].useAsFileNamePrefix, isTrue);
+    expect(restored.prompts[1].useAsFileNamePrefix, isTrue);
+    expect(restored.prompts[2].useAsFileNamePrefix, isFalse);
+  });
+
+  test('calculateCombinations correctly computes total permutations across configs and characters', () {
+    final artistConfig = PromptConfig(
+      selectionMethod: 'single',
+      strs: ['anmi', 'tite kubo', 'hokusai'], // 3
+      prompts: [],
+    );
+    final costumeConfig = PromptConfig(
+      selectionMethod: 'single_sequential',
+      num: 2,
+      strs: ['uniform', 'kimono'], // 2 (num is repeat count, not a multiplier)
+      prompts: [],
+    );
+    final tagConfig = PromptConfig(
+      selectionMethod: 'multiple_num',
+      num: 2,
+      strs: ['hat', 'glasses', 'scarf', 'gloves'], // C(4, 2) = 6
+      prompts: [],
+    );
+    final root = PromptConfig(
+      type: 'config',
+      selectionMethod: 'all',
+      strs: [],
+      prompts: [artistConfig, costumeConfig, tagConfig],
+    );
+
+    // 3 * 2 * 6 = 36
+    expect(root.calculateCombinations(), 36);
+
+    final charPrompt = PromptConfig(
+      selectionMethod: 'single',
+      strs: ['smile', 'frown'], // 2
+      prompts: [],
+    );
+    final payloadConfig = PayloadConfig(
+      rootPromptConfig: root,
+      negativePromptConfig: PromptConfig(strs: [], prompts: []),
+      characterConfigList: [
+        CharacterConfig(
+          positions: [],
+          positivePromptConfig: charPrompt,
+          negativePromptConfig: PromptConfig(strs: [], prompts: []),
+          gender: CharacterConfig.genderOther,
+          enabled: true,
+        ),
+      ],
+      savedPromptConfigList: [],
+      paramConfig: ParamConfig(),
+      settings: Settings.fromJson({}),
+      overridePrompt: '',
+      useOverridePrompt: false,
+      useCharacterPromptWithOverride: false,
+    );
+
+    // 36 * 2 = 72
+    expect(payloadConfig.totalCombinations, 72);
+  });
+
+  test('calculateCombinations on config nodes with multiple_num', () {
+    final c1 = PromptConfig(selectionMethod: 'single', strs: ['a', 'b'], prompts: []); // 2
+    final c2 = PromptConfig(selectionMethod: 'single', strs: ['c', 'd', 'e'], prompts: []); // 3
+    final c3 = PromptConfig(selectionMethod: 'single', strs: ['f', 'g', 'h', 'i'], prompts: []); // 4
+
+    // Choosing 2 of the 3 configs: (2*3) + (2*4) + (3*4) = 6 + 8 + 12 = 26
+    final folder = PromptConfig(
+      type: 'config',
+      selectionMethod: 'multiple_num',
+      num: 2,
+      strs: [],
+      prompts: [c1, c2, c3],
+    );
+    expect(folder.calculateCombinations(), 26);
+  });
 }

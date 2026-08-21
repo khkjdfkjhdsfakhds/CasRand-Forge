@@ -14,6 +14,7 @@ class EditableListTile extends StatelessWidget {
   final String? editValue;
   final String? notice;
   final int? maxLines;
+  final bool enabled;
 
   const EditableListTile({
     super.key,
@@ -27,6 +28,7 @@ class EditableListTile extends StatelessWidget {
     this.editValue,
     this.notice,
     this.maxLines,
+    this.enabled = true,
   });
 
   @override
@@ -39,8 +41,9 @@ class EditableListTile extends StatelessWidget {
         maxLines: maxLines,
         overflow: TextOverflow.ellipsis,
       ),
-      onTap: () => _showEditDialog(context),
+      onTap: enabled ? () => _showEditDialog(context) : null,
       dense: dense,
+      enabled: enabled,
     );
   }
 

@@ -132,6 +132,7 @@ class PromptConfig {
   List<String> strs;
   List<PromptConfig> prompts;
   bool enabled;
+  bool useAsFileNamePrefix;
 
   int _sequentialIdx = 0;
   int _sequentialRepeatIdx = 0;
@@ -149,6 +150,7 @@ class PromptConfig {
     required this.strs,
     required this.prompts,
     this.enabled = true,
+    this.useAsFileNamePrefix = false,
   });
 
   factory PromptConfig.fromJson(Map<String, dynamic> json) {
@@ -180,6 +182,9 @@ class PromptConfig {
               .toList() ??
           [],
       enabled: json['enabled'] ?? true,
+      useAsFileNamePrefix: json['useAsFileNamePrefix'] ??
+          json['use_as_file_name_prefix'] ??
+          false,
     );
   }
 
@@ -197,7 +202,102 @@ class PromptConfig {
       'strs': strs,
       'prompts': prompts.map((x) => x.toJson()).toList(),
       'enabled': enabled,
+      'useAsFileNamePrefix': useAsFileNamePrefix,
     };
+  }
+
+  List<String> collectPrefixComments() {
+    final result = <String>[];
+    if (!enabled) return result;
+    if (useAsFileNamePrefix && comment.trim().isNotEmpty) {
+      result.add(comment.trim());
+    }
+    if (type == 'config') {
+      for (final child in prompts) {
+        result.addAll(child.collectPrefixComments());
+      }
+    }
+    return result;
+  }
+
+  int calculateCombinations() {
+    if (!enabled) return 1;
+    if (type == 'str') {
+      final n = usableEntryCount;
+      if (n <= 1) return max(1, n);
+      switch (selectionMethod) {
+        case 'single':
+          return n;
+        case 'single_sequential':
+          return n;
+        case 'all':
+          return 1;
+        case 'multiple_num':
+          final k = min(num, n);
+          return _combinations(n, k);
+        case 'multiple_prob':
+          if (n >= 30) return 1000000000;
+          return 1 << n;
+        default:
+          return n;
+      }
+    } else if (type == 'config') {
+      final activeChildren = prompts.where((p) => p.enabled).toList();
+      if (activeChildren.isEmpty) return 1;
+      switch (selectionMethod) {
+        case 'single':
+          var total = 0;
+          for (final child in activeChildren) {
+            total += child.calculateCombinations();
+          }
+          return max(1, total);
+        case 'single_sequential':
+          var total = 0;
+          for (final child in activeChildren) {
+            total += child.calculateCombinations();
+          }
+          return max(1, total);
+        case 'multiple_num':
+          final k = min(num, activeChildren.length);
+          if (k <= 0) return 1;
+          final dp = List<int>.filled(k + 1, 0);
+          dp[0] = 1;
+          for (final child in activeChildren) {
+            final c = child.calculateCombinations();
+            for (var j = k; j >= 1; j--) {
+              dp[j] += dp[j - 1] * c;
+            }
+          }
+          return max(1, dp[k]);
+        case 'multiple_prob':
+          var product = 1;
+          for (final child in activeChildren) {
+            product *= (1 + child.calculateCombinations());
+          }
+          return product;
+        case 'all':
+        default:
+          var product = 1;
+          for (final child in activeChildren) {
+            final childComb = child.calculateCombinations();
+            if (childComb > 0) {
+              product *= childComb;
+            }
+          }
+          return max(1, product);
+      }
+    }
+    return 1;
+  }
+
+  static int _combinations(int n, int k) {
+    if (k <= 0 || k >= n) return 1;
+    final effectiveK = min(k, n - k);
+    var result = 1;
+    for (var i = 1; i <= effectiveK; i++) {
+      result = (result * (n - i + 1)) ~/ i;
+    }
+    return max(1, result);
   }
 
   static bool isCommentLine(String line) => line.trimLeft().startsWith('#');

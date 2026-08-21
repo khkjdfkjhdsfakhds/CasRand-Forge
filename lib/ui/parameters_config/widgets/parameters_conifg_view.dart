@@ -10,7 +10,6 @@ import 'package:nai_casrand/ui/core/utils/flushbar.dart';
 import 'package:nai_casrand/ui/parameters_config/view_models/parameters_config_viewmodel.dart';
 import 'package:nai_casrand/ui/core/widgets/editable_list_tile.dart';
 import 'package:nai_casrand/ui/core/widgets/slider_list_tile.dart';
-import 'package:image/image.dart' as img;
 
 class ParametersConfigView extends StatelessWidget {
   final ParametersConfigViewmodel viewmodel;
@@ -157,9 +156,8 @@ class ParametersConfigView extends StatelessWidget {
     final picker = ImagePicker();
     final result = await picker.pickImage(source: ImageSource.gallery);
     if (result == null) return;
-    final image = img.decodeImage(await result.readAsBytes());
-    if (image == null) return;
-    final metadataString = await ImageService().extractMetadata(image);
+    final bytes = await result.readAsBytes();
+    final metadataString = await ImageService().extractMetadataFromBytes(bytes);
     if (!context.mounted) return;
     if (metadataString == null) {
       showErrorBar(context, tr('metadata_not_found'));

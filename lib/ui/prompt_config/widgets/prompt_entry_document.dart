@@ -1,6 +1,7 @@
 part of 'prompt_entry_editor.dart';
 
-class _PromptDocumentController extends TextEditingController {
+class _PromptDocumentController extends TextEditingController
+    with SearchHighlightable {
   _PromptDocumentController.fromEntries(List<String> initialEntries)
       : _boundaryOffsets = _boundariesForEntries(initialEntries),
         super(text: _textForEntries(initialEntries));
@@ -8,10 +9,26 @@ class _PromptDocumentController extends TextEditingController {
   final Set<int> _boundaryOffsets;
   List<int>? _sortedBoundaryCache;
   int _layoutRevision = 0;
+  bool _suppressRemap = false;
 
   Set<int> get boundaryOffsets => Set.unmodifiable(_boundaryOffsets);
 
   int get layoutRevision => _layoutRevision;
+
+  void refresh() => notifyListeners();
+
+  @override
+  set value(TextEditingValue newValue) {
+    if (!_suppressRemap && newValue.text != text) {
+      remapBoundaries(
+        value,
+        newValue,
+        insertedNewlinesAreBoundaries: false,
+      );
+    }
+    _suppressRemap = false;
+    super.value = newValue;
+  }
 
   List<int> get sortedBoundaryOffsets {
     return List.unmodifiable(_sortedBoundaries);
@@ -78,12 +95,33 @@ class _PromptDocumentController extends TextEditingController {
     return result;
   }
 
+  /// Returns the editable span for the candidate containing [offset].
+  ///
+  /// A caret exactly before a boundary newline belongs to the preceding
+  /// candidate, matching the ordinary text-editing interpretation of that
+  /// position.  The boundary newline itself is never included in the span.
+  ({int start, int end})? entryRangeForOffset(int offset) {
+    if (offset < 0 || offset > text.length) return null;
+    final boundaries = _sortedBoundaries;
+    final index = _lowerBound(boundaries, offset);
+    if (index < boundaries.length &&
+        boundaries[index] == offset &&
+        offset > 0) {
+      final start = index == 0 ? 0 : boundaries[index - 1] + 1;
+      return (start: start, end: offset);
+    }
+    final start = index == 0 ? 0 : boundaries[index - 1] + 1;
+    final end = index < boundaries.length ? boundaries[index] : text.length;
+    return (start: start, end: end);
+  }
+
   void remapBoundaries(
     TextEditingValue oldValue,
     TextEditingValue newValue, {
     required bool insertedNewlinesAreBoundaries,
     _TextReplacement? replacement,
   }) {
+    _suppressRemap = true;
     final effectiveReplacement =
         replacement ?? _replacementBetween(oldValue.text, newValue.text);
     final removedLength = effectiveReplacement.end - effectiveReplacement.start;
@@ -126,6 +164,7 @@ class _PromptDocumentController extends TextEditingController {
       ..addAll(snapshot.boundaryOffsets);
     _sortedBoundaryCache = null;
     _layoutRevision++;
+    _suppressRemap = true;
     value = TextEditingValue(
       text: snapshot.text,
       selection: snapshot.selection,
@@ -241,7 +280,7 @@ class _PromptDocumentController extends TextEditingController {
     required bool withComposing,
   }) {
     final baseStyle = style ?? DefaultTextStyle.of(context).style;
-    return documentSpan(
+    final base = documentSpan(
       style: baseStyle,
       commentStyle: baseStyle.copyWith(
         color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -249,6 +288,7 @@ class _PromptDocumentController extends TextEditingController {
       ),
       withComposing: withComposing,
     );
+    return applySearchHighlights(base, context);
   }
 
   static String _textForEntries(List<String> initialEntries) {

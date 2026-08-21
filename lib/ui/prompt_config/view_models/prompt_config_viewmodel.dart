@@ -54,6 +54,13 @@ class PromptConfigViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  bool get useAsFileNamePrefix => config.useAsFileNamePrefix;
+
+  void setUseAsFileNamePrefix(bool value) {
+    config.useAsFileNamePrefix = value;
+    notifyListeners();
+  }
+
   void setRandomBrackets(int lower, int upper) {
     config.randomBracketsLower = lower;
     config.randomBracketsUpper = upper;

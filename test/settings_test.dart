@@ -13,6 +13,33 @@ void main() {
     expect(Settings.fromJson({}).rememberSequentialProgress, isFalse);
   });
 
+  test('desktop JPEG storage settings default to safe PNG-only values', () {
+    final settings = Settings.fromJson({});
+
+    expect(settings.jpegStorageEnabled, isFalse);
+    expect(settings.retainOriginalPng, isFalse);
+  });
+
+  test('desktop JPEG storage settings survive a JSON round trip', () {
+    final settings = Settings.fromJson({
+      'jpeg_storage_enabled': true,
+      'retain_original_png': true,
+    });
+
+    final restored = Settings.fromJson(settings.toJson());
+    expect(restored.jpegStorageEnabled, isTrue);
+    expect(restored.retainOriginalPng, isTrue);
+  });
+
+  test('prompt autocomplete defaults to enabled and persists its switch', () {
+    final settings = Settings.fromJson({});
+    expect(settings.promptAutocompleteEnabled, isTrue);
+
+    settings.promptAutocompleteEnabled = false;
+    final restored = Settings.fromJson(settings.toJson());
+    expect(restored.promptAutocompleteEnabled, isFalse);
+  });
+
   test('sequential progress memory is persisted in settings JSON', () {
     final settings = Settings.fromJson({
       'remember_sequential_progress': false,

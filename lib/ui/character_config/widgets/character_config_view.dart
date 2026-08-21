@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:nai_casrand/data/models/character_config.dart';
+import 'package:nai_casrand/ui/prompt_assistance/prompt_editing_assistance.dart';
 import 'package:nai_casrand/ui/character_config/view_models/character_config_viewmodel.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_config_view.dart';
 import 'package:nai_casrand/ui/prompt_config/view_models/prompt_config_viewmodel.dart';
@@ -10,8 +11,15 @@ import 'package:provider/provider.dart';
 
 class CharacterConfigView extends StatelessWidget {
   final CharacterConfigViewmodel viewmodel;
+  final PromptEditingAssistance? promptAssistance;
+  final bool autocompleteEnabled;
 
-  const CharacterConfigView({super.key, required this.viewmodel});
+  const CharacterConfigView({
+    super.key,
+    required this.viewmodel,
+    this.promptAssistance,
+    this.autocompleteEnabled = true,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -67,6 +75,8 @@ class CharacterConfigView extends StatelessWidget {
                 viewModel: PromptConfigViewModel(
                   config: viewmodel.config.positivePromptConfig,
                 ),
+                promptAssistance: promptAssistance,
+                autocompleteEnabled: autocompleteEnabled,
               ),
             ),
             const Divider(height: 25, indent: 12, endIndent: 12),
@@ -77,6 +87,8 @@ class CharacterConfigView extends StatelessWidget {
                 viewModel: PromptConfigViewModel(
                   config: viewmodel.config.negativePromptConfig,
                 ),
+                promptAssistance: promptAssistance,
+                autocompleteEnabled: autocompleteEnabled,
               ),
             ),
           ],

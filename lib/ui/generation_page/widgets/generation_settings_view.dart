@@ -31,10 +31,26 @@ class GenerationSettingsView extends StatelessWidget {
                 title: context.tr('generation_count'),
                 currentValue: displayedGenerationCount,
                 editValue: settings.generationCount.toString(),
-                notice: '0 → ∞',
+                notice: viewmodel.lockToAllCombinations
+                    ? context.tr('generation_count_locked_to_combinations')
+                    : '0 → ∞',
+                enabled: !viewmodel.lockToAllCombinations,
                 keyboardType: TextInputType.number,
                 confirmOnSubmit: true,
                 onEditComplete: viewmodel.setGenerationCount,
+              ),
+              CheckboxListTile(
+                key: const Key('generation-settings-lock-all-combinations'),
+                secondary: const Icon(Icons.auto_awesome),
+                title: Text(context.tr('run_all_combinations')),
+                subtitle: Text(
+                  '${context.tr('total_combinations')}${context.tr('colon')}${viewmodel.totalCombinations}',
+                ),
+                value: viewmodel.lockToAllCombinations,
+                onChanged: (value) {
+                  if (value == null) return;
+                  viewmodel.setLockToAllCombinations(value);
+                },
               ),
               EditableListTile(
                 key: const Key('generation-settings-interval'),

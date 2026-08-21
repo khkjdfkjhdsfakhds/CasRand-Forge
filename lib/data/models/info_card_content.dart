@@ -1,12 +1,18 @@
 import 'dart:typed_data';
 
+import 'package:nai_casrand/data/services/generated_image_storage.dart';
+
 class InfoCardContent {
   final String title;
   final String info;
   final Map<String, dynamic> additionalInfo;
 
-  final Uint8List? imageBytes;
-  final String? imageFilePath;
+  final Uint8List? _imageBytes;
+  final GeneratedImageArtifact? imageArtifact;
+
+  Uint8List? get imageBytes => imageArtifact?.previewBytes ?? _imageBytes;
+  GeneratedImageFile? get currentImageFile => imageArtifact?.currentFile;
+  GeneratedImageFile? get originalImageFile => imageArtifact?.originalPngFile;
 
   /// Anlas consumed by this generation, exact or locally estimated.
   final int? anlasCost;
@@ -29,14 +35,14 @@ class InfoCardContent {
     required this.title,
     required this.info,
     required this.additionalInfo,
-    this.imageBytes,
-    this.imageFilePath,
+    Uint8List? imageBytes,
+    this.imageArtifact,
     this.anlasCost,
     this.anlasCostIsEstimated = false,
     this.anlasRemaining,
     this.batchAnlasCost,
     this.tokenLabel,
-  });
+  }) : _imageBytes = imageBytes;
 
   InfoCardContent copyWith({
     int? anlasCost,
@@ -48,8 +54,8 @@ class InfoCardContent {
       title: title,
       info: info,
       additionalInfo: additionalInfo,
-      imageBytes: imageBytes,
-      imageFilePath: imageFilePath,
+      imageBytes: _imageBytes,
+      imageArtifact: imageArtifact,
       anlasCost: anlasCost ?? this.anlasCost,
       anlasCostIsEstimated: anlasCostIsEstimated ?? this.anlasCostIsEstimated,
       anlasRemaining: anlasRemaining ?? this.anlasRemaining,

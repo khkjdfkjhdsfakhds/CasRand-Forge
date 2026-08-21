@@ -93,6 +93,32 @@ class PayloadConfig {
   bool get hasVibeResources =>
       vibeConfigList.isNotEmpty || vibeConfigListV4.isNotEmpty;
 
+  int get totalCombinations {
+    if (promptMode == PromptMode.fixed) return 1;
+    var total = rootPromptConfig.calculateCombinations();
+    for (final char in characterConfigList) {
+      if (char.enabled) {
+        final charComb = char.positivePromptConfig.calculateCombinations();
+        if (charComb > 0) {
+          total *= charComb;
+        }
+      }
+    }
+    return max(1, total);
+  }
+
+  List<String> collectPrefixComments() {
+    if (promptMode == PromptMode.fixed) return const [];
+    final result = <String>[];
+    result.addAll(rootPromptConfig.collectPrefixComments());
+    for (final char in characterConfigList) {
+      if (char.enabled) {
+        result.addAll(char.positivePromptConfig.collectPrefixComments());
+      }
+    }
+    return result;
+  }
+
   void setI2iEnabled(bool value, {bool userAction = true}) {
     i2iEnabled = value && i2iConfig.hasImage;
     if (userAction) _i2iManuallyDisabled = !value;

@@ -88,6 +88,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(PromptEntryEditor), findsOneWidget);
+    expect(
+      find.text('Enter prompts to be picked, one line for each prompt'),
+      findsOneWidget,
+    );
     final editable = tester
         .state<EditableTextState>(find.byType(EditableText))
         .renderEditable;

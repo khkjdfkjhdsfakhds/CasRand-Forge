@@ -6,7 +6,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
+import 'package:nai_casrand/ui/prompt_assistance/prompt_editing_assistance.dart';
+import 'package:nai_casrand/ui/prompt_assistance/prompt_editing_transform.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_entry_divider.dart';
+import 'package:nai_casrand/ui/prompt_config/widgets/prompt_search_replace_bar.dart';
 
 part 'prompt_entry_document.dart';
 part 'prompt_entry_divider_overlay.dart';
@@ -16,10 +19,14 @@ class PromptEntryEditor extends StatefulWidget {
     super.key,
     required this.initialEntries,
     required this.onChanged,
+    this.promptAssistance,
+    this.autocompleteEnabled = true,
   });
 
   final List<String> initialEntries;
   final ValueChanged<List<String>> onChanged;
+  final PromptEditingAssistance? promptAssistance;
+  final bool autocompleteEnabled;
 
   @override
   State<PromptEntryEditor> createState() => _PromptEntryEditorState();
@@ -27,7 +34,10 @@ class PromptEntryEditor extends StatefulWidget {
 
 class _PromptEntryEditorState extends State<PromptEntryEditor> {
   static const _maxHistoryLength = 100;
-  static const _contentPadding = EdgeInsets.symmetric(vertical: 8);
+  static const _contentPadding = EdgeInsets.symmetric(
+    horizontal: 12,
+    vertical: 8,
+  );
   static const _strutStyle = StrutStyle(
     height: 1.2,
     forceStrutHeight: false,
@@ -38,9 +48,11 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
   late final FocusNode _focusNode;
   late final ScrollController _scrollController;
   late final GlobalKey _editorLayoutKey;
+  late final GlobalKey<PromptAssistedTextFieldState> _assistedFieldKey;
   late final List<_EditorSnapshot> _history;
   int _historyIndex = 0;
   bool _restoringHistory = false;
+  bool _searchVisible = false;
 
   @override
   void initState() {
@@ -56,6 +68,7 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
     _focusNode = FocusNode(onKeyEvent: _handleKeyEvent);
     _scrollController = ScrollController();
     _editorLayoutKey = GlobalKey();
+    _assistedFieldKey = GlobalKey<PromptAssistedTextFieldState>();
     _history = [_snapshot()];
   }
 
@@ -87,6 +100,22 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
       _redo();
       return KeyEventResult.handled;
     }
+    if (isKeyDown &&
+        modifierPressed &&
+        !hardware.isShiftPressed &&
+        !hardware.isAltPressed &&
+        event.logicalKey == LogicalKeyboardKey.keyF) {
+      setState(() {
+        _searchVisible = true;
+      });
+      return KeyEventResult.handled;
+    }
+
+    final controlShortcutResult = _handleControlPromptShortcut(
+      event,
+      hardware,
+    );
+    if (controlShortcutResult != null) return controlShortcutResult;
 
     if (!_hasComposingText &&
         (event.logicalKey == LogicalKeyboardKey.arrowUp ||
@@ -128,6 +157,71 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
     }
 
     return KeyEventResult.ignored;
+  }
+
+  KeyEventResult? _handleControlPromptShortcut(
+    KeyEvent event,
+    HardwareKeyboard hardware,
+  ) {
+    if (!hardware.isControlPressed ||
+        hardware.isMetaPressed ||
+        hardware.isAltPressed ||
+        hardware.isShiftPressed) {
+      return null;
+    }
+
+    final direction = switch (event.logicalKey) {
+      LogicalKeyboardKey.arrowUp => PromptWeightDirection.increase,
+      LogicalKeyboardKey.arrowDown => PromptWeightDirection.decrease,
+      _ => null,
+    };
+    final moveDirection = switch (event.logicalKey) {
+      LogicalKeyboardKey.arrowLeft => PromptMoveDirection.backward,
+      LogicalKeyboardKey.arrowRight => PromptMoveDirection.forward,
+      _ => null,
+    };
+    if (direction == null && moveDirection == null) return null;
+
+    // Keep composition confirmation and candidate text entry ahead of all
+    // editor transforms.  Returning ignored lets the platform/IME consume
+    // the key normally.
+    if (_hasComposingText) return KeyEventResult.ignored;
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+
+    final value = _controller.value;
+    final selection = _safeSelection(value);
+    final entryRange = _controller.entryRangeForOffset(selection.extentOffset);
+    if (entryRange == null) return KeyEventResult.handled;
+
+    final result = direction != null
+        ? PromptEditingTransform.adjustWeight(
+            value,
+            direction: direction,
+            scope: PromptEditingScope.cascadedEntry,
+            editableRange: TextRange(
+              start: entryRange.start,
+              end: entryRange.end,
+            ),
+          )
+        : PromptEditingTransform.move(
+            value,
+            direction: moveDirection!,
+            scope: PromptEditingScope.cascadedEntry,
+            editableRange: TextRange(
+              start: entryRange.start,
+              end: entryRange.end,
+            ),
+          );
+    if (result.changed) {
+      _rememberSelection(selection);
+      _assistedFieldKey.currentState?.setEditingValue(result.value);
+      _emitAndRecord();
+    }
+    // Consume a Control-arrow at a boundary as well; otherwise native word
+    // navigation would move the caret despite the transform being a no-op.
+    return KeyEventResult.handled;
   }
 
   void _scheduleVerticalBoundaryCorrection({
@@ -350,46 +444,116 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
     final theme = Theme.of(context);
     final style = theme.textTheme.bodyLarge ?? const TextStyle(fontSize: 16);
 
-    return Stack(
-      key: _editorLayoutKey,
-      fit: StackFit.expand,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        TextField(
-          key: const Key('prompt-entry-editor'),
+        PromptSearchReplaceBar(
           controller: _controller,
           focusNode: _focusNode,
-          scrollController: _scrollController,
-          inputFormatters: [_formatter],
-          keyboardType: TextInputType.multiline,
-          textInputAction: TextInputAction.newline,
-          expands: true,
-          minLines: null,
-          maxLines: null,
-          autofocus: true,
-          style: style,
-          strutStyle: _strutStyle,
-          selectionHeightStyle: ui.BoxHeightStyle.strut,
-          textAlignVertical: TextAlignVertical.top,
-          onChanged: _handleTextChanged,
-          decoration: const InputDecoration(
-            border: InputBorder.none,
-            enabledBorder: InputBorder.none,
-            focusedBorder: InputBorder.none,
-            contentPadding: _contentPadding,
-          ),
+          visible: _searchVisible,
+          onClose: () => setState(() => _searchVisible = false),
+          onChanged: (_) => _handleTextChanged(_controller.text),
         ),
-        IgnorePointer(
-          child: CustomPaint(
-            key: const Key('prompt-entry-divider-overlay'),
-            painter: _PromptEntryDividerOverlayPainter(
-              controller: _controller,
-              scrollController: _scrollController,
-              color: promptEntryDividerColor(context),
-              editorLayoutKey: _editorLayoutKey,
-            ),
+        Expanded(
+          child: PromptAssistedTextField(
+            key: _assistedFieldKey,
+            initialValue: _controller.text,
+            onChanged: _handleTextChanged,
+            assistance: widget.promptAssistance,
+            completionEnabled:
+                widget.autocompleteEnabled && widget.promptAssistance != null,
+            controller: _controller,
+            focusNode: _focusNode,
+            onExternalEdit: _applyCompletionEdit,
+            refreshController: _controller.refresh,
+            fieldBuilder: (
+              context,
+              controller,
+              focusNode,
+              onChanged,
+              loading,
+            ) {
+              return Stack(
+                key: _editorLayoutKey,
+                fit: StackFit.expand,
+                children: [
+                  TextField(
+                    key: const Key('prompt-entry-editor'),
+                    controller: controller,
+                    focusNode: focusNode,
+                    scrollController: _scrollController,
+                    inputFormatters: [_formatter],
+                    keyboardType: TextInputType.multiline,
+                    textInputAction: TextInputAction.newline,
+                    expands: true,
+                    minLines: null,
+                    maxLines: null,
+                    autofocus: true,
+                    style: style,
+                    strutStyle: _strutStyle,
+                    selectionHeightStyle: ui.BoxHeightStyle.strut,
+                    textAlignVertical: TextAlignVertical.top,
+                    onChanged: onChanged,
+                    decoration: InputDecoration(
+                      filled: true,
+                      fillColor:
+                          theme.colorScheme.surfaceContainerHighest.withAlpha(70),
+                      border: const OutlineInputBorder(),
+                      contentPadding: _contentPadding,
+                      suffixIcon: loading
+                          ? const Padding(
+                              key: Key('prompt-assistance-loading'),
+                              padding: EdgeInsets.all(12),
+                              child: SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              ),
+                            )
+                          : null,
+                    ),
+                  ),
+                  IgnorePointer(
+                    child: CustomPaint(
+                      key: const Key('prompt-entry-divider-overlay'),
+                      painter: _PromptEntryDividerOverlayPainter(
+                        controller: _controller,
+                        scrollController: _scrollController,
+                        color: promptEntryDividerColor(context),
+                        editorLayoutKey: _editorLayoutKey,
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
         ),
       ],
+    );
+  }
+
+  void _applyCompletionEdit(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+    TextRange replacementRange,
+  ) {
+    _controller.remapBoundaries(
+      oldValue,
+      newValue,
+      insertedNewlinesAreBoundaries: false,
+      replacement: _TextReplacement(
+        start: replacementRange.start,
+        end: replacementRange.end,
+        insertedText: newValue.text.substring(
+          replacementRange.start,
+          replacementRange.start +
+              (newValue.text.length -
+                  oldValue.text.length +
+                  replacementRange.end -
+                  replacementRange.start),
+        ),
+      ),
     );
   }
 

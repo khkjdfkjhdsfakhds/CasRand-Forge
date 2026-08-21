@@ -63,6 +63,10 @@ InfoCardContent buildContent({Uint8List? bytes}) {
   );
 }
 
+class _GalleryRefreshViewmodel extends GenerationPageViewmodel {
+  void notifyGalleryChanged() => notifyListeners();
+}
+
 void main() {
   setUpAll(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
@@ -336,6 +340,75 @@ void main() {
     expect(reportedIndex, 1);
     expect(find.text('swiped.png'), findsOneWidget);
     expect(find.text('swiped info'), findsOneWidget);
+  });
+
+  testWidgets('newly generated results appear in the open gallery', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(500, 700));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final payloadConfig = GetIt.I<PayloadConfig>();
+    payloadConfig.settings.generationPageColumnCount = 1;
+    payloadConfig.settings.resultDisplayMode = 'classic';
+    final commandStatus = GetIt.I<CommandStatus>();
+    for (var index = 0; index < 2; index++) {
+      final content = InfoCardContent(
+        title: 'item$index.png',
+        info: 'prompt $index',
+        additionalInfo: {'seed': index},
+        imageBytes: solidPng(64, 96),
+      );
+      commandStatus.commandList.add(
+        Command.createAsyncNoParam(
+          () async => content,
+          initialValue: content,
+        ),
+      );
+    }
+    final viewmodel = _GalleryRefreshViewmodel();
+    addTearDown(viewmodel.dispose);
+
+    await tester.pumpWidget(
+      localizedApp(GenerationPageView(viewmodel: viewmodel)),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('item1.png'));
+    await tester.pumpAndSettle();
+
+    // The newest result is at the start of the newest-first gallery order.
+    expect(find.byKey(const Key('detail-gallery-previous')), findsNothing);
+    expect(find.byKey(const Key('detail-gallery-next')), findsOneWidget);
+    expect(find.text('1 / 2'), findsOneWidget);
+
+    final generated = InfoCardContent(
+      title: 'item2.png',
+      info: 'prompt 2',
+      additionalInfo: {'seed': 2},
+      imageBytes: solidPng(64, 96),
+    );
+    commandStatus.commandList.add(
+      Command.createAsyncNoParam(
+        () async => generated,
+        initialValue: generated,
+      ),
+    );
+    viewmodel.notifyGalleryChanged();
+    await tester.pump();
+
+    // The new image is prepended, so the left arrow appears without leaving
+    // the page and the currently viewed image stays selected.
+    expect(find.byKey(const Key('detail-gallery-previous')), findsOneWidget);
+    expect(find.text('2 / 3'), findsOneWidget);
+    expect(find.text('item1.png'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('detail-gallery-previous')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('item2.png'), findsOneWidget);
+    expect(find.text('prompt 2'), findsOneWidget);
+    expect(find.text('1 / 3'), findsOneWidget);
+    expect(find.byKey(const Key('detail-gallery-previous')), findsNothing);
   });
 
   testWidgets('leaving the gallery reveals the last viewed result card', (

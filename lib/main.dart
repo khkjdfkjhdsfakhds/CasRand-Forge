@@ -2,11 +2,13 @@ import 'package:adaptive_theme/adaptive_theme.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:nai_casrand/core/constants/app_identity.dart';
+import 'package:nai_casrand/core/licenses/prompt_assistance_license.dart';
 import 'package:nai_casrand/data/models/command_status.dart';
 import 'package:nai_casrand/data/models/image_handoff_coordinator.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/services/config_service.dart';
+import 'package:nai_casrand/data/services/generated_image_storage.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
 import 'package:nai_casrand/ui/navigation/widgets/navigation_view.dart';
 import 'package:nai_casrand/ui/navigation/view_models/navigation_view_model.dart';
@@ -16,6 +18,7 @@ import 'package:get_it/get_it.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await EasyLocalization.ensureInitialized();
+  registerPromptAssistanceLicense();
 
   GetIt.instance.registerLazySingleton<ConfigService>(() => ConfigService());
   final configService = GetIt.instance<ConfigService>();
@@ -26,6 +29,13 @@ void main() async {
       .registerLazySingleton(() => PayloadConfig.fromJson(savedConfig));
   GetIt.instance.registerLazySingleton(() => CommandStatus());
   GetIt.instance.registerLazySingleton(() => NavigationRequest());
+  final generatedImageStorage = GeneratedImageStorageService();
+  try {
+    await generatedImageStorage.cleanupStaleSessions();
+  } catch (error) {
+    debugPrint('Generated-image session initialization failed: $error');
+  }
+  GetIt.instance.registerSingleton(generatedImageStorage);
   GetIt.instance.registerLazySingleton(
     () => ImageHandoffCoordinator(
       payloadConfig: GetIt.I<PayloadConfig>(),
@@ -33,7 +43,11 @@ void main() async {
     ),
   );
 
-  GetIt.instance.registerLazySingleton(() => GenerationPageViewmodel());
+  GetIt.instance.registerLazySingleton(
+    () => GenerationPageViewmodel(
+      generatedImageStorage: generatedImageStorage,
+    ),
+  );
 
   final appWithLocales = EasyLocalization(
     supportedLocales: const [Locale('en'), Locale('zh', 'CN')],

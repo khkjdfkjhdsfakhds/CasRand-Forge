@@ -15,6 +15,10 @@ class Settings {
   int generationPageColumnCount;
   String themeMode;
 
+  /// Whether prompt fields should show the offline Danbooru completion popup.
+  /// This is enabled by default for existing and new configurations.
+  bool promptAutocompleteEnabled;
+
   /// Result display style: 'classic' (default) or 'waterfall'. The classic
   /// mode restores the 0.55-style grid with the prompt beside the image.
   String resultDisplayMode;
@@ -49,6 +53,13 @@ class Settings {
   // Output dir, for windows only
   String outputFolderPath;
 
+  /// Whether desktop generations should publish a JPEG candidate in addition
+  /// to the normal PNG/session artifact. This remains opt-in for safety.
+  bool jpegStorageEnabled;
+
+  /// Keep a permanent PNG next to the JPEG when desktop JPEG storage is on.
+  bool retainOriginalPng;
+
   // Proxy settings
   String proxy;
 
@@ -66,6 +77,7 @@ class Settings {
   int generationIntervalSec;
 
   bool rememberSequentialProgress;
+  bool lockToAllCombinations;
 
   // File name prefix key
   String fileNamePrefixKey;
@@ -74,6 +86,8 @@ class Settings {
     required this.welcomeMessageVersion,
     required this.apiKey,
     required this.outputFolderPath,
+    this.jpegStorageEnabled = false,
+    this.retainOriginalPng = false,
     required this.proxy,
     required this.debugApiEnabled,
     required this.debugApiPath,
@@ -83,9 +97,11 @@ class Settings {
     required this.generationCount,
     required this.generationIntervalSec,
     required this.rememberSequentialProgress,
+    this.lockToAllCombinations = false,
     required this.fileNamePrefixKey,
     required this.generationPageColumnCount,
     required this.themeMode,
+    this.promptAutocompleteEnabled = true,
     this.resultDisplayMode = 'classic',
     NavigationConfiguration? navigation,
     this.confirmPromptModeSwitch = true,
@@ -230,6 +246,8 @@ class Settings {
       confirmPromptModeSwitch: json['confirm_prompt_mode_switch'] ?? true,
       subscriptionTier: json['subscription_tier'] ?? 0,
       outputFolderPath: json['output_folder'] ?? '',
+      jpegStorageEnabled: json['jpeg_storage_enabled'] ?? false,
+      retainOriginalPng: json['retain_original_png'] ?? false,
       proxy: json['proxy'] ?? '',
       debugApiEnabled: false,
       debugApiPath: 'http://localhost:5000/ai/generate-image',
@@ -242,9 +260,11 @@ class Settings {
       generationIntervalSec:
           json['generation_interval'] ?? json['batch_interval'] ?? 2,
       rememberSequentialProgress: json['remember_sequential_progress'] ?? false,
+      lockToAllCombinations: json['lock_to_all_combinations'] ?? false,
       fileNamePrefixKey: json['file_name_prefix_key'] ?? '',
       generationPageColumnCount: json['generation_page_column_count'] ?? 2,
       themeMode: json['theme_mode'] ?? 'system',
+      promptAutocompleteEnabled: json['prompt_autocomplete_enabled'] ?? true,
     );
   }
 
@@ -260,6 +280,8 @@ class Settings {
       'confirm_prompt_mode_switch': confirmPromptModeSwitch,
       'subscription_tier': subscriptionTier,
       'output_folder': outputFolderPath,
+      'jpeg_storage_enabled': jpegStorageEnabled,
+      'retain_original_png': retainOriginalPng,
       'proxy': proxy,
       'metadata_erase_enabled': metadataEraseEnabled,
       'custom_metadata_enabled': customMetadataEnabled,
@@ -268,8 +290,10 @@ class Settings {
       'generation_count': generationCount,
       'generation_interval': generationIntervalSec,
       'remember_sequential_progress': rememberSequentialProgress,
+      'lock_to_all_combinations': lockToAllCombinations,
       'generation_page_column_count': generationPageColumnCount,
       'theme_mode': themeMode,
+      'prompt_autocomplete_enabled': promptAutocompleteEnabled,
     };
   }
 

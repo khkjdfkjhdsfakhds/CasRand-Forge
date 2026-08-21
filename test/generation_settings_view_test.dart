@@ -769,4 +769,115 @@ void main() {
       ['Prompt Config', 'Generation Parameters'],
     );
   });
+
+  testWidgets('run all combinations locks generation count to total combinations', (
+    tester,
+  ) async {
+    final payloadConfig = GetIt.instance<PayloadConfig>();
+    payloadConfig.rootPromptConfig = PromptConfig(
+      type: 'config',
+      selectionMethod: 'all',
+      strs: [],
+      prompts: [
+        PromptConfig(
+          selectionMethod: 'single',
+          strs: ['tag1', 'tag2', 'tag3'], // 3
+          prompts: [],
+        ),
+        PromptConfig(
+          selectionMethod: 'single',
+          strs: ['style1', 'style2'], // 2
+          prompts: [],
+        ),
+      ],
+    ); // Total = 3 * 2 = 6
+
+    final viewmodel = GenerationPageViewmodel();
+    expect(viewmodel.totalCombinations, 6);
+
+    await tester.pumpWidget(
+      localizedApp(
+        Scaffold(
+          body: GenerationSettingsView(viewmodel: viewmodel),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Total combinations: 6'), findsOneWidget);
+    expect(find.text('Run all combinations'), findsOneWidget);
+
+    final checkboxFinder = find.byKey(
+      const Key('generation-settings-lock-all-combinations'),
+    );
+    expect(checkboxFinder, findsOneWidget);
+
+    // Tap to lock to all combinations
+    await tester.tap(checkboxFinder);
+    await tester.pumpAndSettle();
+
+    expect(viewmodel.lockToAllCombinations, isTrue);
+    expect(payloadConfig.settings.generationCount, 6);
+    expect(find.descendant(
+      of: find.byKey(const Key('generation-settings-count')),
+      matching: find.text('6'),
+    ), findsOneWidget);
+
+    // Verify count tile is disabled
+    final countTile = tester.widget<ListTile>(
+      find.descendant(
+        of: find.byKey(const Key('generation-settings-count')),
+        matching: find.byType(ListTile),
+      ),
+    );
+    expect(countTile.enabled, isFalse);
+
+    // Tap to unlock
+    await tester.tap(checkboxFinder);
+    await tester.pumpAndSettle();
+
+    expect(viewmodel.lockToAllCombinations, isFalse);
+    expect(payloadConfig.settings.lockToAllCombinations, isFalse);
+    final countTileUnlocked = tester.widget<ListTile>(
+      find.descendant(
+        of: find.byKey(const Key('generation-settings-count')),
+        matching: find.byType(ListTile),
+      ),
+    );
+    expect(countTileUnlocked.enabled, isTrue);
+  });
+
+  testWidgets('run all combinations memory state is restored from settings', (
+    tester,
+  ) async {
+    final payloadConfig = GetIt.I<PayloadConfig>();
+    payloadConfig.settings.lockToAllCombinations = true;
+    payloadConfig.rootPromptConfig = PromptConfig(
+      selectionMethod: 'all',
+      strs: [],
+      prompts: [
+        PromptConfig(
+          selectionMethod: 'single_sequential',
+          strs: ['A', 'B', 'C'],
+          prompts: [],
+        ),
+      ],
+    );
+
+    final viewmodel = _NoNetworkGenerationPageViewmodel();
+    await tester.pumpWidget(
+      localizedApp(
+        Scaffold(
+          body: GenerationSettingsView(viewmodel: viewmodel),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(viewmodel.lockToAllCombinations, isTrue);
+    final checkbox = tester.widget<CheckboxListTile>(
+      find.byKey(const Key('generation-settings-lock-all-combinations')),
+    );
+    expect(checkbox.value, isTrue);
+  });
 }

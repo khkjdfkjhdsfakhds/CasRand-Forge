@@ -110,6 +110,19 @@ class GenerationScheduler {
     return true;
   }
 
+  /// Releases only the API-worker slot after a successful response has
+  /// reserved persistence ownership. The logical task remains in flight until
+  /// [completeSuccess] or [completeFailure] settles its storage operation.
+  bool detachWorkerForPersistence(GenerationLease lease) {
+    if (!identical(_successReservations[lease.taskNumber], lease) ||
+        !identical(_workerLeases[lease.workerId], lease) ||
+        !_issuedLeases.contains(lease)) {
+      return false;
+    }
+    _workerLeases.remove(lease.workerId);
+    return true;
+  }
+
   /// Completes a reserved result after it has been persisted successfully.
   bool completeSuccess(GenerationLease lease) {
     if (!identical(_successReservations[lease.taskNumber], lease)) {

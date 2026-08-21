@@ -22,6 +22,8 @@ class PromptTabViewmodel extends ChangeNotifier {
       payloadConfig?.savedPromptConfigList ?? _savedConfigList!;
   ParamConfig get paramConfig => payloadConfig?.paramConfig ?? _paramConfig!;
   bool get isFixedMode => payloadConfig?.promptMode == PromptMode.fixed;
+  bool get promptAutocompleteEnabled =>
+      payloadConfig?.settings.promptAutocompleteEnabled ?? true;
   String get fixedPromptText =>
       promptConfig.strs.isEmpty ? '' : promptConfig.strs.first;
   String get fixedNegativePromptText =>

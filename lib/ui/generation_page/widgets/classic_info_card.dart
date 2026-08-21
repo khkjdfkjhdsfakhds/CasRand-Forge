@@ -29,7 +29,7 @@ class ClassicInfoCard extends StatelessWidget {
     final body = ListenableBuilder(
       listenable: command.isExecuting,
       builder: (context, child) {
-        if (command.isExecuting.value) {
+        if (command.isExecuting.value && command.value.imageBytes == null) {
           return Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,

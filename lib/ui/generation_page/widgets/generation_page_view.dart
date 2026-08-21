@@ -141,27 +141,47 @@ class _GenerationPageViewState extends State<GenerationPageView> {
     );
   }
 
+  /// Completed results in the same newest-first order the grid uses.
+  List<Command<void, InfoCardContent>> _completedCommandsInDisplayOrder() {
+    return viewmodel.commandList.reversed
+        .where((command) => !command.isExecuting.value)
+        .toList(growable: false);
+  }
+
   Future<void> _openResultGallery(
     Command<void, InfoCardContent> initialCommand,
   ) async {
     if (initialCommand.isExecuting.value) return;
-    final commands = viewmodel.commandList.reversed
-        .where((command) => !command.isExecuting.value)
-        .toList(growable: false);
-    final initialIndex = commands.indexOf(initialCommand);
-    if (initialIndex < 0) return;
-    var returnIndex = initialIndex;
+    var lastViewedCommand = initialCommand;
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
-        builder: (context) => InfoDetailPage.gallery(
-          contents: commands.map((command) => command.value).toList(),
-          initialIndex: initialIndex,
-          onIndexChanged: (index) => returnIndex = index,
+        // Recompute the gallery whenever the result list changes so images
+        // generated while this page is open become reachable without closing
+        // and reopening it. The detail page keeps the current image selected
+        // while new results are prepended.
+        builder: (context) => ListenableBuilder(
+          listenable: viewmodel,
+          builder: (context, _) {
+            final commands = _completedCommandsInDisplayOrder();
+            final initialIndex = commands.indexOf(initialCommand);
+            return InfoDetailPage.gallery(
+              contents: commands.map((command) => command.value).toList(),
+              initialIndex: initialIndex < 0 ? 0 : initialIndex,
+              onIndexChanged: (index) {
+                final current = _completedCommandsInDisplayOrder();
+                if (index >= 0 && index < current.length) {
+                  lastViewedCommand = current[index];
+                }
+              },
+            );
+          },
         ),
       ),
     );
-    if (!mounted || returnIndex < 0 || returnIndex >= commands.length) return;
-    await _revealResult(commands[returnIndex], commands);
+    if (!mounted) return;
+    final commands = _completedCommandsInDisplayOrder();
+    if (!commands.contains(lastViewedCommand)) return;
+    await _revealResult(lastViewedCommand, commands);
   }
 
   Future<void> _revealResult(

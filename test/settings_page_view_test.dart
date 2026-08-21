@@ -178,6 +178,8 @@ void main() {
       final prefix = find.byKey(const Key('output-file-name-prefix'));
       final remember = find.byKey(const Key('remember-sequential-progress'));
       final confirmation = find.byKey(const Key('confirm-prompt-mode-switch'));
+      final autocomplete = find.byKey(const Key('prompt-autocomplete-enabled'));
+      final jpegStorage = find.byKey(const Key('jpeg-storage-enabled'));
 
       expect(setup, findsOneWidget);
       expect(find.text('API & Proxy Settings'), findsOneWidget);
@@ -188,12 +190,14 @@ void main() {
           lessThan(tester.getTopLeft(metadata).dy));
       if (Platform.isMacOS || Platform.isWindows) {
         expect(output, findsOneWidget);
+        expect(jpegStorage, findsOneWidget);
         expect(tester.getTopLeft(metadata).dy,
             lessThan(tester.getTopLeft(output).dy));
         expect(tester.getTopLeft(output).dy,
             lessThan(tester.getTopLeft(prefix).dy));
       } else {
         expect(output, findsNothing);
+        expect(jpegStorage, findsNothing);
         expect(tester.getTopLeft(metadata).dy,
             lessThan(tester.getTopLeft(prefix).dy));
       }
@@ -202,6 +206,11 @@ void main() {
       expect(
         tester.getTopLeft(remember).dy,
         lessThan(tester.getTopLeft(confirmation).dy),
+      );
+      expect(autocomplete, findsOneWidget);
+      expect(
+        tester.getTopLeft(confirmation).dy,
+        lessThan(tester.getTopLeft(autocomplete).dy),
       );
 
       expect(GetIt.I<PayloadConfig>().settings.rememberSequentialProgress,
@@ -212,9 +221,99 @@ void main() {
         GetIt.I<PayloadConfig>().settings.rememberSequentialProgress,
         isTrue,
       );
+      expect(
+          GetIt.I<PayloadConfig>().settings.promptAutocompleteEnabled, isTrue);
+      await tester.tap(autocomplete);
+      await tester.pump();
+      expect(
+          GetIt.I<PayloadConfig>().settings.promptAutocompleteEnabled, isFalse);
     } finally {
       debugDefaultTargetPlatformOverride = null;
       await tester.binding.setSurfaceSize(null);
+    }
+  });
+
+  test('enabling JPEG storage validates and persists the output directory',
+      () async {
+    var picked = 0;
+    final viewmodel = SettingsPageViewmodel(
+      pickDirectory: () async {
+        picked++;
+        return '/tmp/casrand-output';
+      },
+      validateDirectory: (path) async => path == '/tmp/casrand-output',
+    );
+
+    await viewmodel.setJpegStorageEnabled(true);
+
+    expect(picked, 1);
+    expect(viewmodel.settings.jpegStorageEnabled, isTrue);
+    expect(viewmodel.settings.outputFolderPath, '/tmp/casrand-output');
+    final savedSettings = configService.savedConfigs[configService.currentUuid]
+        ?['settings'] as Map<String, dynamic>?;
+    expect(savedSettings?['jpeg_storage_enabled'], isTrue);
+    expect(savedSettings?['output_folder'], '/tmp/casrand-output');
+  });
+
+  test('cancelled or unwritable output directory keeps storage disabled',
+      () async {
+    final viewmodel = SettingsPageViewmodel(
+      pickDirectory: () async => null,
+      validateDirectory: (_) async => false,
+    );
+
+    await viewmodel.setJpegStorageEnabled(true);
+    expect(viewmodel.settings.jpegStorageEnabled, isFalse);
+    expect(viewmodel.settings.outputFolderPath, isEmpty);
+
+    final unwritable = SettingsPageViewmodel(
+      pickDirectory: () async => '/tmp/not-writable',
+      validateDirectory: (_) async => false,
+    );
+    await unwritable.setJpegStorageEnabled(true);
+    expect(unwritable.settings.jpegStorageEnabled, isFalse);
+    expect(unwritable.settings.outputFolderPath, isEmpty);
+  });
+
+  test('retaining PNG requires and persists a writable output directory',
+      () async {
+    final viewmodel = SettingsPageViewmodel(
+      pickDirectory: () async => '/tmp/casrand-output',
+      validateDirectory: (path) async => path == '/tmp/casrand-output',
+    );
+    viewmodel.settings.jpegStorageEnabled = true;
+
+    await viewmodel.setRetainOriginalPng(true);
+
+    expect(viewmodel.settings.retainOriginalPng, isTrue);
+    expect(viewmodel.settings.outputFolderPath, '/tmp/casrand-output');
+    final savedSettings = configService.savedConfigs[configService.currentUuid]
+        ?['settings'] as Map<String, dynamic>?;
+    expect(savedSettings?['retain_original_png'], isTrue);
+    expect(savedSettings?['output_folder'], '/tmp/casrand-output');
+
+    final cancelled = SettingsPageViewmodel(
+      pickDirectory: () async => null,
+      validateDirectory: (_) async => false,
+    );
+    cancelled.settings
+      ..jpegStorageEnabled = true
+      ..outputFolderPath = ''
+      ..retainOriginalPng = false;
+    await cancelled.setRetainOriginalPng(true);
+    expect(cancelled.settings.retainOriginalPng, isFalse);
+  });
+
+  testWidgets('JPEG storage controls are hidden on Android', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      await tester.pumpWidget(localizedSettingsPage());
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('jpeg-storage-enabled')), findsNothing);
+      expect(find.byKey(const Key('retain-original-png')), findsNothing);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
     }
   });
 

@@ -115,9 +115,12 @@ class _SettingsPageViewState extends State<SettingsPageView> {
             _buildEraseMetadataTile(context),
             if (!kIsWeb && (Platform.isWindows || Platform.isMacOS))
               _buildOutputSelectionTile(),
+            if (viewmodel.supportsDesktopJpegStorage())
+              _buildJpegStorageTiles(),
             _buildPrefixKeyTile(),
             _buildRememberSequentialProgressTile(),
             _buildPromptModeConfirmationTile(),
+            _buildPromptAutocompleteTile(),
             const Divider(),
             NavigationDirectory(
               configuration: viewmodel.settings.navigation,
@@ -225,6 +228,17 @@ class _SettingsPageViewState extends State<SettingsPageView> {
     );
   }
 
+  Widget _buildPromptAutocompleteTile() {
+    return SwitchListTile(
+      key: const Key('prompt-autocomplete-enabled'),
+      secondary: const Icon(Icons.auto_awesome),
+      title: Text(tr('prompt_autocomplete_enabled')),
+      subtitle: Text(tr('prompt_autocomplete_enabled_hint')),
+      value: viewmodel.settings.promptAutocompleteEnabled,
+      onChanged: viewmodel.setPromptAutocompleteEnabled,
+    );
+  }
+
   Widget _buildEraseMetadataTile(BuildContext context) {
     List<Widget> tiles = [
       SwitchListTile(
@@ -276,6 +290,32 @@ class _SettingsPageViewState extends State<SettingsPageView> {
       title: Text(tr('output_folder')),
       subtitle: Text(outputDirPath),
       onTap: () => viewmodel.pickOutputFolderPath(),
+    );
+  }
+
+  Widget _buildJpegStorageTiles() {
+    return Column(
+      children: [
+        SwitchListTile(
+          key: const Key('jpeg-storage-enabled'),
+          secondary: const Icon(Icons.photo_library_outlined),
+          title: Text(tr('jpeg_storage_enabled')),
+          subtitle: Text(tr('jpeg_storage_enabled_hint')),
+          value: viewmodel.settings.jpegStorageEnabled,
+          onChanged: (value) {
+            viewmodel.setJpegStorageEnabled(value);
+          },
+        ),
+        if (viewmodel.settings.jpegStorageEnabled)
+          SwitchListTile(
+            key: const Key('retain-original-png'),
+            secondary: const Icon(Icons.archive_outlined),
+            title: Text(tr('retain_original_png')),
+            subtitle: Text(tr('retain_original_png_hint')),
+            value: viewmodel.settings.retainOriginalPng,
+            onChanged: viewmodel.setRetainOriginalPng,
+          ),
+      ],
     );
   }
 

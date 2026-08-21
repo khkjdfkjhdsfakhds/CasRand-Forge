@@ -297,8 +297,21 @@ class GeneratePayloadUseCase {
       payloadComment += '\n\nI2I: ${plan.summary}';
     }
 
-    final processedFileName =
-        _processFileNameKey(fileNameKey, basePromptResult);
+    final prefixComments = payloadConfig.collectPrefixComments();
+    final List<String> extractedPrefixes = [];
+    for (final comment in prefixComments) {
+      final val = basePromptResult.findPromptWithKey(comment) ??
+          characterPromptResultList
+              .map((cp) => cp.prompt.findPromptWithKey(comment))
+              .firstWhere((p) => p != null, orElse: () => null);
+      if (val != null && val.trim().isNotEmpty) {
+        extractedPrefixes.add(val.trim());
+      }
+    }
+
+    final processedFileName = extractedPrefixes.isNotEmpty
+        ? extractedPrefixes.join('-')
+        : _processFileNameKey(fileNameKey, basePromptResult);
 
     return PayloadGenerationResult(
       comment: payloadComment,

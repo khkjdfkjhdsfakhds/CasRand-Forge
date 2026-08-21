@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
@@ -9,7 +10,6 @@ import 'package:nai_casrand/ui/core/utils/flushbar.dart';
 import 'package:nai_casrand/ui/core/utils/platform_support.dart';
 import 'package:nai_casrand/ui/navigation/view_models/metadata_drop_area_viewmodel.dart';
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
-import 'package:image/image.dart' as img;
 
 class MetadataDropArea extends StatefulWidget {
   final viewmodel =
@@ -96,9 +96,8 @@ class _MetadataDropAreaState extends State<MetadataDropArea> {
       if (reader == null) throw Exception('Could not get reader.');
       reader.getFile(imageFormat, (file) async {
         final data = await file.readAll();
-        final image = img.decodeImage(data);
-        if (image == null) throw Exception('Error decoding image.');
-        final metadataString = await ImageService().extractMetadata(image);
+        final metadataString = await ImageService()
+            .extractMetadataFromBytes(Uint8List.fromList(data));
         if (metadataString == null) throw Exception('Could not read metadata.');
         final jsonData = json.decode(metadataString) as Map<String, dynamic>;
         final commentData =

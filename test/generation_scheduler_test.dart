@@ -79,6 +79,26 @@ void main() {
     expect(scheduler.status.completedTaskCount, 1);
   });
 
+  test('a reserved persistence can release its API worker without completing',
+      () {
+    final scheduler = GenerationScheduler(
+      taskCount: 2,
+      workerIds: const ['A'],
+    );
+    final persistence = scheduler.claim('A')!;
+    expect(scheduler.reserveSuccess(persistence), isTrue);
+
+    expect(scheduler.detachWorkerForPersistence(persistence), isTrue);
+    final nextApiRequest = scheduler.claim('A');
+
+    expect(nextApiRequest?.taskNumber, 2);
+    expect(scheduler.status.completedTaskCount, 0);
+    expect(scheduler.status.inFlightCount, 2);
+    expect(scheduler.completeSuccess(persistence), isTrue);
+    expect(scheduler.status.completedTaskCount, 1);
+    expect(scheduler.status.inFlightCount, 1);
+  });
+
   test('a lease not issued by the scheduler cannot complete a task', () {
     final scheduler = GenerationScheduler(
       taskCount: 1,

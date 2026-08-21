@@ -689,4 +689,56 @@ void main() {
     expect(parameters['inpaintImg2ImgStrength'], 1.0);
     expect(parameters.containsKey('img2img'), isFalse);
   });
+
+  test('suggestedFileName extracts prefixes from checked prompt nodes across base and character configs', () {
+    final artist = PromptConfig(
+      comment: '画师',
+      useAsFileNamePrefix: true,
+      selectionMethod: 'all',
+      strs: ['artist:anmi'],
+      prompts: [],
+    );
+    final costume = PromptConfig(
+      comment: '服装',
+      useAsFileNamePrefix: true,
+      selectionMethod: 'all',
+      strs: ['school uniform'],
+      prompts: [],
+    );
+    final charPrompt = PromptConfig(
+      comment: '表情',
+      useAsFileNamePrefix: true,
+      selectionMethod: 'all',
+      strs: ['smile'],
+      prompts: [],
+    );
+
+    final config = PayloadConfig(
+      rootPromptConfig: PromptConfig(
+        type: 'config',
+        selectionMethod: 'all',
+        strs: [],
+        prompts: [artist, costume],
+      ),
+      negativePromptConfig: PromptConfig(strs: [], prompts: []),
+      characterConfigList: [
+        CharacterConfig(
+          positions: [],
+          positivePromptConfig: charPrompt,
+          negativePromptConfig: PromptConfig(strs: [], prompts: []),
+          gender: CharacterConfig.genderOther,
+          enabled: true,
+        ),
+      ],
+      savedPromptConfigList: [],
+      paramConfig: ParamConfig(),
+      settings: Settings.fromJson({}),
+      overridePrompt: '',
+      useOverridePrompt: false,
+      useCharacterPromptWithOverride: false,
+    );
+
+    final result = GeneratePayloadUseCase(payloadConfig: config)();
+    expect(result.suggestedFileName, 'artist:anmi-school uniform-smile');
+  });
 }

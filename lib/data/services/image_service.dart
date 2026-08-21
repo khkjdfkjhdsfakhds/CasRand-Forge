@@ -146,4 +146,52 @@ class ImageService {
 
     return null; // 如果没有找到特定的魔法字节
   }
+
+  /// Reads generated-image metadata from either the existing PNG stealth
+  /// channel or the JPEG ExifIFD UserComment contract shared with the
+  /// compression Skill.
+  Future<String?> extractMetadataFromBytes(Uint8List bytes) async {
+    try {
+      if (_looksLikeJpeg(bytes)) {
+        final raw = img.decodeJpgExif(bytes)?.exifIfd.userComment;
+        return _validatedNovelAiUserComment(raw);
+      }
+      final image = img.decodeImage(bytes);
+      if (image == null) return null;
+      return extractMetadata(image);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static bool _looksLikeJpeg(Uint8List bytes) =>
+      bytes.length >= 2 && bytes[0] == 0xff && bytes[1] == 0xd8;
+
+  static String? _validatedNovelAiUserComment(String? raw) {
+    if (raw == null) return null;
+    var value = raw.replaceFirst(RegExp(r'^[\u0000\ufeff]+'), '');
+    for (final prefix in const [
+      'ASCII\u0000\u0000\u0000',
+      'UNICODE\u0000',
+      'JIS\u0000\u0000\u0000\u0000\u0000',
+    ]) {
+      if (value.startsWith(prefix)) {
+        value = value.substring(prefix.length);
+        break;
+      }
+    }
+    final decoded = jsonDecode(value);
+    if (decoded is! Map<String, dynamic>) return null;
+    final description = decoded['Description'];
+    final rawComment = decoded['Comment'];
+    if (description is! String || rawComment == null) return null;
+    final Object? comment =
+        rawComment is String ? jsonDecode(rawComment) : rawComment;
+    if (comment is! Map) return null;
+    final software = decoded['Software']?.toString().toLowerCase() ?? '';
+    final looksNovelAi = software.contains('novelai') ||
+        const ['request_type', 'steps', 'v4_prompt', 'sampler']
+            .any(comment.containsKey);
+    return looksNovelAi ? value : null;
+  }
 }

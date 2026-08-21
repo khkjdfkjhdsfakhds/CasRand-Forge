@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
-import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_command/flutter_command.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -23,6 +23,8 @@ import 'package:nai_casrand/data/models/vibe_config_v4.dart';
 import 'package:nai_casrand/data/services/account_service.dart';
 import 'package:nai_casrand/data/services/api_service.dart';
 import 'package:nai_casrand/data/services/file_service.dart';
+import 'package:nai_casrand/data/services/generated_image_storage.dart';
+import 'package:nai_casrand/data/services/image_service.dart';
 import 'package:nai_casrand/data/use_cases/encode_vibe_use_case.dart';
 import 'package:nai_casrand/data/use_cases/generate_payload_use_case.dart';
 import 'package:nai_casrand/data/use_cases/i2i_request_size.dart';
@@ -250,6 +252,70 @@ class _RecordingFileService extends FileService {
 
   @override
   String generateRandomString() => 'result';
+}
+
+class _FailOnceFileService extends _RecordingFileService {
+  bool _shouldFail = true;
+
+  @override
+  Future<String?> savePictureToFile(
+    Uint8List bytes,
+    String fileName,
+    String saveDir,
+  ) async {
+    savedNames.add(fileName);
+    if (_shouldFail) {
+      _shouldFail = false;
+      throw StateError('simulated storage failure');
+    }
+    return '/test/$fileName';
+  }
+}
+
+class _RecordingGeneratedImageStorage implements GeneratedImageStorage {
+  final GeneratedImageStorage delegate;
+  final List<GeneratedImageStorageRequest> requests = [];
+  final List<GeneratedImageStorageSubmission> submissions = [];
+
+  _RecordingGeneratedImageStorage(this.delegate);
+
+  @override
+  GeneratedImageStorageSubmission submit(GeneratedImageStorageRequest request) {
+    requests.add(request);
+    final submission = delegate.submit(request);
+    submissions.add(submission);
+    return submission;
+  }
+}
+
+class _DelayedGeneratedImageStorage implements GeneratedImageStorage {
+  final Completer<GeneratedImageFile?> publication = Completer();
+  GeneratedImageStorageSubmission? submission;
+
+  @override
+  GeneratedImageStorageSubmission submit(GeneratedImageStorageRequest request) {
+    return submission = GeneratedImageStorageSubmission.start(
+      previewBytes: request.pngBytes,
+      publish: () => publication.future,
+    );
+  }
+}
+
+class _QueuedDelayedGeneratedImageStorage implements GeneratedImageStorage {
+  final List<Completer<GeneratedImageFile?>> publications = [];
+  final List<GeneratedImageStorageSubmission> submissions = [];
+
+  @override
+  GeneratedImageStorageSubmission submit(GeneratedImageStorageRequest request) {
+    final publication = Completer<GeneratedImageFile?>();
+    publications.add(publication);
+    final submission = GeneratedImageStorageSubmission.start(
+      previewBytes: request.pngBytes,
+      publish: () => publication.future,
+    );
+    submissions.add(submission);
+    return submission;
+  }
 }
 
 Uint8List directorResponseZip(List<Uint8List> images) {
@@ -593,6 +659,385 @@ void main() {
 
     balanceBlocker.complete(null);
     await tester.pump();
+    viewmodel.dispose();
+  });
+
+  testWidgets('a winning generation is published through image storage',
+      (tester) async {
+    final outputImage = img.Image(width: 64, height: 64, numChannels: 3);
+    final outputBytes = Uint8List.fromList(img.encodePng(outputImage));
+    final api = _FakeApiService(ApiResponse(
+      status: '200',
+      data: directorResponseZip([outputBytes]),
+    ));
+    final files = _RecordingFileService();
+    final storage = _RecordingGeneratedImageStorage(
+      PngGeneratedImageStorage(fileService: files),
+    );
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      fileService: files,
+      generatedImageStorage: storage,
+    );
+    final settings = GetIt.I<PayloadConfig>().settings;
+    settings
+      ..debugApiEnabled = true
+      ..generationCount = 1
+      ..generationIntervalSec = 0
+      ..outputFolderPath = '/chosen-output'
+      ..metadataEraseEnabled = false
+      ..customMetadataEnabled = true
+      ..customMetadataContent = 'custom metadata';
+
+    viewmodel.startGeneration();
+    await waitForCurrentCommand(tester, viewmodel);
+
+    expect(storage.requests, hasLength(1));
+    expect(storage.requests.single.pngBytes, outputBytes);
+    expect(storage.requests.single.fileName, files.savedNames.single);
+    expect(storage.requests.single.logicalTaskId, contains('generation:1'));
+    expect(
+      storage.requests.single.storagePolicy.pngOutputDirectory,
+      '/chosen-output',
+    );
+    expect(storage.requests.single.storagePolicy.jpegEnabled, isFalse);
+    expect(storage.requests.single.storagePolicy.retainOriginalPng, isTrue);
+    expect(storage.requests.single.metadataPolicy.eraseMetadata, isFalse);
+    expect(
+        storage.requests.single.metadataPolicy.customMetadataEnabled, isTrue);
+    expect(
+      storage.requests.single.metadataPolicy.customMetadataContent,
+      'custom metadata',
+    );
+    final content = viewmodel.currentCommand!.value;
+    expect(content.imageArtifact, same(storage.submissions.single.artifact));
+    expect(
+      identical(content.imageBytes, storage.requests.single.pngBytes),
+      isTrue,
+    );
+    expect(content.imageArtifact?.status, GeneratedImageStorageStatus.saved);
+    expect(content.currentImageFile?.path, '/test/${files.savedNames.single}');
+    expect(viewmodel.commandStatus.currentGenerationCount, 1);
+    viewmodel.dispose();
+  });
+
+  testWidgets('storage metadata and folder policy are immutable per request',
+      (tester) async {
+    final outputImage = img.Image(width: 64, height: 64, numChannels: 4);
+    img.fill(outputImage, color: img.ColorRgba8(20, 40, 60, 255));
+    final api = _BlockingApiService();
+    final files = _RecordingFileService();
+    final storage = _RecordingGeneratedImageStorage(
+      PngGeneratedImageStorage(fileService: files),
+    );
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      fileService: files,
+      generatedImageStorage: storage,
+    );
+    final settings = GetIt.I<PayloadConfig>().settings;
+    settings
+      ..debugApiEnabled = true
+      ..generationCount = 1
+      ..generationIntervalSec = 0
+      ..outputFolderPath = '/accepted-output'
+      ..metadataEraseEnabled = true
+      ..customMetadataEnabled = true
+      ..customMetadataContent = 'accepted metadata';
+
+    viewmodel.startGeneration();
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(api.calls, 1);
+
+    settings
+      ..outputFolderPath = '/later-output'
+      ..metadataEraseEnabled = false
+      ..customMetadataEnabled = false
+      ..customMetadataContent = 'later metadata';
+    api.response.complete(ApiResponse(
+      status: '200',
+      data: directorResponseZip([
+        Uint8List.fromList(img.encodePng(outputImage)),
+      ]),
+    ));
+    await waitForCurrentCommand(tester, viewmodel);
+
+    final request = storage.requests.single;
+    expect(request.storagePolicy.pngOutputDirectory, '/accepted-output');
+    expect(request.metadataPolicy.eraseMetadata, isTrue);
+    expect(request.metadataPolicy.customMetadataEnabled, isTrue);
+    expect(request.metadataPolicy.customMetadataContent, 'accepted metadata');
+    expect(
+      await ImageService().extractMetadata(img.decodePng(request.pngBytes)!),
+      'accepted metadata',
+    );
+    viewmodel.dispose();
+  });
+
+  testWidgets('desktop JPEG settings are captured in the storage request',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    try {
+      final outputImage = img.Image(width: 64, height: 64, numChannels: 3);
+      final api = _FakeApiService(ApiResponse(
+        status: '200',
+        data: directorResponseZip([
+          Uint8List.fromList(img.encodePng(outputImage)),
+        ]),
+      ));
+      final files = _RecordingFileService();
+      final storage = _RecordingGeneratedImageStorage(
+        PngGeneratedImageStorage(fileService: files),
+      );
+      final viewmodel = GenerationPageViewmodel(
+        apiService: api,
+        fileService: files,
+        generatedImageStorage: storage,
+      );
+      final settings = GetIt.I<PayloadConfig>().settings;
+      settings
+        ..debugApiEnabled = true
+        ..generationCount = 1
+        ..generationIntervalSec = 0
+        ..outputFolderPath = '/shared-output'
+        ..jpegStorageEnabled = true
+        ..retainOriginalPng = false;
+
+      viewmodel.startGeneration();
+      await waitForCurrentCommand(tester, viewmodel);
+
+      final policy = storage.requests.single.storagePolicy;
+      expect(policy.jpegEnabled, isTrue);
+      expect(policy.jpegOutputDirectory, '/shared-output');
+      expect(policy.pngOutputDirectory, '/shared-output');
+      expect(policy.retainOriginalPng, isFalse);
+      viewmodel.dispose();
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('mobile generation ignores persisted desktop JPEG settings',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      final outputImage = img.Image(width: 64, height: 64, numChannels: 3);
+      final api = _FakeApiService(ApiResponse(
+        status: '200',
+        data: directorResponseZip([
+          Uint8List.fromList(img.encodePng(outputImage)),
+        ]),
+      ));
+      final files = _RecordingFileService();
+      final storage = _RecordingGeneratedImageStorage(
+        PngGeneratedImageStorage(fileService: files),
+      );
+      final viewmodel = GenerationPageViewmodel(
+        apiService: api,
+        fileService: files,
+        generatedImageStorage: storage,
+      );
+      final settings = GetIt.I<PayloadConfig>().settings;
+      settings
+        ..debugApiEnabled = true
+        ..generationCount = 1
+        ..generationIntervalSec = 0
+        ..outputFolderPath = '/png-output'
+        ..jpegStorageEnabled = true;
+
+      viewmodel.startGeneration();
+      await waitForCurrentCommand(tester, viewmodel);
+
+      expect(storage.requests.single.storagePolicy.jpegEnabled, isFalse);
+      expect(
+        storage.requests.single.storagePolicy.pngOutputDirectory,
+        '/png-output',
+      );
+      viewmodel.dispose();
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('the winning PNG is visible while durable storage is pending',
+      (tester) async {
+    final outputImage = img.Image(width: 64, height: 64, numChannels: 3);
+    final outputBytes = Uint8List.fromList(img.encodePng(outputImage));
+    final api = _FakeApiService(ApiResponse(
+      status: '200',
+      data: directorResponseZip([outputBytes]),
+    ));
+    final storage = _DelayedGeneratedImageStorage();
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      fileService: _RecordingFileService(),
+      generatedImageStorage: storage,
+    );
+    final settings = GetIt.I<PayloadConfig>().settings;
+    settings
+      ..debugApiEnabled = true
+      ..generationCount = 1
+      ..generationIntervalSec = 0;
+
+    viewmodel.startGeneration();
+    for (var attempt = 0;
+        attempt < 20 && storage.submission == null;
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 1));
+    }
+
+    final command = viewmodel.currentCommand!;
+    expect(storage.submission, isNotNull);
+    expect(command.isExecuting.value, isFalse);
+    expect(
+      command.value.imageArtifact,
+      same(storage.submission!.artifact),
+    );
+    expect(command.value.imageBytes, outputBytes);
+    expect(
+      command.value.imageArtifact?.status,
+      GeneratedImageStorageStatus.saving,
+    );
+    expect(viewmodel.commandStatus.currentGenerationCount, 0);
+
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(body: InfoCard(command: command)),
+    ));
+    await tester.pump();
+    expect(find.byType(Image), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+
+    storage.publication.complete(const GeneratedImageFile(
+      path: '/test/generated.png',
+      mediaType: 'image/png',
+      isPermanent: true,
+    ));
+    for (var attempt = 0;
+        attempt < 100 && viewmodel.commandStatus.currentGenerationCount < 1;
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 1));
+    }
+
+    expect(command.isExecuting.value, isFalse);
+    expect(
+      command.value.imageArtifact?.status,
+      GeneratedImageStorageStatus.saved,
+    );
+    expect(viewmodel.commandStatus.currentGenerationCount, 1);
+    viewmodel.dispose();
+  });
+
+  testWidgets('pending JPEG storage does not occupy the API worker',
+      (tester) async {
+    final outputImage = img.Image(width: 64, height: 64, numChannels: 3);
+    final response = ApiResponse(
+      status: '200',
+      data: directorResponseZip([
+        Uint8List.fromList(img.encodePng(outputImage)),
+      ]),
+    );
+    final api = _SequenceApiService([response, response]);
+    final storage = _QueuedDelayedGeneratedImageStorage();
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      fileService: _RecordingFileService(),
+      generatedImageStorage: storage,
+    );
+    final settings = GetIt.I<PayloadConfig>().settings;
+    settings
+      ..debugApiEnabled = true
+      ..generationCount = 2
+      ..generationIntervalSec = 0;
+
+    viewmodel.startGeneration();
+    for (var attempt = 0;
+        attempt < 100 && storage.submissions.length < 2;
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 1));
+    }
+
+    expect(api.requests, hasLength(2));
+    expect(storage.submissions, hasLength(2));
+    expect(viewmodel.commandStatus.currentGenerationCount, 0);
+    expect(
+      storage.submissions.map((submission) => submission.artifact.status),
+      everyElement(GeneratedImageStorageStatus.saving),
+    );
+
+    for (var index = 0; index < storage.publications.length; index++) {
+      storage.publications[index].complete(GeneratedImageFile(
+        path: '/test/result-$index.png',
+        mediaType: 'image/png',
+        isPermanent: true,
+      ));
+    }
+    for (var attempt = 0;
+        attempt < 100 && viewmodel.commandStatus.currentGenerationCount < 2;
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 1));
+    }
+
+    expect(viewmodel.commandStatus.currentGenerationCount, 2);
+    expect(viewmodel.commandStatus.isGenerationActive.value, isFalse);
+    viewmodel.dispose();
+  });
+
+  testWidgets('storage failure releases the logical task for one retry',
+      (tester) async {
+    final outputImage = img.Image(width: 64, height: 64, numChannels: 3);
+    final response = ApiResponse(
+      status: '200',
+      data: directorResponseZip([
+        Uint8List.fromList(img.encodePng(outputImage)),
+      ]),
+    );
+    final api = _SequenceApiService([response, response]);
+    final files = _FailOnceFileService();
+    final storage = _RecordingGeneratedImageStorage(
+      PngGeneratedImageStorage(fileService: files),
+    );
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      fileService: files,
+      generatedImageStorage: storage,
+    );
+    final settings = GetIt.I<PayloadConfig>().settings;
+    settings
+      ..debugApiEnabled = true
+      ..generationCount = 1
+      ..generationIntervalSec = 0;
+
+    viewmodel.startGeneration();
+    for (var attempt = 0;
+        attempt < 100 && storage.submissions.length < 2;
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 1));
+    }
+
+    expect(storage.submissions, hasLength(2));
+    expect(
+      storage.submissions.first.artifact.status,
+      GeneratedImageStorageStatus.failed,
+    );
+    for (var attempt = 0;
+        attempt < 100 && viewmodel.commandStatus.currentGenerationCount < 1;
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 1));
+    }
+
+    expect(api.requests, hasLength(2));
+    expect(storage.submissions, hasLength(2));
+    expect(
+      storage.requests.map((request) => request.logicalTaskId).toSet(),
+      hasLength(1),
+    );
+    expect(
+      storage.submissions.last.artifact.status,
+      GeneratedImageStorageStatus.saved,
+    );
+    expect(viewmodel.commandStatus.currentGenerationCount, 1);
+    expect(viewmodel.commandList, hasLength(1));
+    expect(viewmodel.commandList.single.value.imageArtifact, isNotNull);
     viewmodel.dispose();
   });
 
