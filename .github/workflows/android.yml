@@ -55,7 +55,7 @@ jobs:
         run: flutter analyze --no-fatal-infos
 
       - name: Test
-        run: flutter test --concurrency=1
+        run: flutter test
 
       - name: Build release APK
         run: flutter build apk --release

@@ -10,6 +10,21 @@ import 'package:nai_casrand/data/services/file_service.dart';
 import 'package:nai_casrand/data/services/generated_image_jpeg_encoder.dart';
 import 'package:nai_casrand/data/services/generated_image_storage.dart';
 
+class _LocalFileService extends FileService {
+  @override
+  Future<String?> savePictureToFile(
+    Uint8List bytes,
+    String fileName,
+    String saveDir,
+  ) async {
+    final directory = Directory(saveDir);
+    await directory.create(recursive: true);
+    final file = File('${directory.path}${Platform.pathSeparator}$fileName');
+    await file.writeAsBytes(bytes);
+    return file.absolute.path;
+  }
+}
+
 class _NoLocalFileService extends FileService {
   @override
   Future<String?> savePictureToFile(
@@ -103,7 +118,7 @@ void main() {
     );
     addTearDown(() => outputDirectory.delete(recursive: true));
     final pngBytes = Uint8List.fromList([137, 80, 78, 71, 1, 2, 3, 4]);
-    final storage = PngGeneratedImageStorage();
+    final storage = PngGeneratedImageStorage(fileService: _LocalFileService());
 
     final submission = storage.submit(GeneratedImageStorageRequest(
       logicalTaskId: 'test:generated',
@@ -392,6 +407,7 @@ void main() {
         sessionRequested = true;
         return Directory.systemTemp;
       },
+      fileService: _LocalFileService(),
     );
 
     final artifact = await storage

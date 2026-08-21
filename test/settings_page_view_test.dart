@@ -188,19 +188,16 @@ void main() {
       expect(find.byType(CheckboxListTile), findsNothing);
       expect(tester.getTopLeft(setup).dy,
           lessThan(tester.getTopLeft(metadata).dy));
-      if (Platform.isMacOS || Platform.isWindows) {
-        expect(output, findsOneWidget);
-        expect(jpegStorage, findsOneWidget);
-        expect(tester.getTopLeft(metadata).dy,
-            lessThan(tester.getTopLeft(output).dy));
-        expect(tester.getTopLeft(output).dy,
-            lessThan(tester.getTopLeft(prefix).dy));
-      } else {
-        expect(output, findsNothing);
-        expect(jpegStorage, findsNothing);
-        expect(tester.getTopLeft(metadata).dy,
-            lessThan(tester.getTopLeft(prefix).dy));
-      }
+      expect(output, findsOneWidget);
+      expect(jpegStorage, findsOneWidget);
+      expect(
+        tester.getTopLeft(metadata).dy,
+        lessThan(tester.getTopLeft(output).dy),
+      );
+      expect(
+        tester.getTopLeft(output).dy,
+        lessThan(tester.getTopLeft(prefix).dy),
+      );
       expect(tester.getTopLeft(prefix).dy,
           lessThan(tester.getTopLeft(remember).dy));
       expect(
