@@ -47,6 +47,9 @@ class _ControlledJpegEncoder implements GeneratedImageJpegEncoder {
   }
 }
 
+String _pathIn(Directory directory, String name) =>
+    '${directory.path}${Platform.pathSeparator}$name';
+
 Uint8List _opaquePng({int width = 64, int height = 64}) {
   final image = img.Image(width: width, height: height);
   for (var y = 0; y < height; y++) {
@@ -271,7 +274,7 @@ void main() {
     expect(identical(submission.artifact.previewBytes, pngBytes), isTrue);
     expect(submission.artifact.currentFile, isNull);
     while (encoder.calls.isEmpty) {
-      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
     }
     final sessionFile = submission.artifact.currentFile;
     expect(sessionFile?.mediaType, 'image/png');
@@ -330,7 +333,7 @@ void main() {
       ),
     ));
     while (encoder.calls.isEmpty) {
-      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
     }
     encoder.calls.single.complete(
       _jpegResult(Uint8List(pngBytes.length), width: 8, height: 8),
@@ -379,7 +382,7 @@ void main() {
       ),
     ));
     while (encoder.calls.isEmpty) {
-      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
     }
     encoder.calls.single.complete(_jpegResult(Uint8List(1)));
 
@@ -429,7 +432,7 @@ void main() {
     expect(artifact.status, GeneratedImageStorageStatus.saved);
     expect(encoder.calls, isEmpty);
     expect(sessionRequested, isFalse);
-    expect(await File('${output.path}/legacy.png').readAsBytes(), [1, 2, 3]);
+    expect(await File(_pathIn(output, 'legacy.png')).readAsBytes(), [1, 2, 3]);
   });
 
   test('public storage seam produces a decodable smaller JPEG end to end',
@@ -559,10 +562,10 @@ void main() {
       ),
     ));
     while (encoder.calls.isEmpty) {
-      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
     }
 
-    final permanentPng = File('${output.path}/paired.png');
+    final permanentPng = File(_pathIn(output, 'paired.png'));
     expect(submission.artifact.currentFile?.path, permanentPng.absolute.path);
     expect(submission.artifact.currentFile?.isPermanent, isTrue);
     expect(
@@ -571,7 +574,7 @@ void main() {
 
     encoder.calls.single.complete(_jpegResult(Uint8List(64)));
     final artifact = await submission.completed;
-    final permanentJpeg = File('${output.path}/paired.jpg');
+    final permanentJpeg = File(_pathIn(output, 'paired.jpg'));
 
     expect(artifact.currentFile?.path, permanentJpeg.absolute.path);
     expect(artifact.originalPngFile?.path, permanentPng.absolute.path);
@@ -616,7 +619,7 @@ void main() {
       ),
     ));
     while (encoder.calls.isEmpty) {
-      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
     }
     encoder.calls.single.complete(const GeneratedImageJpegEncodingResult(
       status: GeneratedImageJpegEncodingStatus.transparencyUnsupported,
@@ -628,13 +631,13 @@ void main() {
     ));
 
     final artifact = await submission.completed;
-    final fallback = File('${output.path}/transparent.png');
+    final fallback = File(_pathIn(output, 'transparent.png'));
     expect(artifact.status, GeneratedImageStorageStatus.pngFallbackSaved);
     expect(artifact.currentFile?.path, fallback.absolute.path);
     expect(artifact.originalPngFile?.path, fallback.absolute.path);
     expect(artifact.permanentFiles, [artifact.currentFile]);
     expect(await fallback.readAsBytes(), source);
-    expect(await File('${output.path}/transparent.jpg').exists(), isFalse);
+    expect(await File(_pathIn(output, 'transparent.jpg')).exists(), isFalse);
   });
 
   test('concurrent jobs cannot reserve and overwrite the same resolved name',
@@ -698,7 +701,7 @@ void main() {
 
     expect(settled.whereType<GeneratedImageArtifact>(), hasLength(1));
     expect(settled.whereType<FileSystemException>(), hasLength(1));
-    expect(await File('${output.path}/collision.jpg').readAsBytes(),
+    expect(await File(_pathIn(output, 'collision.jpg')).readAsBytes(),
         Uint8List(64));
   });
   test('storage closes an empty queue and rejects submissions afterwards',
@@ -711,7 +714,7 @@ void main() {
       desktopJpegSupported: true,
       sessionRootDirectoryProvider: () async => root,
       sessionDirectoryProvider: () async =>
-          Directory('${root.path}/session-current'),
+          Directory(_pathIn(root, 'session-current')),
     );
 
     await storage.close();
@@ -733,7 +736,7 @@ void main() {
       if (await output.exists()) await output.delete(recursive: true);
     });
     final encoder = _ControlledJpegEncoder();
-    final current = Directory('${root.path}/session-current');
+    final current = Directory(_pathIn(root, 'session-current'));
     final storage = GeneratedImageStorageService(
       desktopJpegSupported: true,
       jpegEncoder: encoder,
@@ -745,7 +748,7 @@ void main() {
     final first = storage.submit(_jpegRequest('wait-first', output.path));
     final second = storage.submit(_jpegRequest('wait-second', output.path));
     while (encoder.calls.isEmpty) {
-      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
     }
     var closed = false;
     final closeFuture = storage.close().then((_) => closed = true);
@@ -753,7 +756,7 @@ void main() {
     expect(closed, isFalse);
     encoder.calls.first.complete(_jpegResult(Uint8List(64)));
     while (encoder.calls.length < 2) {
-      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
     }
     encoder.calls.last.complete(_jpegResult(Uint8List(64)));
     await closeFuture;
@@ -773,7 +776,7 @@ void main() {
       if (await output.exists()) await output.delete(recursive: true);
     });
     final encoder = _ControlledJpegEncoder();
-    final current = Directory('${root.path}/session-current');
+    final current = Directory(_pathIn(root, 'session-current'));
     final storage = GeneratedImageStorageService(
       desktopJpegSupported: true,
       jpegEncoder: encoder,
@@ -786,7 +789,7 @@ void main() {
     final pending =
         storage.submit(_jpegRequest('abandon-pending', output.path));
     while (encoder.calls.isEmpty) {
-      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
     }
     await storage.close(abandon: true).timeout(const Duration(seconds: 1));
     await expectLater(active.completed,
@@ -797,8 +800,9 @@ void main() {
     expect(pending.artifact.status, GeneratedImageStorageStatus.abandoned);
     encoder.calls.first.complete(_jpegResult(Uint8List(64)));
     await Future<void>.delayed(Duration.zero);
-    expect(await File('${output.path}/abandon-active.jpg').exists(), isFalse);
-    expect(await File('${output.path}/abandon-pending.jpg').exists(), isFalse);
+    expect(await File(_pathIn(output, 'abandon-active.jpg')).exists(), isFalse);
+    expect(
+        await File(_pathIn(output, 'abandon-pending.jpg')).exists(), isFalse);
     expect(await current.exists(), isFalse);
   });
 
@@ -811,7 +815,7 @@ void main() {
       if (await output.exists()) await output.delete(recursive: true);
     });
     final encoder = _ControlledJpegEncoder();
-    final current = Directory('${root.path}/session-current');
+    final current = Directory(_pathIn(root, 'session-current'));
     final storage = GeneratedImageStorageService(
       desktopJpegSupported: true,
       jpegEncoder: encoder,
@@ -822,16 +826,16 @@ void main() {
     );
     final finished = storage.submit(_jpegRequest('published', output.path));
     while (encoder.calls.isEmpty) {
-      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
     }
     encoder.calls.first.complete(_jpegResult(Uint8List(64)));
     await finished.completed;
-    final published = File('${output.path}/published.jpg');
+    final published = File(_pathIn(output, 'published.jpg'));
     expect(await published.exists(), isTrue);
 
     final unfinished = storage.submit(_jpegRequest('unfinished', output.path));
     while (encoder.calls.length < 2) {
-      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
     }
     await storage.close(abandon: true);
     expect(await published.exists(), isTrue);
@@ -844,9 +848,9 @@ void main() {
       () async {
     final root =
         await Directory.systemTemp.createTemp('casrand-lifecycle-root-');
-    final stale = Directory('${root.path}/session-stale');
-    final current = Directory('${root.path}/session-current');
-    final unmarked = Directory('${root.path}/session-unmarked');
+    final stale = Directory(_pathIn(root, 'session-stale'));
+    final current = Directory(_pathIn(root, 'session-current'));
+    final unmarked = Directory(_pathIn(root, 'session-unmarked'));
     final outside =
         await Directory.systemTemp.createTemp('casrand-lifecycle-outside-');
     addTearDown(() async {
@@ -855,12 +859,12 @@ void main() {
     });
     await stale.create(recursive: true);
     await unmarked.create(recursive: true);
-    await File('${stale.path}/.casrand-session').writeAsString(
+    await File(_pathIn(stale, '.casrand-session')).writeAsString(
       'CasRand Forge generated-image session\nlaunch=old\n',
     );
-    await File('${stale.path}/stale.png').writeAsBytes([1, 2, 3]);
-    await File('${unmarked.path}/keep.png').writeAsBytes([4, 5, 6]);
-    await File('${outside.path}/.casrand-session').writeAsString(
+    await File(_pathIn(stale, 'stale.png')).writeAsBytes([1, 2, 3]);
+    await File(_pathIn(unmarked, 'keep.png')).writeAsBytes([4, 5, 6]);
+    await File(_pathIn(outside, '.casrand-session')).writeAsString(
       'CasRand Forge generated-image session\nlaunch=outside\n',
     );
 
