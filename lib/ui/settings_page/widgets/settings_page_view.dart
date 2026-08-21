@@ -113,7 +113,7 @@ class _SettingsPageViewState extends State<SettingsPageView> {
           children: [
             _buildApiProxySettingsTile(context),
             _buildEraseMetadataTile(context),
-            if (!kIsWeb && (Platform.isWindows || Platform.isMacOS))
+            if (viewmodel.supportsDesktopJpegStorage())
               _buildOutputSelectionTile(),
             if (viewmodel.supportsDesktopJpegStorage())
               _buildJpegStorageTiles(),
