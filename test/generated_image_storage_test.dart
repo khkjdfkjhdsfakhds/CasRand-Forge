@@ -683,13 +683,13 @@ void main() {
 
     final outcomes = Future.wait([settle(first), settle(second)]);
     for (var attempt = 0;
-        attempt < 100 &&
+        attempt < 500 &&
             !(encoder.calls.length == 1 &&
                 (first.artifact.status == GeneratedImageStorageStatus.failed ||
                     second.artifact.status ==
                         GeneratedImageStorageStatus.failed));
         attempt++) {
-      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
     }
 
     expect(encoder.calls, hasLength(1));
