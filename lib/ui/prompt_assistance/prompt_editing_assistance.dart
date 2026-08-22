@@ -13,16 +13,24 @@ class PromptTagCandidate {
   final int category;
   final int postCount;
   final List<String> aliases;
+  final String? translation;
+  final List<String> pinyinVariants;
 
   PromptTagCandidate({
     required this.tag,
     required this.category,
     required this.postCount,
     this.aliases = const [],
+    this.translation,
+    this.pinyinVariants = const [],
   });
 
   /// The form shown in the suggestion list.  NovelAI receives [tag].
   String get displayTag => tag.replaceAll('_', ' ');
+
+  /// Optional Chinese label from the bundled community translation map.
+  String? get displayTranslation =>
+      translation == null || translation!.isEmpty ? null : translation;
 
   String get categoryLabel => switch (category) {
         0 => 'general',
@@ -47,12 +55,14 @@ class PromptTagCandidate {
         other.tag == tag &&
         other.category == category &&
         other.postCount == postCount &&
-        listEquals(other.aliases, aliases);
+        listEquals(other.aliases, aliases) &&
+        other.translation == translation &&
+        listEquals(other.pinyinVariants, pinyinVariants);
   }
 
   @override
-  int get hashCode =>
-      Object.hash(tag, category, postCount, Object.hashAll(aliases));
+  int get hashCode => Object.hash(tag, category, postCount,
+      Object.hashAll(aliases), translation, Object.hashAll(pinyinVariants));
 }
 
 /// Text and selection passed through the shared completion seam.
@@ -133,6 +143,8 @@ class PromptCompletionResult {
 /// the same text/selection semantics instead of copying parser logic.
 class PromptEditingAssistance {
   static const assetPath = 'assets/prompt_assistance/danbooru-index.json.gz';
+  static const translationAssetPath =
+      'assets/prompt_assistance/danbooru-translations.json.gz';
   static const suggestionLimit = 12;
 
   static PromptEditingAssistance? _shared;
@@ -179,12 +191,20 @@ class PromptEditingAssistance {
   }
 
   static Future<DanbooruTagIndex> _loadBundledIndex() async {
-    final data = await rootBundle.load(assetPath);
+    final indexData = await rootBundle.load(assetPath);
+    final translationData = await rootBundle.load(translationAssetPath);
     // Decompression and object construction happen in a worker isolate.  The
     // editor can render and accept ordinary text while this future is pending.
     return compute(
       _decodeBundledIndex,
-      data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+      <String, Uint8List>{
+        'index': indexData.buffer
+            .asUint8List(indexData.offsetInBytes, indexData.lengthInBytes),
+        'translations': translationData.buffer.asUint8List(
+          translationData.offsetInBytes,
+          translationData.lengthInBytes,
+        ),
+      },
     );
   }
 }
@@ -197,6 +217,8 @@ class DanbooruTagIndex {
   late final List<_PromptPrefixRecord> _canonicalPrefixes;
   late final List<_PromptPrefixRecord> _aliasPrefixes;
   late final Map<String, List<int>> _substringBuckets;
+  late final List<_PromptPrefixRecord> _translationPrefixes;
+  late final List<_PromptPrefixRecord> _pinyinPrefixes;
   bool _indexesBuilt = false;
 
   DanbooruTagIndex(Iterable<PromptTagCandidate> source)
@@ -221,6 +243,8 @@ class DanbooruTagIndex {
 
     final canonicalPrefixes = <_PromptPrefixRecord>[];
     final aliasPrefixes = <_PromptPrefixRecord>[];
+    final translationPrefixes = <_PromptPrefixRecord>[];
+    final pinyinPrefixes = <_PromptPrefixRecord>[];
     final substringBuckets = <String, List<int>>{};
     for (var index = 0; index < entries.length; index++) {
       final entry = entries[index];
@@ -231,6 +255,19 @@ class DanbooruTagIndex {
         if (alias.isNotEmpty) {
           aliasPrefixes.add(
             _PromptPrefixRecord(key: alias, entryIndex: index),
+          );
+        }
+      }
+      final translation = normalizePromptTag(entry.translation ?? '');
+      if (translation.isNotEmpty) {
+        translationPrefixes.add(
+          _PromptPrefixRecord(key: translation, entryIndex: index),
+        );
+      }
+      for (final pinyin in entry.pinyinVariants) {
+        if (pinyin.isNotEmpty) {
+          pinyinPrefixes.add(
+            _PromptPrefixRecord(key: pinyin, entryIndex: index),
           );
         }
       }
@@ -254,11 +291,19 @@ class DanbooruTagIndex {
     aliasPrefixes.sort(
       (a, b) => _comparePrefixRecords(a, b, entries),
     );
+    translationPrefixes.sort(
+      (a, b) => _comparePrefixRecords(a, b, entries),
+    );
+    pinyinPrefixes.sort(
+      (a, b) => _comparePrefixRecords(a, b, entries),
+    );
     for (final bucket in substringBuckets.values) {
       bucket.sort((a, b) => _compareEntryIndexes(a, b, entries));
     }
     _canonicalPrefixes = List.unmodifiable(canonicalPrefixes);
     _aliasPrefixes = List.unmodifiable(aliasPrefixes);
+    _translationPrefixes = List.unmodifiable(translationPrefixes);
+    _pinyinPrefixes = List.unmodifiable(pinyinPrefixes);
     _substringBuckets = Map.unmodifiable(substringBuckets);
     _indexesBuilt = true;
   }
@@ -271,13 +316,18 @@ class DanbooruTagIndex {
     if (normalizedQuery.length < 2 || limit <= 0) return const [];
 
     if (!_indexesBuilt) warmUp();
+    final isPinyin = normalizedQuery.startsWith('/');
+    final searchQuery =
+        isPinyin ? normalizedQuery.substring(1) : normalizedQuery;
+    if (searchQuery.length < 2) return const [];
     final canonical = _bestEntryIndexes(
-      _prefixEntryIndexes(_canonicalPrefixes, normalizedQuery),
+      _prefixEntryIndexes(
+          isPinyin ? _pinyinPrefixes : _canonicalPrefixes, searchQuery),
       limit,
       entries: entries,
     );
     final selected = canonical.toSet();
-    if (canonical.length < limit) {
+    if (!isPinyin && canonical.length < limit) {
       final aliases = _bestEntryIndexes(
         _prefixEntryIndexes(_aliasPrefixes, normalizedQuery),
         limit - canonical.length,
@@ -287,7 +337,17 @@ class DanbooruTagIndex {
       canonical.addAll(aliases);
       selected.addAll(aliases);
     }
-    if (canonical.length < limit) {
+    if (!isPinyin && canonical.length < limit) {
+      final translations = _bestEntryIndexes(
+        _prefixEntryIndexes(_translationPrefixes, searchQuery),
+        limit - canonical.length,
+        entries: entries,
+        excluded: selected,
+      );
+      canonical.addAll(translations);
+      selected.addAll(translations);
+    }
+    if (!isPinyin && canonical.length < limit) {
       final substring = _bestEntryIndexes(
         _substringEntryIndexes(
           normalizedQuery,
@@ -491,11 +551,34 @@ class PromptFragment {
   }
 }
 
-DanbooruTagIndex _decodeBundledIndex(Uint8List bytes) {
-  final compressed = GZipDecoder().decodeBytes(bytes);
+DanbooruTagIndex _decodeBundledIndex(Map<String, Uint8List> assetBytes) {
+  final compressed = GZipDecoder().decodeBytes(assetBytes['index']!);
   final decoded = jsonDecode(utf8.decode(compressed));
   if (decoded is! List) {
     throw const FormatException('Danbooru index must be a JSON array');
+  }
+  final translationPayload = jsonDecode(utf8.decode(
+    GZipDecoder().decodeBytes(assetBytes['translations']!),
+  ));
+  final translations = <String, String>{};
+  final pinyinMap = <String, String>{};
+  if (translationPayload is Map) {
+    final rawTranslations = translationPayload['translations'];
+    if (rawTranslations is Map) {
+      rawTranslations.forEach((key, value) {
+        if (key is String && value is String && value.isNotEmpty) {
+          translations[key] = value;
+        }
+      });
+    }
+    final rawPinyin = translationPayload['pinyin'];
+    if (rawPinyin is Map) {
+      rawPinyin.forEach((key, value) {
+        if (key is String && value is String && value.isNotEmpty) {
+          pinyinMap[key] = value;
+        }
+      });
+    }
   }
   final entries = <PromptTagCandidate>[];
   for (final row in decoded) {
@@ -505,12 +588,39 @@ DanbooruTagIndex _decodeBundledIndex(Uint8List bytes) {
     final aliases = row[3] is List
         ? (row[3] as List).whereType<String>().toList(growable: false)
         : const <String>[];
+    final translation = translations[row[0] as String];
+    final pinyin = <String>{};
+    if (translation != null) {
+      for (final segment in translation.split(RegExp(r'[|/(),\s]+'))) {
+        if (segment.isEmpty) continue;
+        var full = StringBuffer();
+        var initials = StringBuffer();
+        for (final character in segment.runes.map(String.fromCharCode)) {
+          final syllable = pinyinMap[character];
+          if (syllable != null) {
+            full.write(syllable);
+            initials.write(syllable[0]);
+          } else if (RegExp(r'[A-Za-z0-9]').hasMatch(character)) {
+            full.write(character.toLowerCase());
+            initials.write(character.toLowerCase());
+          }
+        }
+        if (full.isNotEmpty) {
+          pinyin.add(full.toString());
+          pinyin.add(initials.toString());
+          pinyin.add(full.toString().replaceAll('nv', 'nu'));
+          pinyin.add(full.toString().replaceAll('lv', 'lu'));
+        }
+      }
+    }
     entries.add(
       PromptTagCandidate(
         tag: row[0] as String,
         category: (row[1] as num).toInt(),
         postCount: (row[2] as num).toInt(),
         aliases: aliases,
+        translation: translation,
+        pinyinVariants: pinyin.toList(growable: false),
       ),
     );
   }
@@ -1102,7 +1212,12 @@ class PromptAssistedTextFieldState extends State<PromptAssistedTextField> {
                     visualDensity: const VisualDensity(vertical: -3),
                     title: Text(candidate.displayTag),
                     subtitle: Text(
-                      '${candidate.categoryLabel} · ${candidate.postCount}',
+                      [
+                        if (candidate.displayTranslation != null)
+                          candidate.displayTranslation!,
+                        candidate.categoryLabel,
+                        candidate.postCount.toString(),
+                      ].join(' · '),
                     ),
                   ),
                 ),

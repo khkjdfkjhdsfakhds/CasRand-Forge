@@ -39,9 +39,9 @@ class ApiService {
 
   Future<ApiResponse> fetchData(ApiRequest request) async {
     final url = Uri.parse(request.endpoint);
+    final routeKey = _routeKey(request.proxy, request.headers);
     final client = _clientForRoute(request.proxy, request.headers);
-    final sessionKey =
-        '${url.origin}\u0000${_routeKey(request.proxy, request.headers)}';
+    final sessionKey = '${url.origin}\u0000$routeKey';
     final usesImageCache = NovelAiImageCache.supports(url);
     var prepared = usesImageCache
         ? await _imageCache.prepare(request.payload, sessionKey)
@@ -56,9 +56,24 @@ class ApiService {
         response = await _post(client, url, request.headers, prepared.payload);
       }
     } on TimeoutException {
+      _discardClient(routeKey, client);
       throw const NovelAiApiException(
         'NovelAI did not respond before the request timed out. '
-        'Please retry later.',
+        'The next automatic attempt will use a fresh connection.',
+        isTransient: true,
+      );
+    } on http.ClientException {
+      _discardClient(routeKey, client);
+      throw const NovelAiApiException(
+        'NovelAI connection closed before a complete response was received. '
+        'The next automatic attempt will use a fresh connection.',
+        isTransient: true,
+      );
+    } on SocketException {
+      _discardClient(routeKey, client);
+      throw const NovelAiApiException(
+        'NovelAI connection closed before a complete response was received. '
+        'The next automatic attempt will use a fresh connection.',
         isTransient: true,
       );
     }
@@ -185,6 +200,12 @@ class ApiService {
         .map((entry) => entry.value.trim())
         .firstOrNull;
     return '$key\u0000${authorization ?? ''}';
+  }
+
+  void _discardClient(String routeKey, http.Client failedClient) {
+    if (!identical(_clients[routeKey], failedClient)) return;
+    _clients.remove(routeKey);
+    failedClient.close();
   }
 
   http.Client _createHttpClient(String proxy) {

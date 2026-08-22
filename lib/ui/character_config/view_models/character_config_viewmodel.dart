@@ -32,6 +32,10 @@ class CharacterConfigViewmodel extends ChangeNotifier {
   }
 
   String getPositionsTexts() {
+    final Point<double>? free = config.freeCenter;
+    if (free != null) {
+      return 'x:${free.x.toStringAsFixed(3)}, y:${free.y.toStringAsFixed(3)}';
+    }
     const Map<int, String> xMapping = {
       1: 'A',
       2: 'B',

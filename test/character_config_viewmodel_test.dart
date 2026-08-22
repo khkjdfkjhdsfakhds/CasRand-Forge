@@ -47,5 +47,18 @@ void main() {
       expect(vm.firstGenerationSize,
           const GenerationSize(height: 1216, width: 832));
     });
+
+    test('getPositionsTexts shows continuous x/y for a V5 free center', () {
+      final vm = CharacterConfigViewmodel(
+        config: CharacterConfig.fromEmpty(),
+        paramConfig: ParamConfig(
+          model: 'nai-diffusion-5-full',
+          autoPosition: false,
+        ),
+      );
+      vm.setFreeCenter(const Point<double>(0.244, 0.541));
+
+      expect(vm.getPositionsTexts(), 'x:0.244, y:0.541');
+    });
   });
 }

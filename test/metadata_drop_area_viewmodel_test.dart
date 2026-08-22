@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'dart:convert';
 
 import 'package:easy_localization/easy_localization.dart';
@@ -135,5 +136,54 @@ void main() {
     expect(parameters['deliberate_euler_ancestral_bug'], isFalse);
     expect(parameters['prefer_brownian'], isTrue);
     expect(parameters['v4_prompt']['use_coords'], isTrue);
+  });
+
+  test('V5 metadata import preserves the continuous free-center coordinate',
+      () {
+    final metadata = {
+      'seed': 2416261015,
+      'width': 832,
+      'height': 1216,
+      'model_name': 'NovelAI Diffusion V5',
+      'v4_prompt': {
+        'caption': {
+          'base_caption': '1girl, best quality',
+          'char_captions': [
+            {
+              'char_caption': 'girl, misaka_mikoto,',
+              'centers': [
+                {'x': 0.244, 'y': 0.541},
+              ],
+            },
+          ],
+        },
+        'use_coords': true,
+        'use_order': true,
+      },
+      'v4_negative_prompt': {
+        'caption': {
+          'base_caption': 'blur, lowres',
+          'char_captions': [
+            {
+              'char_caption': '',
+              'centers': [
+                {'x': 0.244, 'y': 0.541},
+              ],
+            },
+          ],
+        },
+        'use_coords': false,
+      },
+    };
+
+    final payloadConfig = GetIt.I<PayloadConfig>();
+    payloadConfig.importMetadataToFixedProfile(metadata);
+    final characters = payloadConfig.characterConfigList;
+
+    expect(characters, hasLength(1));
+    final character = characters.first;
+    expect(character.freeCenter, const Point<double>(0.244, 0.541));
+    expect(character.positions, isEmpty);
+    expect(character.positivePromptConfig.strs.first, 'girl, misaka_mikoto,');
   });
 }

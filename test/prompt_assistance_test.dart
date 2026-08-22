@@ -35,6 +35,16 @@ void main() {
     );
     expect(index.search('high_res').first.tag, 'highres');
     expect(index.search('original_character').first.tag, 'original');
+    expect(index.search('蓝发').first.tag, 'blue_hair');
+    final pinyinMatches = index.search('/jl');
+    expect(pinyinMatches.map((candidate) => candidate.tag),
+        contains(contains('jingliu')));
+    expect(
+      pinyinMatches
+          .firstWhere((candidate) => candidate.tag.contains('jingliu'))
+          .displayTranslation,
+      '镜流',
+    );
 
     final stopwatch = Stopwatch()..start();
     expect(index.search('blue'), isNotEmpty);

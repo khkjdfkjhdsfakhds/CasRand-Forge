@@ -38,6 +38,12 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+The optional Chinese labels and pinyin lookup data were adapted from the
+MIT-licensed Novelai Prompt Helper Enhanced project at:
+https://github.com/cheerotter13-ai/novelai-prompt-helper-enhanced
+They are bundled as convenience search metadata; the canonical tag inserted
+into a prompt remains the Danbooru tag.
 ''';
 
 /// Registers the bundled index notice for Flutter's About license page.

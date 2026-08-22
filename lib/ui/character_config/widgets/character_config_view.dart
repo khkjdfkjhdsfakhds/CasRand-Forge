@@ -103,31 +103,14 @@ class CharacterConfigView extends StatelessWidget {
   }
 
   void _showEditPositionDialog(BuildContext context) {
-    final Widget content;
-    if (viewmodel.isV5 && !viewmodel.autoPosition) {
-      content = CharacterFreePositionCanvas(
+    showDialog(
+      context: context,
+      builder: (context) => _EditPositionDialog(
         viewmodel: viewmodel,
         characterIndex: characterIndex,
         referencePositions: referencePositions,
-      );
-    } else {
-      content = CharacterPositionView(viewmodel: viewmodel);
-    }
-    showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-              title: Text(
-                  '${tr('edit')}${tr('colon')}${tr('character_position')}'),
-              content: SizedBox(
-                width: 460,
-                child: content,
-              ),
-              actions: [
-                TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: Text(tr('confirm')))
-              ],
-            ));
+      ),
+    );
   }
 
   void _showGenderDialog(BuildContext context) {
@@ -192,6 +175,117 @@ class CharacterConfigView extends StatelessWidget {
         CharacterConfig.genderOther => Icons.radio_button_unchecked,
         _ => Icons.transgender,
       };
+}
+
+class _EditPositionDialog extends StatefulWidget {
+  final CharacterConfigViewmodel viewmodel;
+  final int characterIndex;
+  final List<Point<double>?>? referencePositions;
+
+  const _EditPositionDialog({
+    required this.viewmodel,
+    this.characterIndex = 0,
+    this.referencePositions,
+  });
+
+  @override
+  State<_EditPositionDialog> createState() => _EditPositionDialogState();
+}
+
+class _EditPositionDialogState extends State<_EditPositionDialog> {
+  late final TextEditingController _x;
+  late final TextEditingController _y;
+  late final bool _free;
+
+  String _fmt(double v) => v.toStringAsFixed(3);
+
+  @override
+  void initState() {
+    super.initState();
+    _free = widget.viewmodel.isV5 && !widget.viewmodel.autoPosition;
+    final Point<double>? c = _free ? widget.viewmodel.config.freeCenter : null;
+    final Point<double> start = c ?? const Point<double>(0.5, 0.5);
+    _x = TextEditingController(text: _fmt(start.x));
+    _y = TextEditingController(text: _fmt(start.y));
+  }
+
+  @override
+  void dispose() {
+    _x.dispose();
+    _y.dispose();
+    super.dispose();
+  }
+
+  void _applyFromFields() {
+    final double? x = double.tryParse(_x.text);
+    final double? y = double.tryParse(_y.text);
+    if (x == null || y == null) return;
+    widget.viewmodel.setFreeCenter(
+      Point<double>(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final vm = widget.viewmodel;
+    return AlertDialog(
+      title: Text(
+        '${tr('edit')}${tr('colon')}${tr('character_position')}',
+      ),
+      content: SizedBox(
+        width: 460,
+        child: _free
+            ? CharacterFreePositionCanvas(
+                viewmodel: vm,
+                characterIndex: widget.characterIndex,
+                referencePositions: widget.referencePositions,
+                xController: _x,
+                yController: _y,
+              )
+            : CharacterPositionView(viewmodel: vm),
+      ),
+      actions: [
+        if (_free) ...[
+          SizedBox(
+            width: 104,
+            child: TextField(
+              key: const Key('free-x-input'),
+              controller: _x,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'X',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              onChanged: (_) => _applyFromFields(),
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 104,
+            child: TextField(
+              key: const Key('free-y-input'),
+              controller: _y,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'Y',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              onChanged: (_) => _applyFromFields(),
+            ),
+          ),
+          const SizedBox(width: 8),
+        ],
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(tr('confirm')),
+        ),
+      ],
+    );
+  }
 }
 
 class CharacterPositionView extends StatelessWidget {

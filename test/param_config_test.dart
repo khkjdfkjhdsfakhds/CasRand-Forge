@@ -193,4 +193,68 @@ void main() {
       'nai-diffusion-4-5-curated',
     );
   });
+
+  test('V5 payload uses tag-hint / straight-alpha instead of legacy flags', () {
+    final config = ParamConfig(
+      model: 'nai-diffusion-5-full',
+      randomSeed: false,
+      seed: 7,
+    );
+
+    final payload = config.getPayload();
+
+    expect(payload['ucPreset'], isNull);
+    expect(payload['qualityToggle'], isNull);
+    expect(payload['tag_hint_qt'], 0);
+    expect(payload['tag_hint_uc_preset'], 0);
+    expect(payload['straight_alpha'], isTrue);
+  });
+
+  test('legacy models keep ucPreset and qualityToggle in the payload', () {
+    final config = ParamConfig(
+      model: 'nai-diffusion-4-5-full',
+      randomSeed: false,
+      seed: 7,
+    );
+
+    final payload = config.getPayload();
+
+    expect(payload['ucPreset'], 2);
+    expect(payload['qualityToggle'], isFalse);
+    expect(payload.containsKey('tag_hint_qt'), isFalse);
+    expect(payload.containsKey('straight_alpha'), isFalse);
+  });
+
+  test('imported V5 tag-hint fields override the official defaults', () {
+    final config = ParamConfig(model: 'nai-diffusion-5-full');
+    config.loadJson({
+      'straight_alpha': false,
+      'tag_hint_qt': 3,
+      'tag_hint_uc_preset': 1,
+    });
+
+    final payload = config.getPayload();
+
+    expect(payload['straight_alpha'], isFalse);
+    expect(payload['tag_hint_qt'], 3);
+    expect(payload['tag_hint_uc_preset'], 1);
+  });
+
+  test('V5 tag-hint fields survive config save and restore', () {
+    final source = ParamConfig(
+      model: 'nai-diffusion-5-full',
+      straightAlpha: false,
+      tagHintQt: 2,
+      tagHintUcPreset: 1,
+    );
+
+    final restored = ParamConfig.fromJson(source.toJson());
+
+    expect(restored.straightAlpha, isFalse);
+    expect(restored.tagHintQt, 2);
+    expect(restored.tagHintUcPreset, 1);
+    expect(restored.getPayload()['straight_alpha'], isFalse);
+    expect(restored.getPayload()['tag_hint_qt'], 2);
+    expect(restored.getPayload()['tag_hint_uc_preset'], 1);
+  });
 }

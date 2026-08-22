@@ -461,6 +461,54 @@ void main() {
     service.close();
   });
 
+  test('transport disconnect is transient and discards the failed client',
+      () async {
+    var createdClients = 0;
+    final service = ApiService(
+      clientFactory: (_) {
+        createdClients++;
+        if (createdClients == 1) {
+          return MockClient((request) async {
+            throw http.ClientException(
+              'Connection closed before full header was received',
+              request.url,
+            );
+          });
+        }
+        return MockClient((_) async => http.Response.bytes([1, 2, 3], 200));
+      },
+    );
+    const request = ApiRequest(
+      endpoint: 'https://image.novelai.net/ai/generate-image',
+      proxy: '',
+      headers: {'authorization': 'Bearer account-a'},
+      payload: {'input': 'test'},
+    );
+
+    await expectLater(
+      service.fetchData(request),
+      throwsA(
+        isA<NovelAiApiException>()
+            .having((error) => error.isTransient, 'isTransient', isTrue)
+            .having(
+              (error) => error.toString(),
+              'message',
+              allOf(
+                contains('connection closed'),
+                contains('next automatic attempt'),
+              ),
+            ),
+      ),
+    );
+    expect(service.pooledClientCount, 0);
+
+    final response = await service.fetchData(request);
+    expect(response.status, '200');
+    expect(response.data, [1, 2, 3]);
+    expect(createdClients, 2);
+    service.close();
+  });
+
   test('successful response data passes through unchanged', () {
     final data = Uint8List.fromList([1, 2, 3]);
 

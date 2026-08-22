@@ -40,7 +40,7 @@ jobs:
         run: |
           test -d "$APP_PATH"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")" = "0.9.7"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Contents/Info.plist")" = "90"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Contents/Info.plist")" = "94"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Contents/Info.plist")" = "io.github.khkjdfkjhdsfakhds.casrandforge.beta"
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
           MAIN_ARCHS="$(lipo -archs "$APP_PATH/Contents/MacOS/NAI CasRand Forge")"

@@ -567,6 +567,13 @@ class PayloadConfig {
     }
     positives ??= json['characterPrompts'] as List<dynamic>?;
     if (positives == null) return null;
+    // V5 free-positioning metadata stores the character as a continuous
+    // normalized point; preserve it as freeCenter instead of quantizing to a
+    // legacy grid cell so the point lands back on the free canvas. V4 also
+    // carries use_coords:true but with quantized grid centers, so it must keep
+    // using the legacy grid position.
+    final v5 = _isV5Metadata(json);
+    final useCoords = v5 && v4Prompt is Map && v4Prompt['use_coords'] == true;
     final result = <CharacterConfig>[];
     for (final (index, raw) in positives.indexed) {
       if (raw is! Map) continue;
@@ -586,7 +593,8 @@ class PayloadConfig {
               : raw['center'];
       result.add(
         CharacterConfig(
-          positions: [_positionFromMetadata(centerRaw)],
+          positions: useCoords ? [] : [_positionFromMetadata(centerRaw)],
+          freeCenter: useCoords ? _freeCenterFromMetadata(centerRaw) : null,
           positivePromptConfig: fixedPromptConfig(positive.toString()),
           negativePromptConfig: fixedPromptConfig(
             negative.toString(),
@@ -617,6 +625,24 @@ class PayloadConfig {
     }
 
     return Point<int>(nearest(raw['x']), nearest(raw['y']));
+  }
+
+  static bool _isV5Metadata(Map<String, dynamic> json) {
+    final name = json['model_name'];
+    if (name is String && name.contains('V5')) return true;
+    if (json['model_hash'] == '0ADF9AB7') return true;
+    return false;
+  }
+
+  static Point<double>? _freeCenterFromMetadata(dynamic raw) {
+    if (raw is! Map) return null;
+    final x = raw['x'];
+    final y = raw['y'];
+    if (x is! num || y is! num) return null;
+    return Point<double>(
+      x.toDouble().clamp(0.0, 1.0),
+      y.toDouble().clamp(0.0, 1.0),
+    );
   }
 
   static PromptConfig _negativePromptConfigFromLegacy(String value) {

@@ -353,6 +353,35 @@ void main() {
     expect(config.randomProfile.paramConfig.negativePrompt, 'legacy');
   });
 
+  test('V5 metadata tag-hint fields are carried through to the payload', () {
+    final config = PayloadConfig.fromJson(legacyConfigJson('legacy'));
+
+    config.importMetadataToFixedProfile({
+      'model_name': 'NovelAI Diffusion V5',
+      'model_hash': '0ADF9AB7',
+      'width': 832,
+      'height': 1216,
+      'steps': 28,
+      'scale': 5.0,
+      'seed': 2785842008,
+      'sampler': 'k_euler_ancestral',
+      'noise_schedule': 'karras',
+      'straight_alpha': true,
+      'tag_hint_qt': 0,
+      'tag_hint_uc_preset': 0,
+      'prefer_brownian': true,
+    });
+
+    final payload = config.fixedProfile.paramConfig.getPayload();
+
+    expect(payload['straight_alpha'], isTrue);
+    expect(payload['tag_hint_qt'], 0);
+    expect(payload['tag_hint_uc_preset'], 0);
+    expect(payload['prefer_brownian'], isTrue);
+    expect(payload['ucPreset'], isNull);
+    expect(payload['qualityToggle'], isNull);
+  });
+
   test('metadata use_coords is inverted into AI choice state', () {
     final config = PayloadConfig.fromJson(legacyConfigJson('legacy'));
 

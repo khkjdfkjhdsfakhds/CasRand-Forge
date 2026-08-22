@@ -23,6 +23,10 @@ class ParamConfig {
   bool? deliberateEulerAncestralBug;
   bool? preferBrownian;
 
+  bool? straightAlpha;
+  int? tagHintQt;
+  int? tagHintUcPreset;
+
   bool randomSeed;
   int? seed;
 
@@ -65,6 +69,9 @@ class ParamConfig {
     this.varietyPlus = false,
     this.deliberateEulerAncestralBug,
     this.preferBrownian,
+    this.straightAlpha,
+    this.tagHintQt,
+    this.tagHintUcPreset,
     this.negativePrompt = defaultUC,
     this.autoPosition = true,
     this.legacyUc = false,
@@ -98,6 +105,9 @@ class ParamConfig {
       'variety_plus': varietyPlus,
       'deliberate_euler_ancestral_bug': deliberateEulerAncestralBug,
       'prefer_brownian': preferBrownian,
+      'straight_alpha': straightAlpha,
+      'tag_hint_qt': tagHintQt,
+      'tag_hint_uc_preset': tagHintUcPreset,
       'auto_position': autoPosition,
       'legacy_uc': legacyUc,
     };
@@ -139,8 +149,8 @@ class ParamConfig {
       "sampler": sampler,
       "steps": steps,
       "n_samples": nSamples,
-      "ucPreset": 2,
-      "qualityToggle": false,
+      "ucPreset": ucPreset,
+      "qualityToggle": qualityToggle,
       'sm': sm,
       'sm_dyn': smDyn,
       "dynamic_thresholding": dynamicThresholding,
@@ -171,6 +181,16 @@ class ParamConfig {
       if (model.contains('diffusion-4') && noiseSchedule.contains('native')) {
         payload['noise_schedule'] = 'karras';
       }
+    }
+    if (model.contains('diffusion-5')) {
+      // V5 uses the newer tag-hint / straight-alpha fields. The web frontend
+      // dropped the legacy ucPreset / qualityToggle pair, so for V5 we send
+      // these instead, defaulting to the official frontend values.
+      payload.remove('ucPreset');
+      payload.remove('qualityToggle');
+      payload['tag_hint_qt'] = tagHintQt ?? 0;
+      payload['tag_hint_uc_preset'] = tagHintUcPreset ?? 0;
+      payload['straight_alpha'] = straightAlpha ?? true;
     }
     return payload;
   }
@@ -211,6 +231,9 @@ class ParamConfig {
       deliberateEulerAncestralBug:
           json['deliberate_euler_ancestral_bug'] as bool?,
       preferBrownian: json['prefer_brownian'] as bool?,
+      straightAlpha: json['straight_alpha'] as bool?,
+      tagHintQt: (json['tag_hint_qt'] as num?)?.toInt(),
+      tagHintUcPreset: (json['tag_hint_uc_preset'] as num?)?.toInt(),
     );
   }
 
@@ -326,6 +349,18 @@ class ParamConfig {
     }
     if (json.containsKey('prefer_brownian')) {
       preferBrownian = json['prefer_brownian'] as bool?;
+      loadCount++;
+    }
+    if (json.containsKey('straight_alpha')) {
+      straightAlpha = json['straight_alpha'] as bool?;
+      loadCount++;
+    }
+    if (json.containsKey('tag_hint_qt')) {
+      tagHintQt = (json['tag_hint_qt'] as num?)?.toInt();
+      loadCount++;
+    }
+    if (json.containsKey('tag_hint_uc_preset')) {
+      tagHintUcPreset = (json['tag_hint_uc_preset'] as num?)?.toInt();
       loadCount++;
     }
     if (json.containsKey('negative_prompt')) {

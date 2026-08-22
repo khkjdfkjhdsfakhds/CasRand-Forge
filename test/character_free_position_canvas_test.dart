@@ -91,5 +91,32 @@ void main() {
       expect(find.text('2'), findsOneWidget);
       expect(find.text('3'), findsOneWidget);
     });
+    testWidgets('dragging keeps the X/Y input controllers in sync',
+        (tester) async {
+      final vm = _vm();
+      vm.setFreeCenter(const Point<double>(0.5, 0.5));
+      final x = TextEditingController(text: '0.500');
+      final y = TextEditingController(text: '0.500');
+      addTearDown(x.dispose);
+      addTearDown(y.dispose);
+
+      await tester.pumpWidget(_wrap(CharacterFreePositionCanvas(
+        viewmodel: vm,
+        xController: x,
+        yController: y,
+      )));
+
+      final rect =
+          tester.getRect(find.byKey(const Key('character-free-canvas')));
+      final gesture = await tester.startGesture(rect.topLeft);
+      await gesture
+          .moveTo(rect.topLeft + Offset(rect.width * 0.25, rect.height * 0.5));
+      await gesture.up();
+      await tester.pump();
+
+      expect(double.parse(x.text), closeTo(0.25, 0.02));
+      expect(double.parse(y.text), closeTo(0.5, 0.02));
+      expect(vm.config.freeCenter!.x, closeTo(0.25, 0.02));
+    });
   });
 }
