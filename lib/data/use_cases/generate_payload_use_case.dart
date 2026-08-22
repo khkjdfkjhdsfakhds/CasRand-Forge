@@ -12,24 +12,6 @@ import 'package:nai_casrand/data/models/vibe_config.dart';
 import 'package:nai_casrand/data/models/vibe_config_v4.dart';
 import 'package:nai_casrand/data/use_cases/prepare_i2i_request_use_case.dart';
 
-const Map<int, String> xMapping = {
-  0: 'X',
-  1: 'A',
-  2: 'B',
-  3: 'C',
-  4: 'D',
-  5: 'E',
-};
-
-const Map<int, double> doubleMapping = {
-  0: 0.0,
-  1: 0.1,
-  2: 0.3,
-  3: 0.5,
-  4: 0.7,
-  5: 0.9
-};
-
 class PromptCommentPair {
   String prompt;
   String comment;
@@ -136,12 +118,18 @@ class GeneratePayloadUseCase {
     final characterPrompts = [];
     final v4CharPosCaptions = [];
     final v4CharNegCaptions = [];
+    final anyFreePosition = characterPromptResultList.any(
+      (result) => result.isFreePosition,
+    );
     for (final (index, result) in characterPromptResultList.indexed) {
-      final posAsString = '${xMapping[result.center.x]}${result.center.y}';
       final posAsDouble = {
-        'x': doubleMapping[result.center.x]!,
-        'y': doubleMapping[result.center.y]!,
+        'x': result.center.x,
+        'y': result.center.y,
       };
+      final posAsString = result.isFreePosition
+          ? 'x:${result.center.x.toStringAsFixed(3)}, '
+              'y:${result.center.y.toStringAsFixed(3)}'
+          : (result.gridLabel ?? 'X0');
       result.prompt = result.prompt.replaceVariables(pattern, savedConfigList);
       result.uc = result.uc.replaceVariables(pattern, savedConfigList);
       final characterPair = PromptCommentPair(
@@ -183,7 +171,7 @@ class GeneratePayloadUseCase {
         'base_caption': effectiveBasePrompt,
         'char_captions': v4CharPosCaptions,
       },
-      'use_coords': !paramConfig.autoPosition,
+      'use_coords': !paramConfig.autoPosition || anyFreePosition,
       'use_order': true,
     };
     final v4NegPrompt = {

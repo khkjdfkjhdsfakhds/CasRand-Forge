@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:nai_casrand/data/models/character_config.dart';
 import 'package:nai_casrand/ui/prompt_assistance/prompt_editing_assistance.dart';
 import 'package:nai_casrand/ui/character_config/view_models/character_config_viewmodel.dart';
+import 'package:nai_casrand/ui/character_config/widgets/character_free_position_canvas.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_config_view.dart';
 import 'package:nai_casrand/ui/prompt_config/view_models/prompt_config_viewmodel.dart';
 import 'package:provider/provider.dart';
@@ -13,12 +14,16 @@ class CharacterConfigView extends StatelessWidget {
   final CharacterConfigViewmodel viewmodel;
   final PromptEditingAssistance? promptAssistance;
   final bool autocompleteEnabled;
+  final int characterIndex;
+  final List<Point<double>?>? referencePositions;
 
   const CharacterConfigView({
     super.key,
     required this.viewmodel,
     this.promptAssistance,
     this.autocompleteEnabled = true,
+    this.characterIndex = 0,
+    this.referencePositions,
   });
 
   @override
@@ -98,12 +103,25 @@ class CharacterConfigView extends StatelessWidget {
   }
 
   void _showEditPositionDialog(BuildContext context) {
+    final Widget content;
+    if (viewmodel.isV5 && !viewmodel.autoPosition) {
+      content = CharacterFreePositionCanvas(
+        viewmodel: viewmodel,
+        characterIndex: characterIndex,
+        referencePositions: referencePositions,
+      );
+    } else {
+      content = CharacterPositionView(viewmodel: viewmodel);
+    }
     showDialog(
         context: context,
         builder: (context) => AlertDialog(
               title: Text(
                   '${tr('edit')}${tr('colon')}${tr('character_position')}'),
-              content: CharacterPositionView(viewmodel: viewmodel),
+              content: SizedBox(
+                width: 460,
+                child: content,
+              ),
               actions: [
                 TextButton(
                     onPressed: () => Navigator.of(context).pop(),

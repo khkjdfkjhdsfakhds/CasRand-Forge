@@ -65,6 +65,10 @@ class PromptTabView extends StatelessWidget {
                           paramConfig: viewmodel.paramConfig,
                           onAutoPositionChanged: viewmodel.setAutoPosition,
                         ),
+                        characterIndex: index,
+                        referencePositions: viewmodel.characterConfigList
+                            .map((c) => c.freeCenter)
+                            .toList(),
                         promptAssistance:
                             promptAssistance ?? PromptEditingAssistance.shared,
                         autocompleteEnabled:
@@ -224,6 +228,10 @@ class _FixedPromptEditor extends StatelessWidget {
                 paramConfig: viewmodel.paramConfig,
                 onAutoPositionChanged: viewmodel.setAutoPosition,
               ),
+              characterIndex: index,
+              referencePositions: viewmodel.characterConfigList
+                  .map((c) => c.freeCenter)
+                  .toList(),
               promptAssistance:
                   promptAssistance ?? PromptEditingAssistance.shared,
               autocompleteEnabled: viewmodel.promptAutocompleteEnabled,

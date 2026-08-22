@@ -221,4 +221,48 @@ void main() {
     expect(restored.negativePromptConfig.getPrmpts().toPrompt(), 'one');
     expect(restored.negativePromptConfig.getPrmpts().toPrompt(), 'two');
   });
+
+  group('V5 free-position continuous coordinates', () {
+    test('freeCenter is exposed and persisted through toJson/fromJson', () {
+      final config = CharacterConfig.fromEmpty()
+        ..freeCenter = const Point<double>(0.244, 0.541);
+
+      final json = config.toJson();
+      expect(json['freeCenter'], {'x': 0.244, 'y': 0.541});
+
+      final restored = CharacterConfig.fromJson(json);
+      expect(restored.freeCenter, const Point<double>(0.244, 0.541));
+      expect(restored.positions, isNotEmpty); // legacy grid untouched
+    });
+
+    test('getPrompt uses freeCenter pixel-free normalized coords', () {
+      final config = CharacterConfig.fromEmpty()
+        ..freeCenter = const Point<double>(0.244, 0.541);
+
+      final result = config.getPrompt();
+      expect(result.center, const Point<double>(0.244, 0.541));
+      expect(result.isFreePosition, isTrue);
+    });
+
+    test('legacy positions still resolve to normalized grid center', () {
+      final config = CharacterConfig.fromEmpty()
+        ..positions = [const Point<int>(5, 5)]
+        ..freeCenter = null;
+
+      final result = config.getPrompt();
+      // doubleMapping[5] == 0.9
+      expect(result.center, const Point<double>(0.9, 0.9));
+      expect(result.isFreePosition, isFalse);
+    });
+
+    test('without freeCenter uses first grid position', () {
+      final config = CharacterConfig.fromEmpty()
+        ..positions = [const Point<int>(3, 3)]
+        ..freeCenter = null;
+
+      final result = config.getPrompt();
+      expect(result.center, const Point<double>(0.5, 0.5));
+      expect(result.isFreePosition, isFalse);
+    });
+  });
 }

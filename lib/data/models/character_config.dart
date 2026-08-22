@@ -3,14 +3,25 @@ import 'dart:math';
 import 'package:nai_casrand/data/models/prompt_config.dart';
 
 class CharacterPromptResult {
-  Point<int> center;
+  /// Normalized (0..1) center position, either from a V5 free-point drag or
+  /// derived from the legacy discrete grid. This is the value written into
+  /// `v4_prompt.caption.char_captions[].centers[]`.
+  Point<double> center;
   NestedPrompt prompt;
   NestedPrompt uc;
+
+  /// True when [center] came from a V5 free-position (custom canvas) point.
+  bool isFreePosition;
+
+  /// Legacy grid label such as `C3`, only set when [isFreePosition] is false.
+  String? gridLabel;
 
   CharacterPromptResult({
     required this.center,
     required this.prompt,
     required this.uc,
+    this.isFreePosition = false,
+    this.gridLabel,
   });
 }
 
@@ -21,7 +32,13 @@ class CharacterConfig {
   static const String genderMale = 'male';
   static const String genderOther = 'other';
 
+  /// Normalized grid positions (legacy V4.5). Kept for backward compatibility.
   List<Point<int>> positions;
+
+  /// V5 free-position center in normalized (0..1) coordinates. When set it
+  /// overrides [positions] completely for the generated payload.
+  Point<double>? freeCenter;
+
   PromptConfig positivePromptConfig;
   PromptConfig negativePromptConfig;
   String gender;
@@ -29,25 +46,55 @@ class CharacterConfig {
 
   CharacterConfig({
     required this.positions,
+    this.freeCenter,
     required this.positivePromptConfig,
     required this.negativePromptConfig,
     required this.gender,
     required this.enabled,
   });
 
+  static String _gridLabel(Point<int> p) {
+    const labels = {1: 'A', 2: 'B', 3: 'C', 4: 'D', 5: 'E'};
+    return '${labels[p.x] ?? ''}${p.y}';
+  }
+
+  static const Map<int, double> gridToNormalized = {
+    0: 0.0,
+    1: 0.1,
+    2: 0.3,
+    3: 0.5,
+    4: 0.7,
+    5: 0.9,
+  };
+
   CharacterPromptResult getPrompt() {
     final random = Random();
     final promptResult = positivePromptConfig.getPrmpts();
+    final Point<double> center;
+    final bool isFreePosition;
     final Point<int> positionAsInt;
-    if (positions.isNotEmpty) {
-      positionAsInt = positions[random.nextInt(positions.length)];
-    } else {
+    if (freeCenter != null) {
+      center = freeCenter!;
+      isFreePosition = true;
       positionAsInt = defaultPosition;
+    } else {
+      if (positions.isNotEmpty) {
+        positionAsInt = positions[random.nextInt(positions.length)];
+      } else {
+        positionAsInt = defaultPosition;
+      }
+      center = Point<double>(
+        gridToNormalized[positionAsInt.x] ?? 0.5,
+        gridToNormalized[positionAsInt.y] ?? 0.5,
+      );
+      isFreePosition = false;
     }
     return CharacterPromptResult(
-      center: positionAsInt,
+      center: center,
       prompt: promptResult,
       uc: negativePromptConfig.getPrmpts(),
+      isFreePosition: isFreePosition,
+      gridLabel: isFreePosition ? null : _gridLabel(positionAsInt),
     );
   }
 
@@ -100,7 +147,16 @@ class CharacterConfig {
       negativePromptConfig: negativePromptConfig,
       gender: gender,
       enabled: json['enabled'] ?? true,
+      freeCenter: _freeCenterFromJson(json['freeCenter']),
     );
+  }
+
+  static Point<double>? _freeCenterFromJson(dynamic raw) {
+    if (raw is! Map) return null;
+    final x = raw['x'];
+    final y = raw['y'];
+    if (x is! num || y is! num) return null;
+    return Point<double>(x.toDouble(), y.toDouble());
   }
 
   void setGender(String value) {
@@ -216,6 +272,8 @@ class CharacterConfig {
           'y': point.y,
         };
       }).toList(),
+      'freeCenter':
+          freeCenter == null ? null : {'x': freeCenter!.x, 'y': freeCenter!.y},
       'positivePromptConfig': positivePromptConfig.toJson(),
       'negativePromptConfig': negativePromptConfig.toJson(),
       'gender': gender,

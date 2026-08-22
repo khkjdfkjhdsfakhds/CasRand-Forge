@@ -772,4 +772,62 @@ void main() {
     final result = GeneratePayloadUseCase(payloadConfig: config)();
     expect(result.suggestedFileName, 'artist:anmi-school uniform-smile');
   });
+
+  test(
+      'V5 free-position character writes continuous coords and forces use_coords',
+      () {
+    final config = PayloadConfig(
+      rootPromptConfig: PromptConfig(
+        shuffled: false,
+        strs: ['scene'],
+        prompts: [],
+      ),
+      negativePromptConfig: PromptConfig(
+        shuffled: false,
+        strs: ['negative'],
+        prompts: [],
+      ),
+      characterConfigList: [
+        CharacterConfig(
+          positions: const [],
+          freeCenter: const Point<double>(0.244, 0.541),
+          positivePromptConfig: PromptConfig(
+            shuffled: false,
+            strs: ['girl, misaka_mikoto'],
+            prompts: [],
+          ),
+          negativePromptConfig: PromptConfig(
+            shuffled: false,
+            strs: ['bad anatomy'],
+            prompts: [],
+          ),
+          gender: CharacterConfig.genderUnset,
+          enabled: true,
+        ),
+      ],
+      savedPromptConfigList: [],
+      paramConfig: ParamConfig(),
+      settings: Settings.fromJson({}),
+      overridePrompt: '',
+      useOverridePrompt: false,
+      useCharacterPromptWithOverride: false,
+    );
+
+    final result = GeneratePayloadUseCase(payloadConfig: config)();
+    final parameters = result.payload['parameters'] as Map<String, dynamic>;
+
+    final caption = (parameters['v4_prompt'] as Map)['caption'] as Map;
+    final centers =
+        ((caption['char_captions'] as List).single as Map)['centers'] as List;
+    expect(centers.single, {'x': 0.244, 'y': 0.541});
+
+    final charPrompts = parameters['characterPrompts'] as List;
+    expect(
+      (charPrompts.single as Map)['center'],
+      {'x': 0.244, 'y': 0.541},
+    );
+
+    expect(parameters['v4_prompt']['use_coords'], isTrue);
+    expect(result.comment, contains('Character 1 at x:0.244, y:0.541'));
+  });
 }

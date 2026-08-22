@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:nai_casrand/data/models/character_config.dart';
+import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 
 class CharacterConfigViewmodel extends ChangeNotifier {
@@ -16,6 +17,19 @@ class CharacterConfigViewmodel extends ChangeNotifier {
   });
 
   bool get autoPosition => paramConfig.autoPosition;
+
+  /// True when the selected model is NovelAI Diffusion V5, which uses a free
+  /// (continuous) character-position canvas rather than the legacy grid.
+  bool get isV5 => paramConfig.model.contains('diffusion-5');
+
+  /// The first configured generation size, used to shape the free-position
+  /// canvas. Falls back to the V5 default portrait size when empty.
+  GenerationSize get firstGenerationSize {
+    if (paramConfig.sizes.isNotEmpty) {
+      return paramConfig.sizes.first;
+    }
+    return const GenerationSize(height: 1216, width: 832);
+  }
 
   String getPositionsTexts() {
     const Map<int, String> xMapping = {
@@ -43,7 +57,19 @@ class CharacterConfigViewmodel extends ChangeNotifier {
 
   void switchPosition(Point<int> pt) {
     if (autoPosition || config.positions.contains(pt)) return;
+    // Switching to a manual grid position clears the V5 free center so the
+    // two position systems never conflict.
+    config.freeCenter = null;
     config.positions = [pt];
+    notifyListeners();
+  }
+
+  /// Sets the V5 free position in normalized (0..1) coordinates. Selecting a
+  /// free point clears the legacy grid positions.
+  void setFreeCenter(Point<double> center) {
+    if (autoPosition) return;
+    config.freeCenter = center;
+    config.positions = [];
     notifyListeners();
   }
 
@@ -53,7 +79,7 @@ class CharacterConfigViewmodel extends ChangeNotifier {
       onAutoPositionChanged!(value);
     } else {
       paramConfig.autoPosition = value;
-      if (!value && config.positions.isEmpty) {
+      if (!value && config.positions.isEmpty && config.freeCenter == null) {
         config.positions = [CharacterConfig.defaultPosition];
       }
     }
