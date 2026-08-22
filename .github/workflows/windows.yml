@@ -11,7 +11,7 @@ jobs:
     # super_native_extensions 0.8.x still uses the VS 2022 coroutine headers.
     runs-on: windows-2022
     env:
-      ASSET_NAME: NAI-CasRand-Forge-v0.9.7-Windows-x64.zip
+      ASSET_NAME: NAI-CasRand-Forge-v0.9.8-Windows-x64.zip
 
     steps:
       - name: Check out source
@@ -54,10 +54,10 @@ jobs:
             throw "NAICasRandForge.exe is missing from the release directory"
           }
           $version = (Get-Item $exePath).VersionInfo
-          if ($version.FileVersion -ne "0.9.7+94") {
+          if ($version.FileVersion -ne "0.9.8+95") {
             throw "Unexpected Windows file version: $($version.FileVersion)"
           }
-          if ($version.ProductVersion -ne "0.9.7+94") {
+          if ($version.ProductVersion -ne "0.9.8+95") {
             throw "Unexpected Windows product version: $($version.ProductVersion)"
           }
           tar.exe -t -f "$env:ASSET_NAME" | Out-Null
