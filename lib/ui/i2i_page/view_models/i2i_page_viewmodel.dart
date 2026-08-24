@@ -58,11 +58,6 @@ class I2iPageViewmodel extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setUseRandomSeed(bool value) {
-    config.setUseRandomSeed(value);
-    notifyListeners();
-  }
-
   void setAddOriginalImage(bool value) {
     config.setAddOriginalImage(value);
     notifyListeners();

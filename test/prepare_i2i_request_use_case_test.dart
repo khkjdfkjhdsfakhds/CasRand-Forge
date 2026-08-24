@@ -73,9 +73,9 @@ Uint8List maskPngWithWhiteRects(
 void main() {
   setUp(PrepareI2iRequestUseCase.clearCache);
 
-  test('img2img plan preserves source bytes while requesting the target size',
-      () async {
+  test('img2img plan normalizes source pixels to the target size', () async {
     final original = solidPng(500, 300, 200, 30, 30);
+    final originalSnapshot = Uint8List.fromList(original);
     final config = I2IConfig()..setImage(original);
     final plan = await PrepareI2iRequestUseCase(config: config)(
       targetWidth: 832,
@@ -86,21 +86,30 @@ void main() {
     expect(plan.width, 832);
     expect(plan.height, 1216);
     expect(plan.composite, isNull);
-    expect(base64Decode(plan.imageB64), original);
+    final requestImage = img.decodePng(base64Decode(plan.imageB64));
+    expect(requestImage, isNotNull);
+    expect(requestImage!.width, 832);
+    expect(requestImage.height, 1216);
+    expect(original, originalSnapshot);
+    expect(identical(config.imageBytes, original), isTrue);
   });
 
-  test('img2img plan sends original bytes when size already matches', () async {
+  test('img2img plan emits PNG when size already matches', () async {
     final original = solidPng(832, 1216, 10, 200, 10);
     final config = I2IConfig()..setImage(original);
     final plan = await PrepareI2iRequestUseCase(config: config)(
       targetWidth: 832,
       targetHeight: 1216,
     );
-    expect(base64Decode(plan!.imageB64), original);
+    final requestBytes = base64Decode(plan!.imageB64);
+    final requestImage = img.decodePng(requestBytes);
+    expect(requestImage, isNotNull);
+    expect(requestImage!.width, 832);
+    expect(requestImage.height, 1216);
+    expect(requestBytes, isNot(same(original)));
   });
 
-  test('img2img plan preserves JPEG bytes instead of inflating them to PNG',
-      () async {
+  test('img2img plan converts an opaque JPEG into target-size PNG', () async {
     final source = img.Image(width: 832, height: 1216, numChannels: 3);
     img.fill(source, color: img.ColorRgb8(10, 200, 10));
     final original = Uint8List.fromList(img.encodeJpg(source, quality: 92));
@@ -111,7 +120,83 @@ void main() {
       targetHeight: 1216,
     );
 
-    expect(base64Decode(plan!.imageB64), original);
+    final requestBytes = base64Decode(plan!.imageB64);
+    final requestImage = img.decodePng(requestBytes);
+    expect(requestImage, isNotNull);
+    expect(requestImage!.width, 832);
+    expect(requestImage.height, 1216);
+    expect(requestBytes, isNot(original));
+    expect(config.imageBytes, original);
+  });
+
+  test('img2img plan bakes JPEG orientation before normalization', () async {
+    final source = img.Image(width: 40, height: 20, numChannels: 3);
+    img.fillRect(
+      source,
+      x1: 0,
+      y1: 0,
+      x2: 19,
+      y2: 19,
+      color: img.ColorRgb8(240, 20, 20),
+    );
+    img.fillRect(
+      source,
+      x1: 20,
+      y1: 0,
+      x2: 39,
+      y2: 19,
+      color: img.ColorRgb8(20, 20, 240),
+    );
+    source.exif.imageIfd.orientation = 6;
+    final original = Uint8List.fromList(img.encodeJpg(source, quality: 100));
+    final config = I2IConfig()..setImage(original);
+
+    final plan = await PrepareI2iRequestUseCase(config: config)(
+      targetWidth: 20,
+      targetHeight: 40,
+    );
+
+    final request = img.decodePng(base64Decode(plan!.imageB64))!;
+    final top = request.getPixel(10, 5);
+    final bottom = request.getPixel(10, 35);
+    expect(top.r, greaterThan(top.b));
+    expect(bottom.b, greaterThan(bottom.r));
+  });
+
+  test('img2img background mode flattens or preserves source alpha', () async {
+    final source = img.Image(width: 8, height: 8, numChannels: 4);
+    img.fillRect(
+      source,
+      x1: 2,
+      y1: 2,
+      x2: 5,
+      y2: 5,
+      color: img.ColorRgba8(240, 20, 20, 255),
+    );
+    final original = Uint8List.fromList(img.encodePng(source));
+    final config = I2IConfig()..setImage(original);
+
+    final opaque = await PrepareI2iRequestUseCase(config: config)(
+      targetWidth: 16,
+      targetHeight: 16,
+    );
+    final transparent = await PrepareI2iRequestUseCase(
+      config: config,
+      transparentBackground: true,
+    )(
+      targetWidth: 16,
+      targetHeight: 16,
+    );
+
+    final opaquePixel =
+        img.decodePng(base64Decode(opaque!.imageB64))!.getPixel(0, 0);
+    final transparentPixel =
+        img.decodePng(base64Decode(transparent!.imageB64))!.getPixel(0, 0);
+    expect(opaquePixel.a, 255);
+    expect(opaquePixel.r, greaterThan(240));
+    expect(transparentPixel.a, 0);
+    expect(transparent.imageB64, isNot(opaque.imageB64));
+    expect(config.imageBytes, original);
   });
 
   test('img2img preparation discards stale bytes when the image changes',
@@ -125,9 +210,10 @@ void main() {
     config.setImage(second);
 
     final plan = await pending;
-    expect(base64Decode(plan!.imageB64), second);
+    final prepared = img.decodePng(base64Decode(plan!.imageB64))!;
+    expect(prepared.getPixel(0, 0).g, greaterThan(prepared.getPixel(0, 0).r));
     final cached = await useCase(targetWidth: 832, targetHeight: 1216);
-    expect(base64Decode(cached!.imageB64), second);
+    expect(cached!.imageB64, plan.imageB64);
   });
 
   test('img2img batch preparation cannot cache stale image bytes', () async {
@@ -140,10 +226,34 @@ void main() {
     config.setImage(second);
 
     final batch = await pending;
-    expect(base64Decode(batch!.plans.single.imageB64), second);
+    final prepared = img.decodePng(base64Decode(batch!.plans.single.imageB64))!;
+    expect(prepared.getPixel(0, 0).g, greaterThan(prepared.getPixel(0, 0).r));
     final cached =
         await useCase.planBatch(targetWidth: 832, targetHeight: 1216);
-    expect(base64Decode(cached!.plans.single.imageB64), second);
+    expect(cached!.plans.single.imageB64, batch.plans.single.imageB64);
+  });
+
+  test('plain img2img reuses normalized pixels for light parameter changes',
+      () async {
+    final config = I2IConfig()..setImage(quadrantPng(500, 300));
+    final useCase = PrepareI2iRequestUseCase(config: config);
+    final first = await useCase(targetWidth: 832, targetHeight: 1216);
+    final planRevision = config.planRevision;
+
+    config.setStrength(0.42);
+    config.setNoise(0.31);
+    final retuned = await useCase(targetWidth: 832, targetHeight: 1216);
+
+    expect(config.planRevision, planRevision);
+    expect(retuned!.imageB64, first!.imageB64);
+    expect(retuned.strength, 0.42);
+    expect(retuned.noise, 0.31);
+
+    final resized = await useCase(targetWidth: 1216, targetHeight: 832);
+    expect(resized!.imageB64, isNot(first.imageB64));
+    final resizedImage = img.decodePng(base64Decode(resized.imageB64))!;
+    expect(resizedImage.width, 1216);
+    expect(resizedImage.height, 832);
   });
 
   test('focus inpaint sends a request canvas matching the plan', () async {

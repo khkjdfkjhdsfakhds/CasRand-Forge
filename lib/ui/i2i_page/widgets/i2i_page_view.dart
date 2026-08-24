@@ -518,14 +518,6 @@ class _I2iPageViewState extends State<I2iPageView> {
               divisions: 99,
               onChanged: viewmodel.setNoise,
             ),
-          SwitchListTile(
-            key: const Key('i2i-use-random-seed'),
-            secondary: const Icon(Icons.casino_outlined),
-            title: Text(tr('use_random_seed')),
-            subtitle: Text(tr('i2i_random_seed_hint')),
-            value: config.useRandomSeed,
-            onChanged: viewmodel.setUseRandomSeed,
-          ),
           ListTile(
             leading: const Icon(Icons.photo_size_select_large),
             title: Text(tr('i2i_request_size')),

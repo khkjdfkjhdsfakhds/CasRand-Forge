@@ -500,6 +500,7 @@ void main() {
       i2iPlan: plan,
       seedOverride: 1504662765,
       promptSuffix: '-2::upscaled, blurry::,',
+      applyPlainI2iCompatibilityFields: false,
     )();
     final parameters = result.payload['parameters'] as Map<String, dynamic>;
 
@@ -515,12 +516,15 @@ void main() {
     expect(parameters['extra_noise_seed'], 1504662764);
     expect(parameters['strength'], 0.3);
     expect(parameters['noise'], 0.0);
+    expect(parameters, isNot(contains('color_correct')));
+    expect(parameters, isNot(contains('sm')));
+    expect(parameters, isNot(contains('sm_dyn')));
     expect(config.paramConfig.seed, 5);
     expect(config.rootPromptConfig.strs, ['positive prompt']);
     expect(config.overridePrompt, isEmpty);
   });
 
-  test('I2I-area random seed overrides only an explicit I2I-area request', () {
+  test('legacy I2I random flag cannot override a fixed global seed', () {
     final config = buildPlainConfig();
     config.i2iConfig.setUseRandomSeed(true);
     const plan = I2iRequestPlan(
@@ -538,18 +542,23 @@ void main() {
     final i2iParameters = GeneratePayloadUseCase(
       payloadConfig: config,
       i2iPlan: plan,
-      applyI2iAreaRandomSeed: true,
-      random: Random(12345),
     )()
         .payload['parameters'] as Map<String, dynamic>;
-    final generatedSeed = i2iParameters['seed'] as int;
-    final expectedRandom = Random(12345);
-    final expectedSeed = (expectedRandom.nextInt(1 << 16) << 16) |
-        expectedRandom.nextInt(1 << 16);
-
-    expect(generatedSeed, expectedSeed);
-    expect(i2iParameters['extra_noise_seed'], (generatedSeed - 1) & 0xFFFFFFFF);
-
+    expect(i2iParameters['seed'], 5);
+    expect(i2iParameters['extra_noise_seed'], 4);
+    expect(i2iParameters['color_correct'], isFalse);
+    expect(i2iParameters['sm'], isFalse);
+    expect(i2iParameters['sm_dyn'], isFalse);
+    final repeatedI2iParameters = GeneratePayloadUseCase(
+      payloadConfig: config,
+      i2iPlan: plan,
+    )()
+        .payload['parameters'] as Map<String, dynamic>;
+    expect(repeatedI2iParameters['seed'], i2iParameters['seed']);
+    expect(
+      repeatedI2iParameters['extra_noise_seed'],
+      i2iParameters['extra_noise_seed'],
+    );
     final unrelatedImg2ImgParameters = GeneratePayloadUseCase(
       payloadConfig: config,
       i2iPlan: plan,
@@ -559,12 +568,43 @@ void main() {
 
     final textToImageParameters = GeneratePayloadUseCase(
       payloadConfig: config,
-      applyI2iAreaRandomSeed: true,
     )()
         .payload['parameters'] as Map<String, dynamic>;
     expect(textToImageParameters['seed'], 5);
     expect(config.paramConfig.randomSeed, isFalse);
     expect(config.paramConfig.seed, 5);
+  });
+
+  test('global random mode gives new I2I tasks fresh coherent seeds', () {
+    final config = buildPlainConfig();
+    config.paramConfig.randomSeed = true;
+    const plan = I2iRequestPlan(
+      imageB64: 'aW1hZ2U=',
+      maskB64: null,
+      width: 640,
+      height: 960,
+      strength: 0.55,
+      noise: 0.1,
+      addOriginalImage: true,
+      composite: null,
+      summary: 'img2img random seed test',
+    );
+
+    final parameterSets = List.generate(
+      8,
+      (_) => GeneratePayloadUseCase(
+        payloadConfig: config,
+        i2iPlan: plan,
+      )()
+          .payload['parameters'] as Map<String, dynamic>,
+    );
+
+    expect(parameterSets.map((parameters) => parameters['seed']).toSet().length,
+        greaterThan(1));
+    for (final parameters in parameterSets) {
+      final seed = parameters['seed'] as int;
+      expect(parameters['extra_noise_seed'], (seed - 1) & 0xFFFFFFFF);
+    }
   });
 
   test('Enhance prompt suffix does not duplicate a trailing comma', () {

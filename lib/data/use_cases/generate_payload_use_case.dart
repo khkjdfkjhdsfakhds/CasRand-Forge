@@ -1,5 +1,3 @@
-import 'dart:math';
-
 import 'package:easy_localization/easy_localization.dart';
 import 'package:nai_casrand/core/constants/parameters.dart';
 import 'package:nai_casrand/data/models/character_config.dart';
@@ -44,18 +42,16 @@ class GeneratePayloadUseCase {
   /// Per-request overrides used by transient flows such as Enhance. They do
   /// not mutate the user's saved prompt or seed settings.
   final int? seedOverride;
-  final bool applyI2iAreaRandomSeed;
   final String promptSuffix;
-  final Random _random;
+  final bool applyPlainI2iCompatibilityFields;
 
   GeneratePayloadUseCase({
     required this.payloadConfig,
     this.i2iPlan,
     this.seedOverride,
-    this.applyI2iAreaRandomSeed = false,
     this.promptSuffix = '',
-    Random? random,
-  }) : _random = random ?? Random();
+    this.applyPlainI2iCompatibilityFields = true,
+  });
 
   ParamConfig get paramConfig => payloadConfig.paramConfig;
   PromptConfig get rootPromptConfig => payloadConfig.rootPromptConfig;
@@ -99,11 +95,6 @@ class GeneratePayloadUseCase {
           );
     if (seedOverride != null) {
       paramPayload['seed'] = seedOverride;
-    } else if (plan != null &&
-        applyI2iAreaRandomSeed &&
-        payloadConfig.i2iConfig.useRandomSeed) {
-      paramPayload['seed'] =
-          (_random.nextInt(1 << 16) << 16) | _random.nextInt(1 << 16);
     }
     String payloadComment = basePair.comment;
 
@@ -281,6 +272,11 @@ class GeneratePayloadUseCase {
         action = 'img2img';
         paramPayload['strength'] = plan.strength;
         paramPayload['noise'] = plan.noise;
+        if (applyPlainI2iCompatibilityFields) {
+          paramPayload['color_correct'] = false;
+          paramPayload['sm'] = false;
+          paramPayload['sm_dyn'] = false;
+        }
       }
       payloadComment += '\n\nI2I: ${plan.summary}';
     }
@@ -355,7 +351,10 @@ class GeneratePayloadUseCase {
         ..remove('inpaintImg2ImgStrength')
         ..remove('img2img')
         ..['strength'] = plan.strength
-        ..['noise'] = plan.noise;
+        ..['noise'] = plan.noise
+        ..['color_correct'] = false
+        ..['sm'] = false
+        ..['sm_dyn'] = false;
     }
     return payload;
   }

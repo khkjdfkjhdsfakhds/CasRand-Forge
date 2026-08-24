@@ -35,6 +35,7 @@ Future<I2iRequestBatch?> _prepareI2iBatchWithoutIsolate({
   required I2IConfig config,
   required int targetWidth,
   required int targetHeight,
+  required bool transparentBackground,
 }) async {
   if (!config.hasImage) return null;
   if (config.hasInpaintSelection) {
@@ -66,7 +67,8 @@ GenerationPageViewmodel _testGenerationViewmodel({
   FileService? fileService,
   EncodeVibeUseCase? encodeVibeUseCase,
   PrepareDirectorToolRequestUseCase? prepareDirectorToolRequest,
-  PreparationFeedbackBarrier? preparationFeedbackBarrier,
+  PreparationFeedbackBarrier preparationFeedbackBarrier =
+      _skipPreparationFeedbackBarrier,
 }) {
   return GenerationPageViewmodel(
     apiService: apiService,
@@ -416,21 +418,20 @@ void main() {
       ..num = 1
       ..strs = ['prompt-A', 'prompt-B'];
 
-    await _runCommand(
-      tester,
-      viewmodel.createGenerationCommand(workerIndex: 0),
-    );
-    await _runCommand(
-      tester,
-      viewmodel.createGenerationCommand(workerIndex: 0),
-    );
+    for (var attempt = 0; attempt < 5; attempt++) {
+      await _runCommand(
+        tester,
+        viewmodel.createGenerationCommand(workerIndex: 0),
+      );
+    }
 
-    expect(api.payloads, hasLength(2));
-    expect(api.payloads.first['input'], 'prompt-A');
-    expect(api.payloads.last['input'], 'prompt-A');
+    expect(api.payloads, hasLength(5));
+    expect(api.payloads.map((payload) => payload['input']).toSet(), {
+      'prompt-A',
+    });
     expect(
-      _parameters(api.payloads.last)['seed'],
-      _parameters(api.payloads.first)['seed'],
+      api.payloads.map((payload) => _parameters(payload)['seed']).toSet(),
+      hasLength(1),
     );
     viewmodel.dispose();
   });
@@ -963,7 +964,7 @@ void main() {
   testWidgets('I2I retry uses a changed mask instead of the cached mask',
       (tester) async {
     final api = _RecordingFailureApiService();
-    final viewmodel = GenerationPageViewmodel(apiService: api);
+    final viewmodel = _testGenerationViewmodel(apiService: api);
     final config = GetIt.I<PayloadConfig>();
     config.i2iConfig.setImage(_solidPng(80, 90, 100));
     config.i2iConfig.setMask(_maskPng(left: true), const []);

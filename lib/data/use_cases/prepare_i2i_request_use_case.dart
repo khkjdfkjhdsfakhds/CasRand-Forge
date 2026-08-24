@@ -16,6 +16,8 @@ class _PlainI2iPrepareInput {
   final double strength;
   final double noise;
   final bool addOriginalImage;
+  final bool transparentBackground;
+  final bool normalizeToTarget;
 
   const _PlainI2iPrepareInput({
     required this.imageBytes,
@@ -26,6 +28,8 @@ class _PlainI2iPrepareInput {
     required this.strength,
     required this.noise,
     required this.addOriginalImage,
+    required this.transparentBackground,
+    required this.normalizeToTarget,
   });
 }
 
@@ -37,8 +41,52 @@ class _EncodedInpaintMasks {
 }
 
 I2iRequestPlan _preparePlainI2iPlan(_PlainI2iPrepareInput input) {
+  if (!input.normalizeToTarget) {
+    return I2iRequestPlan(
+      imageB64: base64Encode(input.imageBytes),
+      maskB64: null,
+      blendMaskB64: null,
+      width: input.targetWidth,
+      height: input.targetHeight,
+      strength: input.strength,
+      noise: input.noise,
+      addOriginalImage: input.addOriginalImage,
+      composite: null,
+      summary: 'img2img ${input.sourceWidth}x${input.sourceHeight} -> '
+          '${input.targetWidth}x${input.targetHeight}, '
+          'strength ${input.strength.toStringAsFixed(2)}, '
+          'noise ${input.noise.toStringAsFixed(2)}',
+    );
+  }
+  final decoded = img.decodeImage(input.imageBytes);
+  if (decoded == null) {
+    throw const FormatException('Failed to decode img2img base image.');
+  }
+  final oriented = img.bakeOrientation(decoded);
+  final resized = oriented.width == input.targetWidth &&
+          oriented.height == input.targetHeight
+      ? oriented
+      : img.copyResize(
+          oriented,
+          width: input.targetWidth,
+          height: input.targetHeight,
+          interpolation: img.Interpolation.cubic,
+        );
+  late final img.Image requestImage;
+  if (input.transparentBackground) {
+    requestImage = resized;
+  } else {
+    requestImage = img.Image(
+      width: input.targetWidth,
+      height: input.targetHeight,
+      numChannels: 3,
+    );
+    img.fill(requestImage, color: img.ColorRgb8(255, 255, 255));
+    img.compositeImage(requestImage, resized);
+  }
+  final requestBytes = Uint8List.fromList(img.encodePng(requestImage));
   return I2iRequestPlan(
-    imageB64: base64Encode(input.imageBytes),
+    imageB64: base64Encode(requestBytes),
     maskB64: null,
     blendMaskB64: null,
     width: input.targetWidth,
@@ -63,6 +111,8 @@ Future<I2iRequestPlan> preparePlainImg2ImgBytesInBackground({
   required double strength,
   required double noise,
   required bool addOriginalImage,
+  bool transparentBackground = false,
+  bool normalizeToTarget = true,
 }) {
   return compute(
     _preparePlainI2iPlan,
@@ -75,6 +125,8 @@ Future<I2iRequestPlan> preparePlainImg2ImgBytesInBackground({
       strength: strength,
       noise: noise,
       addOriginalImage: addOriginalImage,
+      transparentBackground: transparentBackground,
+      normalizeToTarget: normalizeToTarget,
     ),
     debugLabel: 'prepare-plain-img2img',
   );
@@ -275,6 +327,7 @@ class _PlanCacheEntry {
   final int revision;
   final int targetWidth;
   final int targetHeight;
+  final bool transparentBackground;
   final I2iRequestPlan plan;
 
   const _PlanCacheEntry({
@@ -282,6 +335,7 @@ class _PlanCacheEntry {
     required this.revision,
     required this.targetWidth,
     required this.targetHeight,
+    required this.transparentBackground,
     required this.plan,
   });
 }
@@ -291,6 +345,7 @@ class _BatchCacheEntry {
   final int revision;
   final int targetWidth;
   final int targetHeight;
+  final bool transparentBackground;
   final I2iRequestBatch batch;
 
   const _BatchCacheEntry({
@@ -298,6 +353,7 @@ class _BatchCacheEntry {
     required this.revision,
     required this.targetWidth,
     required this.targetHeight,
+    required this.transparentBackground,
     required this.batch,
   });
 }
@@ -309,8 +365,12 @@ class _BatchCacheEntry {
 /// generation loop until the image, mask or relevant settings change.
 class PrepareI2iRequestUseCase {
   final I2IConfig config;
+  final bool transparentBackground;
 
-  PrepareI2iRequestUseCase({required this.config});
+  PrepareI2iRequestUseCase({
+    required this.config,
+    this.transparentBackground = false,
+  });
 
   static final List<_PlanCacheEntry> _planCache = [];
   static final List<_BatchCacheEntry> _batchCache = [];
@@ -370,7 +430,8 @@ class PrepareI2iRequestUseCase {
         if (entry.configId == configId &&
             entry.revision == revision &&
             entry.targetWidth == targetWidth &&
-            entry.targetHeight == targetHeight) {
+            entry.targetHeight == targetHeight &&
+            entry.transparentBackground == transparentBackground) {
           return _withCurrentParameters(entry.batch);
         }
       }
@@ -399,6 +460,7 @@ class PrepareI2iRequestUseCase {
         revision: revision,
         targetWidth: targetWidth,
         targetHeight: targetHeight,
+        transparentBackground: transparentBackground,
         batch: batch,
       ));
       while (_batchCache.length > _planCacheLimit) {
@@ -431,8 +493,8 @@ class PrepareI2iRequestUseCase {
   /// returns the first tile only; use [planBatch] for the whole batch.
   ///
   /// [targetWidth] / [targetHeight] is the generation size selected for this
-  /// request; plain img2img preserves the source bytes while requesting those
-  /// output dimensions, while inpainting derives its own request size.
+  /// request; plain img2img emits a normalized PNG matching those output
+  /// dimensions, while inpainting derives its own request size.
   Future<I2iRequestPlan?> call({
     required int targetWidth,
     required int targetHeight,
@@ -444,7 +506,8 @@ class PrepareI2iRequestUseCase {
         if (entry.configId == configId &&
             entry.revision == revision &&
             entry.targetWidth == targetWidth &&
-            entry.targetHeight == targetHeight) {
+            entry.targetHeight == targetHeight &&
+            entry.transparentBackground == transparentBackground) {
           return entry.plan.withRequestParameters(
             strength: config.strength,
             noise: config.noise,
@@ -464,6 +527,7 @@ class PrepareI2iRequestUseCase {
               strength: config.strength,
               noise: config.noise,
               addOriginalImage: config.addOriginalImage,
+              transparentBackground: transparentBackground,
             );
       if (identityHashCode(config) != configId ||
           config.planRevision != revision) {
@@ -474,6 +538,7 @@ class PrepareI2iRequestUseCase {
         revision: revision,
         targetWidth: targetWidth,
         targetHeight: targetHeight,
+        transparentBackground: transparentBackground,
         plan: plan,
       ));
       while (_planCache.length > _planCacheLimit) {

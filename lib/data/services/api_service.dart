@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/io_client.dart';
 import 'package:nai_casrand/data/models/api_request.dart';
+import 'package:nai_casrand/data/models/generation_performance_diagnostics.dart';
 import 'package:nai_casrand/data/services/novelai_image_cache.dart';
 import 'package:http/http.dart' as http;
 
@@ -25,17 +26,33 @@ class NovelAiApiException implements Exception {
 
 class ApiService {
   static const defaultRequestTimeout = Duration(minutes: 3);
-  static final ApiService shared = ApiService();
+  static final ApiService shared = ApiService(
+    diagnosticObserver: _environmentDiagnosticObserver(),
+  );
 
   final Duration requestTimeout;
   final http.Client Function(String proxy)? _clientFactory;
   final Map<String, http.Client> _clients = {};
   final NovelAiImageCache _imageCache = NovelAiImageCache();
+  final GenerationPerformanceObserver? _diagnosticObserver;
+  int _diagnosticSerial = 0;
 
   ApiService({
     this.requestTimeout = defaultRequestTimeout,
     http.Client Function(String proxy)? clientFactory,
-  }) : _clientFactory = clientFactory;
+    GenerationPerformanceObserver? diagnosticObserver,
+  })  : _clientFactory = clientFactory,
+        _diagnosticObserver = diagnosticObserver;
+
+  bool get diagnosticsEnabled => _diagnosticObserver != null;
+
+  String createDiagnosticCorrelationId() {
+    _diagnosticSerial++;
+    return '${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}-'
+        '$_diagnosticSerial';
+  }
+
+  void recordDiagnostic(GenerationPerformanceEvent event) => _emit(event);
 
   Future<ApiResponse> fetchData(ApiRequest request) async {
     final url = Uri.parse(request.endpoint);
@@ -43,19 +60,33 @@ class ApiService {
     final client = _clientForRoute(request.proxy, request.headers);
     final sessionKey = '${url.origin}\u0000$routeKey';
     final usesImageCache = NovelAiImageCache.supports(url);
+    final diagnosticContext = request.diagnosticContext;
     var prepared = usesImageCache
         ? await _imageCache.prepare(request.payload, sessionKey)
         : PreparedImageRequest(request.payload);
     http.Response response;
     try {
-      response = await _post(client, url, request.headers, prepared.payload);
+      response = await _postPrepared(
+        client,
+        url,
+        request.headers,
+        prepared,
+        diagnosticContext,
+      );
       final invalidKeys = usesImageCache ? _invalidCacheKeys(response) : null;
       if (invalidKeys != null) {
         _imageCache.invalidate(sessionKey, invalidKeys);
         prepared = await _imageCache.prepare(request.payload, sessionKey);
-        response = await _post(client, url, request.headers, prepared.payload);
+        response = await _postPrepared(
+          client,
+          url,
+          request.headers,
+          prepared,
+          diagnosticContext,
+        );
       }
     } on TimeoutException {
+      _emitFailure(diagnosticContext, 'client_timeout');
       _discardClient(routeKey, client);
       throw const NovelAiApiException(
         'NovelAI did not respond before the request timed out. '
@@ -63,6 +94,7 @@ class ApiService {
         isTransient: true,
       );
     } on http.ClientException {
+      _emitFailure(diagnosticContext, 'connection_closed');
       _discardClient(routeKey, client);
       throw const NovelAiApiException(
         'NovelAI connection closed before a complete response was received. '
@@ -70,6 +102,7 @@ class ApiService {
         isTransient: true,
       );
     } on SocketException {
+      _emitFailure(diagnosticContext, 'connection_closed');
       _discardClient(routeKey, client);
       throw const NovelAiApiException(
         'NovelAI connection closed before a complete response was received. '
@@ -80,25 +113,90 @@ class ApiService {
     if (response.statusCode >= 200 && response.statusCode < 300) {
       _imageCache.markUploaded(sessionKey, prepared.uploadedKeys);
     }
+    if (diagnosticContext != null) {
+      _emit(GenerationPerformanceEvent(
+        correlationId: diagnosticContext.correlationId,
+        stage: response.statusCode >= 400
+            ? GenerationPerformanceStage.failed
+            : GenerationPerformanceStage.requestCompleted,
+        statusCode: response.statusCode,
+        errorClass: response.statusCode >= 400 ? 'server_response' : null,
+      ));
+    }
     return ApiResponse(
       status: response.statusCode.toString(),
       data: response.bodyBytes,
     );
   }
 
-  Future<http.Response> _post(
+  Future<http.Response> _postPrepared(
     http.Client client,
     Uri url,
     Map<String, String> headers,
-    Map<String, dynamic> payload,
-  ) {
-    return client
-        .post(
-          url,
-          headers: headers,
-          body: json.encode(payload),
-        )
+    PreparedImageRequest prepared,
+    GenerationDiagnosticContext? diagnosticContext,
+  ) async {
+    final body = json.encode(prepared.payload);
+    final stopwatch = Stopwatch()..start();
+    if (diagnosticContext != null) {
+      _emit(GenerationPerformanceEvent(
+        correlationId: diagnosticContext.correlationId,
+        stage: GenerationPerformanceStage.cacheReady,
+        requestBodyBytes: utf8.encode(body).length,
+        cacheHit:
+            prepared.imageSourceCount > 0 && prepared.uploadedKeys.isEmpty,
+      ));
+      _emit(GenerationPerformanceEvent(
+        correlationId: diagnosticContext.correlationId,
+        stage: GenerationPerformanceStage.requestStarted,
+      ));
+    }
+    final request = http.Request('POST', url)
+      ..headers.addAll(headers)
+      ..body = body;
+    final response = await (() async {
+      final streamedResponse = await client.send(request);
+      if (diagnosticContext != null) {
+        _emit(GenerationPerformanceEvent(
+          correlationId: diagnosticContext.correlationId,
+          stage: GenerationPerformanceStage.responseStarted,
+          elapsedMicroseconds: stopwatch.elapsedMicroseconds,
+          statusCode: streamedResponse.statusCode,
+        ));
+      }
+      return http.Response.fromStream(streamedResponse);
+    })()
         .timeout(requestTimeout);
+    stopwatch.stop();
+    if (diagnosticContext != null) {
+      _emit(GenerationPerformanceEvent(
+        correlationId: diagnosticContext.correlationId,
+        stage: GenerationPerformanceStage.responseCompleted,
+        elapsedMicroseconds: stopwatch.elapsedMicroseconds,
+        statusCode: response.statusCode,
+      ));
+    }
+    return response;
+  }
+
+  void _emit(GenerationPerformanceEvent event) {
+    try {
+      _diagnosticObserver?.call(event);
+    } catch (_) {
+      // Diagnostics must never change generation behavior.
+    }
+  }
+
+  void _emitFailure(
+    GenerationDiagnosticContext? context,
+    String errorClass,
+  ) {
+    if (context == null) return;
+    _emit(GenerationPerformanceEvent(
+      correlationId: context.correlationId,
+      stage: GenerationPerformanceStage.failed,
+      errorClass: errorClass,
+    ));
   }
 
   Set<String>? _invalidCacheKeys(http.Response response) {
@@ -241,4 +339,13 @@ class ApiService {
     _clients.clear();
     _imageCache.clear();
   }
+}
+
+GenerationPerformanceObserver? _environmentDiagnosticObserver() {
+  if (Platform.environment['CASRAND_PERFORMANCE_DIAGNOSTICS'] != '1') {
+    return null;
+  }
+  return (event) {
+    debugPrint('casrand_generation_performance ${jsonEncode(event.toJson())}');
+  };
 }

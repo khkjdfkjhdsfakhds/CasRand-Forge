@@ -40,7 +40,11 @@ class NovelAiImageCache {
         uploadedKeys,
       );
     }
-    return PreparedImageRequest(payload, uploadedKeys: uploadedKeys);
+    return PreparedImageRequest(
+      payload,
+      uploadedKeys: uploadedKeys,
+      imageSourceCount: sources.length,
+    );
   }
 
   void markUploaded(String sessionKey, Iterable<String> keys) {
@@ -57,10 +61,12 @@ class NovelAiImageCache {
 class PreparedImageRequest {
   final Map<String, dynamic> payload;
   final Set<String> uploadedKeys;
+  final int imageSourceCount;
 
   PreparedImageRequest(
     this.payload, {
     this.uploadedKeys = const {},
+    this.imageSourceCount = 0,
   });
 }
 

@@ -54,6 +54,7 @@ Future<I2iRequestBatch?> _prepareI2iBatchWithoutIsolate({
   required I2IConfig config,
   required int targetWidth,
   required int targetHeight,
+  required bool transparentBackground,
 }) async {
   if (!config.hasImage) return null;
   final plan = I2iRequestPlan(
@@ -267,7 +268,7 @@ void main() {
     expect(find.text('No mask: plain img2img'), findsNothing);
   });
 
-  testWidgets('I2I random seed switch stays isolated from global seed config', (
+  testWidgets('I2I page uses the global seed control only', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(1200, 1400));
@@ -283,16 +284,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final toggle = find.byKey(const Key('i2i-use-random-seed'));
-    expect(toggle, findsOneWidget);
-    await tester.ensureVisible(toggle);
-    await tester.tap(toggle);
-    await tester.pump();
-
-    expect(payloadConfig.i2iConfig.useRandomSeed, isTrue);
+    expect(find.byKey(const Key('i2i-use-random-seed')), findsNothing);
+    expect(payloadConfig.i2iConfig.useRandomSeed, isFalse);
     expect(payloadConfig.paramConfig.randomSeed, isFalse);
     expect(payloadConfig.paramConfig.seed, 424242);
-    expect(find.textContaining('Text-to-image, Enhance'), findsOneWidget);
   });
 
   testWidgets('mask presence swaps noise for the inpaint switches', (

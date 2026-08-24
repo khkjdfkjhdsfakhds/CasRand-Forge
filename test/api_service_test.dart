@@ -6,10 +6,72 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:nai_casrand/data/models/api_request.dart';
+import 'package:nai_casrand/data/models/generation_performance_diagnostics.dart';
 import 'package:nai_casrand/data/services/account_service.dart';
 import 'package:nai_casrand/data/services/api_service.dart';
 
 void main() {
+  test('keeps the established three-minute generation timeout', () {
+    expect(ApiService.defaultRequestTimeout, const Duration(minutes: 3));
+  });
+
+  test('emits privacy-safe request and cache diagnostics only when observed',
+      () async {
+    final events = <GenerationPerformanceEvent>[];
+    final service = ApiService(
+      diagnosticObserver: events.add,
+      clientFactory: (_) => MockClient(
+        (_) async => http.Response.bytes([1, 2, 3], 200),
+      ),
+    );
+    final image = base64Encode(List<int>.filled(4096, 7));
+    final request = ApiRequest(
+      endpoint: 'https://image.novelai.net/ai/generate-image',
+      proxy: '/private/proxy',
+      headers: const {'authorization': 'Bearer PRIVATE_TOKEN'},
+      diagnosticContext: const GenerationDiagnosticContext(
+        correlationId: 'trace-1',
+        preparationMicroseconds: 1200,
+        normalizedImageBytes: 3072,
+      ),
+      payload: {
+        'input': 'PRIVATE_PROMPT',
+        'parameters': {'image': image, 'strength': 0.5},
+      },
+    );
+
+    await service.fetchData(request);
+    await service.fetchData(request);
+
+    final prepared = events
+        .where((event) => event.stage == GenerationPerformanceStage.cacheReady)
+        .toList();
+    expect(prepared, hasLength(2));
+    expect(prepared.first.cacheHit, isFalse);
+    expect(prepared.last.cacheHit, isTrue);
+    expect(
+      prepared.last.requestBodyBytes!,
+      lessThan(prepared.first.requestBodyBytes! ~/ 4),
+    );
+    expect(events.map((event) => event.correlationId), everyElement('trace-1'));
+    expect(
+      events.map((event) => event.stage),
+      containsAllInOrder([
+        GenerationPerformanceStage.requestStarted,
+        GenerationPerformanceStage.responseStarted,
+        GenerationPerformanceStage.responseCompleted,
+        GenerationPerformanceStage.requestCompleted,
+      ]),
+    );
+    final serialized =
+        jsonEncode(events.map((event) => event.toJson()).toList());
+    expect(serialized, isNot(contains('PRIVATE_TOKEN')));
+    expect(serialized, isNot(contains('PRIVATE_PROMPT')));
+    expect(serialized, isNot(contains('/private/proxy')));
+    expect(serialized, isNot(contains(image.substring(0, 32))));
+    service.close();
+  });
+
   test('reuses a successfully uploaded generation image by cache key',
       () async {
     final requestBodies = <Map<String, dynamic>>[];

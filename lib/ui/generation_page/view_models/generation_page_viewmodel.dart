@@ -11,9 +11,11 @@ import 'package:nai_casrand/data/models/api_request.dart';
 import 'package:nai_casrand/data/models/command_status.dart';
 import 'package:nai_casrand/data/models/director_tool_config.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
+import 'package:nai_casrand/data/models/generation_performance_diagnostics.dart';
 import 'package:nai_casrand/data/models/i2i_config.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/models/opus_usage.dart';
+import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
 import 'package:lorem_ipsum/lorem_ipsum.dart';
@@ -43,6 +45,7 @@ typedef I2iBatchPreparer = Future<I2iRequestBatch?> Function({
   required I2IConfig config,
   required int targetWidth,
   required int targetHeight,
+  required bool transparentBackground,
 });
 
 Future<void> _defaultPreparationFeedbackBarrier() async {
@@ -55,11 +58,20 @@ Future<I2iRequestBatch?> _defaultI2iBatchPreparer({
   required I2IConfig config,
   required int targetWidth,
   required int targetHeight,
+  required bool transparentBackground,
 }) {
-  return PrepareI2iRequestUseCase(config: config).planBatch(
+  return PrepareI2iRequestUseCase(
+    config: config,
+    transparentBackground: transparentBackground,
+  ).planBatch(
     targetWidth: targetWidth,
     targetHeight: targetHeight,
   );
+}
+
+bool _usesTransparentI2iBackground(ParamConfig config) {
+  return config.model.contains('diffusion-5') &&
+      config.toJson()['transparent_background'] == true;
 }
 
 GeneratedImageStoragePolicy _storagePolicySnapshot(Settings settings) {
@@ -96,7 +108,7 @@ class _LogicalGenerationTask {
   PayloadGenerationResult? cachedPayloadResult;
   I2iRequestBatch? cachedI2iBatch;
   String? cachedRetryFingerprint;
-  int cacheRetriesCount = 0;
+  GenerationDiagnosticContext? diagnosticContext;
   Command<void, InfoCardContent>? cardCommand;
 }
 
@@ -128,7 +140,6 @@ class GenerationPageViewmodel extends ChangeNotifier {
   final FileService _fileService;
   final GeneratedImageStorage _generatedImageStorage;
   final ImageService _imageService;
-  final Random _i2iSeedRandom;
   final PrepareDirectorToolRequestUseCase _prepareDirectorToolRequest;
   final PreparationFeedbackBarrier _preparationFeedbackBarrier;
   final I2iBatchPreparer _prepareI2iBatch;
@@ -141,7 +152,6 @@ class GenerationPageViewmodel extends ChangeNotifier {
     FileService? fileService,
     GeneratedImageStorage? generatedImageStorage,
     ImageService? imageService,
-    Random? i2iSeedRandom,
     PrepareDirectorToolRequestUseCase? prepareDirectorToolRequest,
     PreparationFeedbackBarrier? preparationFeedbackBarrier,
     I2iBatchPreparer? prepareI2iBatch,
@@ -154,7 +164,6 @@ class GenerationPageViewmodel extends ChangeNotifier {
         _generatedImageStorage = generatedImageStorage ??
             GeneratedImageStorageService(fileService: fileService),
         _imageService = imageService ?? ImageService(),
-        _i2iSeedRandom = i2iSeedRandom ?? Random(),
         _prepareDirectorToolRequest = prepareDirectorToolRequest ??
             const PrepareDirectorToolRequestUseCase(),
         _preparationFeedbackBarrier =
@@ -193,7 +202,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
   PayloadGenerationResult? _cachedPayloadResult;
   I2iRequestBatch? _cachedI2iBatch;
   String? _cachedRetryFingerprint;
-  int _cacheRetriesCount = 0;
+  GenerationDiagnosticContext? _cachedDiagnosticContext;
   int _primaryConsecutiveFailures = 0;
   bool _primaryWorkerPaused = false;
   Timer? _generationIntervalTimer;
@@ -349,6 +358,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
           config: i2i,
           targetWidth: largest.width,
           targetHeight: largest.height,
+          transparentBackground: _usesTransparentI2iBackground(paramConfig),
         );
         if (batch != null) {
           final base = estimateBatchAnlasCost(
@@ -708,6 +718,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
 
       PayloadGenerationResult? payloadResult;
       I2iRequestBatch? i2iBatch;
+      GenerationDiagnosticContext? diagnosticContext;
       try {
         vibeExtractionAnlas = await ensureVibeEncodings(
           token: token,
@@ -726,23 +737,21 @@ class GenerationPageViewmodel extends ChangeNotifier {
             payloadConfig: payloadConfig,
             i2iPlan: i2iBatch.plans.first,
             seedOverride: seedOverride,
-            applyI2iAreaRandomSeed: false,
             promptSuffix: promptSuffix,
+            applyPlainI2iCompatibilityFields: false,
           )();
         } else {
           final currentFingerprint = _generationRetryFingerprint();
           final cachedPayload = _getCachedPayload(workerIndex);
           final canReuseCache = cachedPayload != null &&
-              _getCacheRetries(workerIndex) < 3 &&
               _getCachedRetryFingerprint(workerIndex) == currentFingerprint;
           if (canReuseCache) {
             payloadResult = cachedPayload;
             i2iBatch = _getCachedBatch(workerIndex);
-            _setCacheRetries(workerIndex, _getCacheRetries(workerIndex) + 1);
+            diagnosticContext = _getCachedDiagnosticContext(workerIndex);
           } else {
             if (cachedPayload != null) {
               _setCachedPayload(workerIndex, null, null);
-              _setCacheRetries(workerIndex, 0);
             }
 
             // I2I preparation may yield. If the user edits its image, mask,
@@ -757,34 +766,80 @@ class GenerationPageViewmodel extends ChangeNotifier {
               );
               final buildFingerprint = _generationRetryFingerprint();
               i2iBatch = null;
+              final preparationStopwatch = Stopwatch()..start();
               final i2iConfig = payloadConfig.i2iConfig;
+              final correlationId = payloadConfig.i2iEnabled &&
+                      i2iConfig.hasImage &&
+                      _apiService.diagnosticsEnabled
+                  ? _apiService.createDiagnosticCorrelationId()
+                  : null;
+              if (correlationId != null) {
+                _apiService.recordDiagnostic(GenerationPerformanceEvent(
+                  correlationId: correlationId,
+                  stage: GenerationPerformanceStage.preparationStarted,
+                ));
+              }
               if (payloadConfig.i2iEnabled && i2iConfig.hasImage) {
                 final target = i2iConfig.requestSize;
-                i2iBatch = await _prepareI2iBatch(
-                  config: i2iConfig,
-                  targetWidth: target.width,
-                  targetHeight: target.height,
-                );
+                try {
+                  await _preparationFeedbackBarrier();
+                  i2iBatch = await _prepareI2iBatch(
+                    config: i2iConfig,
+                    targetWidth: target.width,
+                    targetHeight: target.height,
+                    transparentBackground: _usesTransparentI2iBackground(
+                      payloadConfig.paramConfig,
+                    ),
+                  );
+                } catch (_) {
+                  preparationStopwatch.stop();
+                  if (correlationId != null) {
+                    _apiService.recordDiagnostic(GenerationPerformanceEvent(
+                      correlationId: correlationId,
+                      stage: GenerationPerformanceStage.failed,
+                      elapsedMicroseconds:
+                          preparationStopwatch.elapsedMicroseconds,
+                      errorClass: 'local_preparation',
+                    ));
+                  }
+                  rethrow;
+                }
               }
+              preparationStopwatch.stop();
               if (buildFingerprint != _generationRetryFingerprint()) {
                 continue;
               }
               payloadResult = GeneratePayloadUseCase(
                 payloadConfig: payloadConfig,
                 i2iPlan: i2iBatch?.plans.first,
-                applyI2iAreaRandomSeed: i2iBatch != null,
-                random: _i2iSeedRandom,
               )();
               if (buildFingerprint != _generationRetryFingerprint()) {
                 continue;
+              }
+              diagnosticContext = i2iBatch == null
+                  ? null
+                  : _newDiagnosticContext(
+                      correlationId: correlationId,
+                      preparationMicroseconds:
+                          preparationStopwatch.elapsedMicroseconds,
+                      batch: i2iBatch,
+                    );
+              if (diagnosticContext != null) {
+                _apiService.recordDiagnostic(GenerationPerformanceEvent(
+                  correlationId: diagnosticContext.correlationId,
+                  stage: GenerationPerformanceStage.preparationCompleted,
+                  elapsedMicroseconds:
+                      diagnosticContext.preparationMicroseconds,
+                  normalizedImageBytes: diagnosticContext.normalizedImageBytes,
+                ));
               }
               _setCachedPayload(
                 workerIndex,
                 payloadResult,
                 i2iBatch,
                 retryFingerprint: buildFingerprint,
+                diagnosticContext: diagnosticContext,
               );
-              _setCacheRetries(workerIndex, 0);
               break;
             }
           }
@@ -818,13 +873,43 @@ class GenerationPageViewmodel extends ChangeNotifier {
               proxy: settings.proxy,
               headers: headers,
               payload: payload,
+              diagnosticContext: diagnosticContext,
             ),
           );
           final data = ApiService.requireSuccessfulData(
             response,
             operation: 'generate the image',
           );
-          return _imageService.processResponse(data);
+          final processingStopwatch = Stopwatch()..start();
+          if (diagnosticContext != null) {
+            _apiService.recordDiagnostic(GenerationPerformanceEvent(
+              correlationId: diagnosticContext.correlationId,
+              stage: GenerationPerformanceStage.resultProcessingStarted,
+            ));
+          }
+          try {
+            final processed = _imageService.processResponse(data);
+            processingStopwatch.stop();
+            if (diagnosticContext != null) {
+              _apiService.recordDiagnostic(GenerationPerformanceEvent(
+                correlationId: diagnosticContext.correlationId,
+                stage: GenerationPerformanceStage.resultProcessingCompleted,
+                elapsedMicroseconds: processingStopwatch.elapsedMicroseconds,
+              ));
+            }
+            return processed;
+          } catch (_) {
+            processingStopwatch.stop();
+            if (diagnosticContext != null) {
+              _apiService.recordDiagnostic(GenerationPerformanceEvent(
+                correlationId: diagnosticContext.correlationId,
+                stage: GenerationPerformanceStage.failed,
+                elapsedMicroseconds: processingStopwatch.elapsedMicroseconds,
+                errorClass: 'result_processing',
+              ));
+            }
+            rethrow;
+          }
         }
 
         Uint8List imageBytes;
@@ -1023,7 +1108,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
         task.cachedPayloadResult = null;
         task.cachedI2iBatch = null;
         task.cachedRetryFingerprint = null;
-        task.cacheRetriesCount = 0;
+        task.diagnosticContext = null;
       }
       if (batch != null && task?.cardCommand != null) {
         final previousTask = batch.lastSuccessfulTaskNumbers[token] ?? -1;
@@ -1703,43 +1788,62 @@ class GenerationPageViewmodel extends ChangeNotifier {
     return null;
   }
 
+  GenerationDiagnosticContext? _getCachedDiagnosticContext(int workerIndex) {
+    final task = _logicalTaskForWorker(workerIndex);
+    if (task != null) return task.diagnosticContext;
+    if (workerIndex == 0) return _cachedDiagnosticContext;
+    return null;
+  }
+
   void _setCachedPayload(
     int workerIndex,
     PayloadGenerationResult? result,
     I2iRequestBatch? batch, {
     String? retryFingerprint,
+    GenerationDiagnosticContext? diagnosticContext,
   }) {
     final task = _logicalTaskForWorker(workerIndex);
     if (task != null) {
       task.cachedPayloadResult = result;
       task.cachedI2iBatch = batch;
       task.cachedRetryFingerprint = result == null ? null : retryFingerprint;
+      task.diagnosticContext = result == null ? null : diagnosticContext;
       return;
     }
     if (workerIndex == 0) {
       _cachedPayloadResult = result;
       _cachedI2iBatch = batch;
       _cachedRetryFingerprint = result == null ? null : retryFingerprint;
+      _cachedDiagnosticContext = result == null ? null : diagnosticContext;
       return;
     }
   }
 
-  int _getCacheRetries(int workerIndex) {
-    final task = _logicalTaskForWorker(workerIndex);
-    if (task != null) return task.cacheRetriesCount;
-    if (workerIndex == 0) return _cacheRetriesCount;
-    return 0;
+  GenerationDiagnosticContext? _newDiagnosticContext({
+    required String? correlationId,
+    required int preparationMicroseconds,
+    required I2iRequestBatch batch,
+  }) {
+    if (correlationId == null) return null;
+    return GenerationDiagnosticContext(
+      correlationId: correlationId,
+      preparationMicroseconds: preparationMicroseconds,
+      normalizedImageBytes: batch.plans.fold<int>(
+        0,
+        (total, plan) => total + _decodedBase64Length(plan.imageB64),
+      ),
+    );
   }
 
-  void _setCacheRetries(int workerIndex, int value) {
-    final task = _logicalTaskForWorker(workerIndex);
-    if (task != null) {
-      task.cacheRetriesCount = value;
-      return;
+  static int _decodedBase64Length(String value) {
+    if (value.isEmpty) return 0;
+    var padding = 0;
+    if (value.endsWith('==')) {
+      padding = 2;
+    } else if (value.endsWith('=')) {
+      padding = 1;
     }
-    if (workerIndex == 0) {
-      _cacheRetriesCount = value;
-    }
+    return (value.length * 3 ~/ 4) - padding;
   }
 
   _LogicalGenerationTask? _logicalTaskForWorker(int workerIndex) {
@@ -2141,6 +2245,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
         strength: strength,
         noise: noise,
         addOriginalImage: false,
+        normalizeToTarget: false,
       );
       final currentEnhance = payloadConfig.enhanceConfig;
       if (!identical(currentEnhance, enhance) ||
@@ -2325,7 +2430,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
       _cachedPayloadResult = null;
       _cachedI2iBatch = null;
       _cachedRetryFingerprint = null;
-      _cacheRetriesCount = 0;
+      _cachedDiagnosticContext = null;
     }
     _clearExtraWorkers();
     if (lockToAllCombinations) {

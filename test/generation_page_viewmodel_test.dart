@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
 
 import 'package:archive/archive.dart';
 import 'package:flutter/foundation.dart';
@@ -15,6 +14,7 @@ import 'package:nai_casrand/data/models/command_status.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/data/models/opus_usage.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
+import 'package:nai_casrand/data/models/generation_performance_diagnostics.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
@@ -119,7 +119,10 @@ class _FakeApiService extends ApiService {
   int calls = 0;
   final List<ApiRequest> requests = [];
 
-  _FakeApiService(this.response);
+  _FakeApiService(
+    this.response, {
+    super.diagnosticObserver,
+  });
 
   @override
   Future<ApiResponse> fetchData(ApiRequest request) async {
@@ -497,6 +500,7 @@ void main() {
     expect(viewmodel.lastPresetBatch?.plans, hasLength(1));
     final plan = viewmodel.lastPresetBatch!.plans.single;
     expect(base64Decode(plan.imageB64), sourceBytes);
+    expect(config.enhanceConfig.imageBytes, sourceBytes);
     expect(plan.width, config.enhanceConfig.targetSize.width);
     expect(plan.height, config.enhanceConfig.targetSize.height);
     expect(plan.strength, config.enhanceConfig.strength);
@@ -1639,59 +1643,94 @@ void main() {
     viewmodel.dispose();
   });
 
-  testWidgets('homepage generation applies the enabled I2I-area random seed', (
+  testWidgets('homepage generation keeps fixed seed despite legacy I2I flag', (
     tester,
   ) async {
     final outputImage = img.Image(width: 64, height: 64, numChannels: 3);
     img.fill(outputImage, color: img.ColorRgb8(20, 40, 60));
-    final api = _FakeApiService(ApiResponse(
-      status: '200',
-      data: directorResponseZip([
-        Uint8List.fromList(img.encodePng(outputImage)),
-      ]),
-    ));
+    final diagnosticEvents = <GenerationPerformanceEvent>[];
+    final api = _FakeApiService(
+        ApiResponse(
+          status: '200',
+          data: directorResponseZip([
+            Uint8List.fromList(img.encodePng(outputImage)),
+          ]),
+        ),
+        diagnosticObserver: diagnosticEvents.add);
     final files = _RecordingFileService();
     final accounts = _FakeAccountService();
     final viewmodel = GenerationPageViewmodel(
       apiService: api,
       accountService: accounts,
       fileService: files,
-      i2iSeedRandom: Random(12345),
+      preparationFeedbackBarrier: () async {},
     );
     final config = GetIt.I<PayloadConfig>();
-    config.settings
-      ..debugApiEnabled = true
-      ..generationCount = 1;
+    config.settings.debugApiEnabled = true;
     config.paramConfig
       ..randomSeed = false
       ..seed = 424242;
+    final sourceImage = img.Image(width: 48, height: 32, numChannels: 3);
+    img.fill(sourceImage, color: img.ColorRgb8(90, 70, 50));
+    final sourceBytes = Uint8List.fromList(img.encodePng(sourceImage));
     config.i2iConfig
-      ..setImage(Uint8List.fromList(img.encodePng(outputImage)))
+      ..setImage(sourceBytes)
       ..setRequestSize(
-        const GenerationSize(width: 64, height: 64),
+        const GenerationSize(width: 128, height: 64),
         mode: I2iSizeMode.manual,
       )
+      ..setStrength(0.61)
+      ..setNoise(0.17)
       ..setUseRandomSeed(true);
     config.noteI2iImported(replacing: false);
 
-    await tester.runAsync(() async {
-      viewmodel.startGeneration();
-      final deadline = DateTime.now().add(const Duration(seconds: 10));
-      while ((viewmodel.currentCommand?.isExecuting.value ?? true) &&
-          DateTime.now().isBefore(deadline)) {
-        await Future<void>.delayed(const Duration(milliseconds: 10));
+    Future<void> runOneGeneration() async {
+      viewmodel.runSingleGeneration();
+      for (var attempt = 0;
+          attempt < 1000 &&
+              (viewmodel.currentCommand?.isExecuting.value ?? true);
+          attempt++) {
+        await tester.pump(const Duration(milliseconds: 10));
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
       }
-    });
-    await tester.pump();
+      expect(viewmodel.currentCommand?.isExecuting.value, isFalse);
+    }
 
-    final expectedRandom = Random(12345);
-    final expectedSeed = (expectedRandom.nextInt(1 << 16) << 16) |
-        expectedRandom.nextInt(1 << 16);
-    final request = api.requests.single.payload;
+    await runOneGeneration();
+
+    final request = api.requests.first.payload;
+    final diagnostics = api.requests.first.diagnosticContext;
     final parameters = request['parameters'] as Map<String, dynamic>;
+    final normalized = img.decodePng(base64Decode(parameters['image']))!;
     expect(request['action'], 'img2img');
-    expect(parameters['seed'], expectedSeed);
-    expect(parameters['extra_noise_seed'], (expectedSeed - 1) & 0xFFFFFFFF);
+    expect((normalized.width, normalized.height), (128, 64));
+    expect(config.i2iConfig.imageBytes, sourceBytes);
+    expect(
+      (
+        img.decodePng(config.i2iConfig.imageBytes!)!.width,
+        img.decodePng(config.i2iConfig.imageBytes!)!.height
+      ),
+      (48, 32),
+    );
+    expect(parameters['strength'], 0.61);
+    expect(parameters['noise'], 0.17);
+    expect(parameters['seed'], 424242);
+    expect(parameters['extra_noise_seed'], 424241);
+    expect(parameters['color_correct'], isFalse);
+    expect(parameters['sm'], isFalse);
+    expect(parameters['sm_dyn'], isFalse);
+    expect(diagnostics, isNotNull);
+    expect(diagnostics!.normalizedImageBytes, greaterThan(0));
+    expect(diagnostics.correlationId, isNotEmpty);
+    expect(
+      diagnosticEvents.map((event) => event.stage),
+      containsAllInOrder([
+        GenerationPerformanceStage.preparationStarted,
+        GenerationPerformanceStage.preparationCompleted,
+      ]),
+    );
     expect(config.paramConfig.randomSeed, isFalse);
     expect(config.paramConfig.seed, 424242);
     expect(accounts.calls, 0);
@@ -1700,6 +1739,200 @@ void main() {
       hasLength(1),
       reason: viewmodel.commandList.last.value.info,
     );
+    viewmodel.stopGeneration();
+    await tester.pumpAndSettle();
+    viewmodel.dispose();
+  });
+
+  testWidgets('homepage uses stable fixed seeds and fresh random task seeds', (
+    tester,
+  ) async {
+    final outputImage = img.Image(width: 64, height: 64, numChannels: 3);
+    final api = _FakeApiService(ApiResponse(
+      status: '200',
+      data: directorResponseZip([
+        Uint8List.fromList(img.encodePng(outputImage)),
+      ]),
+    ));
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      fileService: _RecordingFileService(),
+      preparationFeedbackBarrier: () async {},
+      prepareI2iBatch: ({
+        required config,
+        required targetWidth,
+        required targetHeight,
+        required transparentBackground,
+      }) async {
+        final plan = I2iRequestPlan(
+          imageB64: base64Encode(config.imageBytes!),
+          maskB64: null,
+          width: targetWidth,
+          height: targetHeight,
+          strength: config.strength,
+          noise: config.noise,
+          addOriginalImage: false,
+          composite: null,
+          summary: 'seed integration test',
+        );
+        return I2iRequestBatch(
+          plans: [plan],
+          serial: true,
+          summary: plan.summary,
+        );
+      },
+    );
+    final config = GetIt.I<PayloadConfig>();
+    config.settings.debugApiEnabled = true;
+    config.paramConfig
+      ..randomSeed = false
+      ..seed = 424242;
+    config.i2iConfig
+      ..setImage(Uint8List.fromList(img.encodePng(outputImage)))
+      ..setRequestSize(
+        const GenerationSize(width: 64, height: 64),
+        mode: I2iSizeMode.manual,
+      );
+    config.noteI2iImported(replacing: false);
+
+    Future<void> runOneGeneration() async {
+      viewmodel.runSingleGeneration();
+      await waitForCurrentCommand(tester, viewmodel);
+    }
+
+    await runOneGeneration();
+    await runOneGeneration();
+    expect(
+      api.requests.take(2).map((request) =>
+          (request.payload['parameters'] as Map<String, dynamic>)['seed']),
+      everyElement(424242),
+    );
+
+    config.paramConfig.randomSeed = true;
+    await runOneGeneration();
+    await runOneGeneration();
+    final randomParameters = api.requests.skip(2).map(
+          (request) => request.payload['parameters'] as Map<String, dynamic>,
+        );
+    final randomSeeds = randomParameters
+        .map((parameters) => parameters['seed'] as int)
+        .toList();
+    expect(randomSeeds.toSet(), hasLength(2));
+    expect(
+      randomParameters.map((parameters) => parameters['extra_noise_seed']),
+      [
+        (randomSeeds[0] - 1) & 0xFFFFFFFF,
+        (randomSeeds[1] - 1) & 0xFFFFFFFF,
+      ],
+    );
+    viewmodel.stopGeneration();
+    await tester.pumpAndSettle();
+    viewmodel.dispose();
+  });
+
+  testWidgets('local I2I preparation failure emits a redacted diagnostic', (
+    tester,
+  ) async {
+    final diagnosticEvents = <GenerationPerformanceEvent>[];
+    final api = _FakeApiService(
+      ApiResponse(status: '200', data: Uint8List(0)),
+      diagnosticObserver: diagnosticEvents.add,
+    );
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      preparationFeedbackBarrier: () async {},
+      prepareI2iBatch: ({
+        required config,
+        required targetWidth,
+        required targetHeight,
+        required transparentBackground,
+      }) async {
+        throw const FormatException('PRIVATE_FILENAME');
+      },
+    );
+    final config = GetIt.I<PayloadConfig>();
+    config.settings
+      ..debugApiEnabled = true
+      ..generationCount = 1;
+    final source = img.Image(width: 8, height: 8, numChannels: 3);
+    config.i2iConfig.setImage(Uint8List.fromList(img.encodePng(source)));
+    config.noteI2iImported(replacing: false);
+
+    viewmodel.runSingleGeneration();
+    await waitForCurrentCommand(tester, viewmodel);
+
+    expect(api.requests, isEmpty);
+    final failed = diagnosticEvents.last;
+    expect(failed.stage, GenerationPerformanceStage.failed);
+    expect(failed.errorClass, 'local_preparation');
+    expect(jsonEncode(failed.toJson()), isNot(contains('PRIVATE_FILENAME')));
+    viewmodel.dispose();
+  });
+
+  testWidgets('ordinary I2I publishes busy state before heavy preparation', (
+    tester,
+  ) async {
+    final barrierEntered = Completer<void>();
+    final releaseBarrier = Completer<void>();
+    var prepareCalls = 0;
+    final outputImage = img.Image(width: 8, height: 8, numChannels: 3);
+    final api = _FakeApiService(ApiResponse(
+      status: '200',
+      data: directorResponseZip([
+        Uint8List.fromList(img.encodePng(outputImage)),
+      ]),
+    ));
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      fileService: _RecordingFileService(),
+      preparationFeedbackBarrier: () async {
+        if (!barrierEntered.isCompleted) barrierEntered.complete();
+        await releaseBarrier.future;
+      },
+      prepareI2iBatch: ({
+        required config,
+        required targetWidth,
+        required targetHeight,
+        required transparentBackground,
+      }) async {
+        prepareCalls++;
+        final plan = I2iRequestPlan(
+          imageB64: base64Encode(config.imageBytes!),
+          maskB64: null,
+          width: targetWidth,
+          height: targetHeight,
+          strength: config.strength,
+          noise: config.noise,
+          addOriginalImage: false,
+          composite: null,
+          summary: 'test img2img',
+        );
+        return I2iRequestBatch(
+          plans: [plan],
+          serial: true,
+          summary: plan.summary,
+        );
+      },
+    );
+    final config = GetIt.I<PayloadConfig>();
+    config.settings
+      ..debugApiEnabled = true
+      ..generationCount = 1;
+    config.i2iConfig.setImage(Uint8List.fromList(img.encodePng(outputImage)));
+    config.noteI2iImported(replacing: false);
+
+    viewmodel.startGeneration();
+    await tester.pump(const Duration(milliseconds: 1));
+    await tester.runAsync(
+      () => barrierEntered.future.timeout(const Duration(seconds: 5)),
+    );
+
+    expect(viewmodel.currentCommand?.isExecuting.value, isTrue);
+    expect(prepareCalls, 0);
+
+    releaseBarrier.complete();
+    await waitForCurrentCommand(tester, viewmodel);
+    expect(prepareCalls, 1);
     viewmodel.stopGeneration();
     await tester.pumpAndSettle();
     viewmodel.dispose();
