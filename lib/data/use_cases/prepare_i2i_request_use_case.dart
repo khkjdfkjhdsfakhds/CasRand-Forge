@@ -6,6 +6,7 @@ import 'package:image/image.dart' as img;
 import 'package:nai_casrand/data/models/i2i_config.dart';
 import 'package:nai_casrand/data/services/image_service.dart';
 import 'package:nai_casrand/data/use_cases/autocrop_planner.dart';
+import 'package:nai_casrand/data/use_cases/novelai_img2img_normalizer.dart';
 
 class _PlainI2iPrepareInput {
   final Uint8List imageBytes;
@@ -58,35 +59,14 @@ I2iRequestPlan _preparePlainI2iPlan(_PlainI2iPrepareInput input) {
           'noise ${input.noise.toStringAsFixed(2)}',
     );
   }
-  final decoded = img.decodeImage(input.imageBytes);
-  if (decoded == null) {
-    throw const FormatException('Failed to decode img2img base image.');
-  }
-  final oriented = img.bakeOrientation(decoded);
-  final resized = oriented.width == input.targetWidth &&
-          oriented.height == input.targetHeight
-      ? oriented
-      : img.copyResize(
-          oriented,
-          width: input.targetWidth,
-          height: input.targetHeight,
-          interpolation: img.Interpolation.cubic,
-        );
-  late final img.Image requestImage;
-  if (input.transparentBackground) {
-    requestImage = resized;
-  } else {
-    requestImage = img.Image(
-      width: input.targetWidth,
-      height: input.targetHeight,
-      numChannels: 3,
-    );
-    img.fill(requestImage, color: img.ColorRgb8(255, 255, 255));
-    img.compositeImage(requestImage, resized);
-  }
-  final requestBytes = Uint8List.fromList(img.encodePng(requestImage));
+  final requestImage = NovelAiImg2ImgNormalizer.normalize(
+    imageBytes: input.imageBytes,
+    targetWidth: input.targetWidth,
+    targetHeight: input.targetHeight,
+    transparentBackground: input.transparentBackground,
+  );
   return I2iRequestPlan(
-    imageB64: base64Encode(requestBytes),
+    imageB64: requestImage.imageB64,
     maskB64: null,
     blendMaskB64: null,
     width: input.targetWidth,

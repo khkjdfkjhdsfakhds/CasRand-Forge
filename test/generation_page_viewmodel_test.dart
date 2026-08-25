@@ -36,6 +36,8 @@ import 'package:nai_casrand/ui/generation_page/view_models/generation_scheduler.
 import 'package:nai_casrand/ui/generation_page/widgets/classic_info_card.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/info_card.dart';
 
+import 'i2i_pixel_goldens.dart';
+
 Future<void> _skipPreparationFeedbackBarrier() async {}
 
 class _FakeEncodeVibeUseCase extends EncodeVibeUseCase {
@@ -1670,13 +1672,11 @@ void main() {
     config.paramConfig
       ..randomSeed = false
       ..seed = 424242;
-    final sourceImage = img.Image(width: 48, height: 32, numChannels: 3);
-    img.fill(sourceImage, color: img.ColorRgb8(90, 70, 50));
-    final sourceBytes = Uint8List.fromList(img.encodePng(sourceImage));
+    final sourceBytes = stealthCarrierPng();
     config.i2iConfig
       ..setImage(sourceBytes)
       ..setRequestSize(
-        const GenerationSize(width: 128, height: 64),
+        const GenerationSize(width: 13, height: 7),
         mode: I2iSizeMode.manual,
       )
       ..setStrength(0.61)
@@ -1705,14 +1705,19 @@ void main() {
     final parameters = request['parameters'] as Map<String, dynamic>;
     final normalized = img.decodePng(base64Decode(parameters['image']))!;
     expect(request['action'], 'img2img');
-    expect((normalized.width, normalized.height), (128, 64));
+    expect((normalized.width, normalized.height), (13, 7));
+    expect(normalized.numChannels, 4);
+    expect(
+      rgbaSha256(normalized),
+      resizedLandscapeOpaqueRgbaSha256,
+    );
     expect(config.i2iConfig.imageBytes, sourceBytes);
     expect(
       (
         img.decodePng(config.i2iConfig.imageBytes!)!.width,
         img.decodePng(config.i2iConfig.imageBytes!)!.height
       ),
-      (48, 32),
+      (16, 8),
     );
     expect(parameters['strength'], 0.61);
     expect(parameters['noise'], 0.17);

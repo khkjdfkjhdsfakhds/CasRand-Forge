@@ -6,7 +6,10 @@ import 'package:image/image.dart' as img;
 import 'package:nai_casrand/data/models/i2i_config.dart';
 import 'package:nai_casrand/data/use_cases/autocrop_planner.dart';
 import 'package:nai_casrand/data/use_cases/import_inpaint_mask.dart';
+import 'package:nai_casrand/data/use_cases/novelai_img2img_normalizer.dart';
 import 'package:nai_casrand/data/use_cases/prepare_i2i_request_use_case.dart';
+
+import 'i2i_pixel_goldens.dart';
 
 Uint8List solidPng(int width, int height, int r, int g, int b) {
   final image = img.Image(width: width, height: height, numChannels: 3);
@@ -106,7 +109,163 @@ void main() {
     expect(requestImage, isNotNull);
     expect(requestImage!.width, 832);
     expect(requestImage.height, 1216);
+    expect(requestImage.numChannels, 4);
+    expect(requestImage.getPixel(0, 0).toList(), [10, 200, 10, 255]);
     expect(requestBytes, isNot(same(original)));
+  });
+
+  test('normalizer artifact exposes immutable dimensions and PNG identity', () {
+    final artifact = NovelAiImg2ImgNormalizer.normalize(
+      imageBytes: stealthCarrierPng(),
+      targetWidth: 16,
+      targetHeight: 8,
+      transparentBackground: true,
+    );
+    final pngBytes = base64Decode(artifact.imageB64);
+
+    expect((artifact.width, artifact.height), (16, 8));
+    expect(artifact.contentIdentity, bytesSha256(pngBytes));
+    expect(rgbaSha256(img.decodePng(pngBytes)!), sameSizeTransparentRgbaSha256);
+  });
+
+  test('same-size img2img matches Chromium Canvas stealth pixel goldens',
+      () async {
+    final original = stealthCarrierPng();
+    final snapshot = Uint8List.fromList(original);
+    final config = I2IConfig()..setImage(original);
+
+    final opaque = await PrepareI2iRequestUseCase(config: config)(
+      targetWidth: 16,
+      targetHeight: 8,
+    );
+    final transparent = await PrepareI2iRequestUseCase(
+      config: config,
+      transparentBackground: true,
+    )(
+      targetWidth: 16,
+      targetHeight: 8,
+    );
+
+    final opaqueImage = img.decodePng(base64Decode(opaque!.imageB64))!;
+    final transparentImage =
+        img.decodePng(base64Decode(transparent!.imageB64))!;
+    expect(opaqueImage.numChannels, 4);
+    expect(transparentImage.numChannels, 4);
+    expect(
+      rgbaSha256(opaqueImage),
+      sameSizeOpaqueRgbaSha256,
+    );
+    expect(
+      rgbaSha256(transparentImage),
+      sameSizeTransparentRgbaSha256,
+    );
+    expect(transparentImage.getPixel(0, 0).toList(), [128, 87, 85, 255]);
+    expect(transparentImage.getPixel(15, 0).toList(), [0, 0, 0, 0]);
+    expect(transparentImage.getPixel(15, 1).toList(), [2, 4, 6, 128]);
+    expect(opaqueImage.getPixel(15, 1).toList(), [128, 129, 130, 255]);
+    expect(original, snapshot);
+    expect(identical(config.imageBytes, original), isTrue);
+  });
+
+  test('resized img2img matches the website Pica Lanczos3 pixel goldens',
+      () async {
+    final original = stealthCarrierPng();
+    final config = I2IConfig()..setImage(original);
+
+    final opaque = await PrepareI2iRequestUseCase(config: config)(
+      targetWidth: 13,
+      targetHeight: 7,
+    );
+    final transparent = await PrepareI2iRequestUseCase(
+      config: config,
+      transparentBackground: true,
+    )(
+      targetWidth: 13,
+      targetHeight: 7,
+    );
+
+    final opaqueImage = img.decodePng(base64Decode(opaque!.imageB64))!;
+    final transparentImage =
+        img.decodePng(base64Decode(transparent!.imageB64))!;
+    expect(opaqueImage.numChannels, 4);
+    expect(transparentImage.numChannels, 4);
+    expect(
+      rgbaSha256(opaqueImage),
+      resizedLandscapeOpaqueRgbaSha256,
+    );
+    expect(
+      rgbaSha256(transparentImage),
+      resizedLandscapeTransparentRgbaSha256,
+    );
+  });
+
+  test('portrait Pica path matches transparent edge pixel goldens', () async {
+    final config = I2IConfig()..setImage(stealthCarrierPng());
+
+    final opaque = await PrepareI2iRequestUseCase(config: config)(
+      targetWidth: 7,
+      targetHeight: 13,
+    );
+    final transparent = await PrepareI2iRequestUseCase(
+      config: config,
+      transparentBackground: true,
+    )(
+      targetWidth: 7,
+      targetHeight: 13,
+    );
+
+    expect(
+      rgbaSha256(img.decodePng(base64Decode(opaque!.imageB64))!),
+      resizedPortraitOpaqueRgbaSha256,
+    );
+    expect(
+      rgbaSha256(img.decodePng(base64Decode(transparent!.imageB64))!),
+      resizedPortraitTransparentRgbaSha256,
+    );
+  });
+
+  test('larger diagnostic fixture matches independent Pica goldens', () async {
+    final config = I2IConfig()..setImage(diagnosticStealthCarrierPng());
+
+    final opaque = await PrepareI2iRequestUseCase(config: config)(
+      targetWidth: 37,
+      targetHeight: 29,
+    );
+    final transparent = await PrepareI2iRequestUseCase(
+      config: config,
+      transparentBackground: true,
+    )(
+      targetWidth: 37,
+      targetHeight: 29,
+    );
+
+    expect(
+      rgbaSha256(img.decodePng(base64Decode(opaque!.imageB64))!),
+      diagnosticResizedOpaqueRgbaSha256,
+    );
+    expect(
+      rgbaSha256(img.decodePng(base64Decode(transparent!.imageB64))!),
+      diagnosticResizedTransparentRgbaSha256,
+    );
+  });
+
+  test('opaque Pica Lanczos3 path matches landscape and portrait goldens',
+      () async {
+    final config = I2IConfig()
+      ..setImage(stealthCarrierPng(transparentTail: false));
+    final useCase = PrepareI2iRequestUseCase(config: config);
+
+    final landscape = await useCase(targetWidth: 13, targetHeight: 7);
+    final portrait = await useCase(targetWidth: 7, targetHeight: 13);
+
+    expect(
+      rgbaSha256(img.decodePng(base64Decode(landscape!.imageB64))!),
+      resizedOpaqueOnlyLandscapeRgbaSha256,
+    );
+    expect(
+      rgbaSha256(img.decodePng(base64Decode(portrait!.imageB64))!),
+      resizedOpaqueOnlyPortraitRgbaSha256,
+    );
   });
 
   test('img2img plan converts an opaque JPEG into target-size PNG', () async {
