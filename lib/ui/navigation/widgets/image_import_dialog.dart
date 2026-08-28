@@ -255,6 +255,12 @@ class _ImageImportDialogState extends State<ImageImportDialog> {
         ),
       );
 
+  Future<void> _useAsInpaint() => _runAction(
+        () async => widget.viewmodel.useAsInpaint(
+          _candidate.bytes,
+        ),
+      );
+
   Future<void> _useAsVibeTransfer() => _runAction(
         () => widget.viewmodel.useAsVibeTransfer(
           _candidate.bytes,
@@ -336,6 +342,13 @@ class _ImageImportDialogState extends State<ImageImportDialog> {
                         onPressed: _busy ? null : _useAsImageToImage,
                         icon: const Icon(Icons.image_outlined),
                         label: Text(context.tr('image_import_image_to_image')),
+                      ),
+                    if (capabilities.supports(ImageImportAction.inpaint))
+                      FilledButton.icon(
+                        key: const Key('image-import-inpaint'),
+                        onPressed: _busy ? null : _useAsInpaint,
+                        icon: const Icon(Icons.brush_outlined),
+                        label: Text(context.tr('inpaint_section')),
                       ),
                     if (capabilities.supports(ImageImportAction.vibeTransfer))
                       FilledButton.icon(

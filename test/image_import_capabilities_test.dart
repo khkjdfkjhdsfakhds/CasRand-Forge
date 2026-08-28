@@ -5,12 +5,16 @@ void main() {
   test('image import actions follow the active NovelAI model family', () {
     expect(
       ImageImportCapabilities.forModel('nai-diffusion-5-full').actions,
-      {ImageImportAction.imageToImage},
+      {
+        ImageImportAction.imageToImage,
+        ImageImportAction.inpaint,
+      },
     );
     expect(
       ImageImportCapabilities.forModel('nai-diffusion-4-5-full').actions,
       {
         ImageImportAction.imageToImage,
+        ImageImportAction.inpaint,
         ImageImportAction.vibeTransfer,
         ImageImportAction.preciseReference,
       },
@@ -19,6 +23,7 @@ void main() {
       ImageImportCapabilities.forModel('nai-diffusion-4-full').actions,
       {
         ImageImportAction.imageToImage,
+        ImageImportAction.inpaint,
         ImageImportAction.vibeTransfer,
       },
     );
@@ -26,6 +31,7 @@ void main() {
       ImageImportCapabilities.forModel('nai-diffusion-3').actions,
       {
         ImageImportAction.imageToImage,
+        ImageImportAction.inpaint,
         ImageImportAction.vibeTransfer,
       },
     );

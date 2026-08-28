@@ -42,6 +42,14 @@ class MetadataDropAreaViewmodel extends ChangeNotifier {
     return handoff.useAsBaseImage(bytes);
   }
 
+  bool useAsInpaint(Uint8List bytes) {
+    if (!imageImportCapabilities.supports(ImageImportAction.inpaint)) {
+      return false;
+    }
+    final handoff = _imageHandoff ?? GetIt.I<ImageHandoffCoordinator>();
+    return handoff.sendToInpaint(bytes);
+  }
+
   Future<bool> useAsVibeTransfer(Uint8List bytes, String fileName) async {
     final capabilities = imageImportCapabilities;
     if (!capabilities.supports(ImageImportAction.vibeTransfer)) return false;

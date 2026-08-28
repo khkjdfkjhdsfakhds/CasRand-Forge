@@ -171,6 +171,7 @@ void main() {
 
     expect(find.byKey(const Key('image-import-preview')), findsOneWidget);
     expect(find.byKey(const Key('image-import-i2i')), findsOneWidget);
+    expect(find.byKey(const Key('image-import-inpaint')), findsOneWidget);
     expect(find.byKey(const Key('image-import-vibe')), findsNothing);
     expect(
         find.byKey(const Key('image-import-precise-reference')), findsNothing);
@@ -183,6 +184,68 @@ void main() {
 
     expect(navigation.requestedDestination.value, AppDestination.imageToImage);
     expect(payload.i2iConfig.imageBytes, bytes);
+    expect(payload.promptMode, PromptMode.random);
+  });
+
+  testWidgets('NAI5 inpaint action opens the mask-editor entry mode', (
+    tester,
+  ) async {
+    final payload = _payloadForModel('nai-diffusion-5-full');
+    final navigation = NavigationRequest();
+    final handoff = ImageHandoffCoordinator(
+      payloadConfig: payload,
+      navigation: navigation,
+      readDimensions: (_) async => const ImageDimensions(width: 2, height: 3),
+      createPreview: (bytes, _) async => bytes,
+    );
+    final viewmodel = MetadataDropAreaViewmodel(
+      payloadConfig: payload,
+      imageHandoff: handoff,
+    );
+    final bytes = _testPng();
+
+    await tester.pumpWidget(
+      EasyLocalization(
+        supportedLocales: const [Locale('en')],
+        path: 'test',
+        assetLoader: _TestAssetLoader(translations),
+        fallbackLocale: const Locale('en'),
+        startLocale: const Locale('en'),
+        saveLocale: false,
+        child: Builder(
+          builder: (context) => MaterialApp(
+            localizationsDelegates: context.localizationDelegates,
+            supportedLocales: context.supportedLocales,
+            locale: context.locale,
+            home: Scaffold(
+              body: Builder(
+                builder: (context) => TextButton(
+                  onPressed: () => showImageImportDialog(
+                    context,
+                    candidate: ImageImportCandidate(
+                      bytes: bytes,
+                      fileName: 'inpaint.png',
+                    ),
+                    viewmodel: viewmodel,
+                  ),
+                  child: const Text('Open Inpaint'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open Inpaint'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('image-import-inpaint')));
+    await tester.pumpAndSettle();
+
+    expect(payload.i2iConfig.imageBytes, same(bytes));
+    expect(navigation.requestedDestination.value, AppDestination.imageToImage);
+    expect(navigation.i2iEntryMode, I2iEntryMode.inpaint);
     expect(payload.promptMode, PromptMode.random);
   });
 

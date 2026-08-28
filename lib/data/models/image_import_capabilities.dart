@@ -1,5 +1,6 @@
 enum ImageImportAction {
   imageToImage,
+  inpaint,
   vibeTransfer,
   preciseReference,
 }
@@ -26,6 +27,7 @@ class ImageImportCapabilities {
     return ImageImportCapabilities._(
       Set.unmodifiable({
         ImageImportAction.imageToImage,
+        ImageImportAction.inpaint,
         if (!isV5) ImageImportAction.vibeTransfer,
         if (isV45) ImageImportAction.preciseReference,
       }),
