@@ -4,6 +4,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_command/flutter_command.dart';
 import 'package:get_it/get_it.dart';
+import 'package:nai_casrand/data/models/image_import_capabilities.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
@@ -228,7 +229,9 @@ class _GenerationPageViewState extends State<GenerationPageView> {
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setState) {
           final config = viewmodel.payloadConfig;
-          final preciseSupported = config.paramConfig.model.contains('-4-5-');
+          final preciseSupported = ImageImportCapabilities.forModel(
+            config.paramConfig.model,
+          ).supports(ImageImportAction.preciseReference);
           return AlertDialog(
             title: Text(tr('advanced_features_status')),
             content: ConstrainedBox(

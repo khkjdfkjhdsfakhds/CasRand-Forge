@@ -2,6 +2,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
+import 'package:nai_casrand/data/models/image_import_capabilities.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/ui/core/widgets/prompt_mode_switch_button.dart';
 
@@ -84,8 +85,10 @@ class ParametersConfigViewmodel extends ChangeNotifier {
     );
   }
 
-  bool get isV4 => config.model.contains('-4-');
-  bool get isV5 => config.model.contains('-5-');
+  ImageImportCapabilities get capabilities =>
+      ImageImportCapabilities.forModel(config.model);
+  bool get isV4 => capabilities.isV4Family;
+  bool get isV5 => capabilities.isV5Family;
   bool get isModern => isV4 || isV5;
 
   void setLegacyUc(bool? value) {

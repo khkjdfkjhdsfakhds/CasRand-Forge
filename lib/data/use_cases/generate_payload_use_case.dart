@@ -2,6 +2,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:nai_casrand/core/constants/parameters.dart';
 import 'package:nai_casrand/data/models/character_config.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
+import 'package:nai_casrand/data/models/image_import_capabilities.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/precise_reference_config.dart';
@@ -181,7 +182,9 @@ class GeneratePayloadUseCase {
             .where((config) => config.enabled)
             .toList(growable: false)
         : <PreciseReferenceConfig>[];
-    if (payloadConfig.vibeEnabled && paramConfig.model.contains('-3')) {
+    final imageCapabilities =
+        ImageImportCapabilities.forModel(paramConfig.model);
+    if (payloadConfig.vibeEnabled && imageCapabilities.usesLegacyVibe) {
       // Vibe config for NAI3 models
       final imageB64List = [];
       final referenceStrengthList = [];
@@ -195,7 +198,9 @@ class GeneratePayloadUseCase {
       paramPayload['reference_strength_multiple'] = referenceStrengthList;
       paramPayload['reference_information_extracted_multiple'] =
           imformationExtractedList;
-    } else if (paramConfig.model.contains('-4-5-') &&
+    } else if (imageCapabilities.supports(
+          ImageImportAction.preciseReference,
+        ) &&
         activePreciseReferenceList.isNotEmpty) {
       paramPayload['director_reference_images'] = activePreciseReferenceList
           .map((config) => config.imageB64)
@@ -220,7 +225,7 @@ class GeneratePayloadUseCase {
           activePreciseReferenceList
               .map((config) => 1.0 - config.fidelity)
               .toList(growable: false);
-    } else if (payloadConfig.vibeEnabled && paramConfig.model.contains('-4-')) {
+    } else if (payloadConfig.vibeEnabled && imageCapabilities.isV4Family) {
       // Vibe config for NAI4 models
       final imageB64List = [];
       final infoExtractedList = [];

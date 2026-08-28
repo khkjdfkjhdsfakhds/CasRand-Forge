@@ -78,6 +78,7 @@ const Map<String, String> inpaintModelMapping = {
 };
 
 const Map<String, String> sourceToModel = {
+  'NovelAI Diffusion V5 0ADF9AB7': 'nai-diffusion-5-full',
   'Stable Diffusion XL C1E1DE52': 'nai-diffusion-3',
   'Stable Diffusion XL 7BCCAA2C': 'nai-diffusion-3',
   'Stable Diffusion XL 9CC2F394': 'nai-diffusion-furry-3',

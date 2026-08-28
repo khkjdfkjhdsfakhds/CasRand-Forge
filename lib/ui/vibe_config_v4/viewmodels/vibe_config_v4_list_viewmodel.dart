@@ -93,15 +93,14 @@ class VibeConfigV4ListViewmodel extends ChangeNotifier {
     final added = <VibeConfigV4>[];
 
     if (imageExtensions.contains(extension)) {
-      added.add(
-        VibeConfigV4.fromImageBytes(
-          fileName,
-          fileBytes,
-          initialReferenceStrength,
-          informationExtracted: initialInformationExtracted,
-          model: currentModel,
-        ),
+      final count = payloadConfig.addVibeImage(
+        fileBytes,
+        fileName,
+        referenceStrength: initialReferenceStrength,
+        informationExtracted: initialInformationExtracted,
       );
+      notifyListeners();
+      return count;
     } else if (extension == 'naiv4vibe') {
       added.add(
         VibeConfigV4.fromNaiV4VibeJson(

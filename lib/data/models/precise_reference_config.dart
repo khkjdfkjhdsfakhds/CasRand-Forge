@@ -81,70 +81,37 @@ class PreciseReferenceConfig {
   Uint8List get imageBytes => base64Decode(imageB64);
 
   static Future<Uint8List> _processImageBytes(Uint8List imageBytes) async {
-    final sourceImage = img.decodeImage(imageBytes);
-    if (sourceImage == null) {
-      throw const FormatException('Unsupported Precise Reference image file.');
-    }
-    final targetSize = _selectCanvasSize(sourceImage.width, sourceImage.height);
-    final sourceRatio = sourceImage.width / sourceImage.height;
-    final targetRatio = targetSize.width / targetSize.height;
-    final resizedWidth = sourceRatio > targetRatio
-        ? targetSize.width
-        : (targetSize.height * sourceRatio).round();
-    final resizedHeight = sourceRatio > targetRatio
-        ? (targetSize.width / sourceRatio).round()
-        : targetSize.height;
-
     if (defaultTargetPlatform == TargetPlatform.macOS) {
+      final prepared = await compute(_prepareMacReference, imageBytes);
       final processedPixels =
           await _imageProcessorChannel.invokeMethod<Uint8List>(
         'processImage',
         {
-          'sourcePixels': sourceImage.getBytes(order: img.ChannelOrder.rgba),
-          'sourceWidth': sourceImage.width,
-          'sourceHeight': sourceImage.height,
-          'targetWidth': targetSize.width,
-          'targetHeight': targetSize.height,
-          'drawWidth': resizedWidth,
-          'drawHeight': resizedHeight,
-          'offsetX': (targetSize.width - resizedWidth) / 2,
-          'offsetY': (targetSize.height - resizedHeight) / 2,
+          'sourcePixels': prepared['sourcePixels'],
+          'sourceWidth': prepared['sourceWidth'],
+          'sourceHeight': prepared['sourceHeight'],
+          'targetWidth': prepared['targetWidth'],
+          'targetHeight': prepared['targetHeight'],
+          'drawWidth': prepared['drawWidth'],
+          'drawHeight': prepared['drawHeight'],
+          'offsetX': prepared['offsetX'],
+          'offsetY': prepared['offsetY'],
         },
       );
       if (processedPixels == null) {
         throw StateError(
             'macOS Precise Reference processing returned no data.');
       }
-      final processedImage = img.Image.fromBytes(
-        width: targetSize.width,
-        height: targetSize.height,
-        bytes: processedPixels.buffer,
-        bytesOffset: processedPixels.offsetInBytes,
-        numChannels: 4,
-        order: img.ChannelOrder.rgba,
+      return compute(
+        _encodeMacReference,
+        <String, Object>{
+          'pixels': processedPixels,
+          'width': prepared['targetWidth']!,
+          'height': prepared['targetHeight']!,
+        },
       );
-      return Uint8List.fromList(img.encodePng(processedImage));
     }
-
-    final resizedImage = img.copyResize(
-      sourceImage,
-      width: resizedWidth,
-      height: resizedHeight,
-      interpolation: img.Interpolation.cubic,
-    );
-    final canvas = img.Image(
-      width: targetSize.width,
-      height: targetSize.height,
-      numChannels: 3,
-    );
-    img.fill(canvas, color: img.ColorRgb8(0, 0, 0));
-    img.compositeImage(
-      canvas,
-      resizedImage,
-      dstX: ((targetSize.width - resizedWidth) / 2).round(),
-      dstY: ((targetSize.height - resizedHeight) / 2).round(),
-    );
-    return Uint8List.fromList(img.encodePng(canvas));
+    return compute(_processDartReference, imageBytes);
   }
 
   static ({int width, int height}) _selectCanvasSize(int width, int height) {
@@ -156,4 +123,85 @@ class PreciseReferenceConfig {
       return candidateDistance < bestDistance ? candidate : best;
     });
   }
+}
+
+Map<String, Object> _prepareMacReference(Uint8List imageBytes) {
+  final sourceImage = _decodeReference(imageBytes);
+  final geometry = _referenceGeometry(sourceImage.width, sourceImage.height);
+  return <String, Object>{
+    'sourcePixels': sourceImage.getBytes(order: img.ChannelOrder.rgba),
+    'sourceWidth': sourceImage.width,
+    'sourceHeight': sourceImage.height,
+    ...geometry,
+  };
+}
+
+Uint8List _encodeMacReference(Map<String, Object> values) {
+  final pixels = values['pixels']! as Uint8List;
+  final image = img.Image.fromBytes(
+    width: values['width']! as int,
+    height: values['height']! as int,
+    bytes: pixels.buffer,
+    bytesOffset: pixels.offsetInBytes,
+    numChannels: 4,
+    order: img.ChannelOrder.rgba,
+  );
+  return Uint8List.fromList(img.encodePng(image));
+}
+
+Uint8List _processDartReference(Uint8List imageBytes) {
+  final sourceImage = _decodeReference(imageBytes);
+  final geometry = _referenceGeometry(sourceImage.width, sourceImage.height);
+  final targetWidth = geometry['targetWidth']! as int;
+  final targetHeight = geometry['targetHeight']! as int;
+  final drawWidth = geometry['drawWidth']! as int;
+  final drawHeight = geometry['drawHeight']! as int;
+  final resizedImage = img.copyResize(
+    sourceImage,
+    width: drawWidth,
+    height: drawHeight,
+    interpolation: img.Interpolation.cubic,
+  );
+  final canvas = img.Image(
+    width: targetWidth,
+    height: targetHeight,
+    numChannels: 3,
+  );
+  img.fill(canvas, color: img.ColorRgb8(0, 0, 0));
+  img.compositeImage(
+    canvas,
+    resizedImage,
+    dstX: ((targetWidth - drawWidth) / 2).round(),
+    dstY: ((targetHeight - drawHeight) / 2).round(),
+  );
+  return Uint8List.fromList(img.encodePng(canvas));
+}
+
+img.Image _decodeReference(Uint8List imageBytes) {
+  final sourceImage = img.decodeImage(imageBytes);
+  if (sourceImage == null) {
+    throw const FormatException('Unsupported Precise Reference image file.');
+  }
+  return sourceImage;
+}
+
+Map<String, Object> _referenceGeometry(int sourceWidth, int sourceHeight) {
+  final targetSize =
+      PreciseReferenceConfig._selectCanvasSize(sourceWidth, sourceHeight);
+  final sourceRatio = sourceWidth / sourceHeight;
+  final targetRatio = targetSize.width / targetSize.height;
+  final drawWidth = sourceRatio > targetRatio
+      ? targetSize.width
+      : (targetSize.height * sourceRatio).round();
+  final drawHeight = sourceRatio > targetRatio
+      ? (targetSize.width / sourceRatio).round()
+      : targetSize.height;
+  return <String, Object>{
+    'targetWidth': targetSize.width,
+    'targetHeight': targetSize.height,
+    'drawWidth': drawWidth,
+    'drawHeight': drawHeight,
+    'offsetX': (targetSize.width - drawWidth) / 2,
+    'offsetY': (targetSize.height - drawHeight) / 2,
+  };
 }

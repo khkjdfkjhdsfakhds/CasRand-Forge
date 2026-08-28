@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:nai_casrand/data/models/character_config.dart';
 import 'package:nai_casrand/data/models/director_tool_config.dart';
@@ -6,6 +7,8 @@ import 'package:nai_casrand/data/models/enhance_config.dart';
 import 'package:nai_casrand/data/models/generation_profile.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/models/i2i_config.dart';
+import 'package:nai_casrand/data/models/image_import_capabilities.dart';
+import 'package:nai_casrand/data/models/metadata_import_options.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/precise_reference_config.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
@@ -76,6 +79,49 @@ class PayloadConfig {
   set paramConfig(ParamConfig value) => activeProfile.paramConfig = value;
 
   Settings settings;
+
+  int addVibeImage(
+    Uint8List bytes,
+    String fileName, {
+    double referenceStrength = 0.6,
+    double informationExtracted = 0.7,
+  }) {
+    final capabilities = ImageImportCapabilities.forModel(paramConfig.model);
+    if (!capabilities.supports(ImageImportAction.vibeTransfer)) return 0;
+    final wasEmpty = !hasVibeResources;
+    if (capabilities.isV4Family) {
+      vibeConfigListV4.add(
+        VibeConfigV4.fromImageBytes(
+          fileName,
+          bytes,
+          referenceStrength,
+          informationExtracted: informationExtracted,
+          model: paramConfig.model,
+        ),
+      );
+    } else {
+      vibeConfigList.add(
+        VibeConfig.fromBytes(bytes, fileName, 1.0, 0.3),
+      );
+    }
+    noteVibeImported(wasEmpty: wasEmpty);
+    return 1;
+  }
+
+  Future<bool> addPreciseReferenceImage(
+    Uint8List bytes,
+    String fileName,
+  ) async {
+    final capabilities = ImageImportCapabilities.forModel(paramConfig.model);
+    if (!capabilities.supports(ImageImportAction.preciseReference)) {
+      return false;
+    }
+    final wasEmpty = preciseReferenceConfigList.isEmpty;
+    final reference = await PreciseReferenceConfig.fromBytes(bytes, fileName);
+    preciseReferenceConfigList.add(reference);
+    notePreciseReferenceImported(wasEmpty: wasEmpty);
+    return true;
+  }
 
   I2IConfig i2iConfig = I2IConfig();
   EnhanceConfig enhanceConfig = EnhanceConfig();
@@ -500,6 +546,120 @@ class PayloadConfig {
     return loadedCount;
   }
 
+  MetadataImportAvailability metadataImportAvailability(
+    Map<String, dynamic> metadata, {
+    String? prompt,
+    String? model,
+  }) {
+    final characters = _metadataCharacters(metadata);
+    final settingsJson = _metadataSettingsJson(metadata, model: model);
+    final settingsProbe =
+        ParamConfig.fromJson(fixedProfile.paramConfig.toJson());
+    final settingsCount = settingsProbe.loadJson(settingsJson);
+    return MetadataImportAvailability(
+      prompt: (prompt ?? _metadataBasePrompt(metadata)) != null,
+      undesiredContent: _metadataNegativePrompt(metadata) != null,
+      characters: characters != null && characters.isNotEmpty,
+      settings: settingsCount > 0,
+      seed: metadata['seed'] is num || metadata['random_seed'] is bool,
+    );
+  }
+
+  int importMetadataSelectively(
+    Map<String, dynamic> metadata, {
+    String? prompt,
+    String? model,
+    required MetadataImportOptions options,
+  }) {
+    final working = fixedProfile.copy();
+    var loadedCount = 0;
+
+    if (options.prompt) {
+      final imported = prompt ?? _metadataBasePrompt(metadata);
+      if (imported != null) {
+        final next = _prepareImportedPrompt(imported, options.cleanImports);
+        final value = options.append
+            ? _appendPromptText(_plainPrompt(working.rootPromptConfig), next)
+            : next;
+        working.rootPromptConfig = fixedPromptConfig(value);
+        loadedCount++;
+      }
+    }
+
+    if (options.undesiredContent) {
+      final imported = _metadataNegativePrompt(metadata);
+      if (imported != null) {
+        final next = _prepareImportedPrompt(imported, options.cleanImports);
+        final value = options.append
+            ? _appendPromptText(
+                _plainPrompt(working.negativePromptConfig),
+                next,
+              )
+            : next;
+        working.negativePromptConfig = fixedPromptConfig(
+          value,
+          negative: true,
+        );
+        working.paramConfig.negativePrompt = value;
+        loadedCount++;
+      }
+    }
+
+    if (options.characters) {
+      final imported = _metadataCharacters(metadata);
+      if (imported != null && imported.isNotEmpty) {
+        if (options.cleanImports) {
+          for (final character in imported) {
+            character.positivePromptConfig = fixedPromptConfig(
+              _prepareImportedPrompt(
+                _plainPrompt(character.positivePromptConfig),
+                true,
+              ),
+            );
+            character.negativePromptConfig = fixedPromptConfig(
+              _prepareImportedPrompt(
+                _plainPrompt(character.negativePromptConfig),
+                true,
+              ),
+              negative: true,
+            );
+          }
+        }
+        if (options.append) {
+          working.characterConfigList.addAll(imported);
+        } else {
+          working.characterConfigList = imported;
+        }
+        final v4Prompt = metadata['v4_prompt'];
+        if (v4Prompt is Map && v4Prompt['use_coords'] is bool) {
+          working.paramConfig.autoPosition = !(v4Prompt['use_coords'] as bool);
+        }
+        loadedCount += imported.length;
+      }
+    }
+
+    if (options.settings) {
+      loadedCount += working.paramConfig.loadJson(
+        _metadataSettingsJson(metadata, model: model),
+      );
+    }
+
+    if (options.seed) {
+      final seedJson = <String, dynamic>{};
+      if (metadata['seed'] is num) {
+        seedJson['seed'] = metadata['seed'];
+      } else if (metadata['random_seed'] is bool) {
+        seedJson['random_seed'] = metadata['random_seed'];
+      }
+      loadedCount += working.paramConfig.loadJson(seedJson);
+    }
+
+    if (loadedCount == 0) return 0;
+    fixedProfile = working;
+    promptMode = PromptMode.fixed;
+    return loadedCount;
+  }
+
   void switchPromptMode() {
     promptMode =
         promptMode == PromptMode.random ? PromptMode.fixed : PromptMode.random;
@@ -552,20 +712,121 @@ class PayloadConfig {
     return value is String ? value : null;
   }
 
+  static const Set<String> _metadataSettingKeys = {
+    'sizes',
+    'width',
+    'height',
+    'scale',
+    'sampler',
+    'steps',
+    'n_samples',
+    'ucPreset',
+    'qualityToggle',
+    'sm',
+    'sm_dyn',
+    'dynamic_thresholding',
+    'controlnet_strength',
+    'legacy',
+    'add_original_image',
+    'uncond_scale',
+    'cfg_rescale',
+    'noise_schedule',
+    'deliberate_euler_ancestral_bug',
+    'prefer_brownian',
+    'straight_alpha',
+    'tag_hint_qt',
+    'tag_hint_uc_preset',
+    'tag_hint_transparent_background',
+    'variety_plus',
+    'legacy_uc',
+    'auto_position',
+  };
+
+  static Map<String, dynamic> _metadataSettingsJson(
+    Map<String, dynamic> metadata, {
+    String? model,
+  }) {
+    final result = <String, dynamic>{};
+    for (final key in _metadataSettingKeys) {
+      final value = metadata[key];
+      if (key == 'sizes' && value is List) {
+        final sizes = value
+            .whereType<Map>()
+            .where(
+              (entry) => entry['width'] is num && entry['height'] is num,
+            )
+            .map(
+              (entry) => <String, dynamic>{
+                'width': entry['width'],
+                'height': entry['height'],
+              },
+            )
+            .toList(growable: false);
+        if (sizes.isNotEmpty) result[key] = sizes;
+        continue;
+      }
+      if (_isValidMetadataSetting(key, value)) result[key] = value;
+    }
+    if (model != null && model.isNotEmpty) result['model'] = model;
+    return result;
+  }
+
+  static bool _isValidMetadataSetting(String key, Object? value) {
+    if (value == null) return false;
+    if (const {'sampler', 'noise_schedule'}.contains(key)) {
+      return value is String;
+    }
+    if (const {
+      'width',
+      'height',
+      'scale',
+      'steps',
+      'n_samples',
+      'ucPreset',
+      'controlnet_strength',
+      'uncond_scale',
+      'cfg_rescale',
+      'tag_hint_qt',
+      'tag_hint_uc_preset',
+    }.contains(key)) {
+      return value is num;
+    }
+    return value is bool;
+  }
+
+  static String _prepareImportedPrompt(String value, bool cleanImports) {
+    if (!cleanImports) return value;
+    return value
+        .replaceAll(RegExp(r'[\[\]{}]'), '')
+        .replaceAll(RegExp(r',\s*'), ', ')
+        .trim();
+  }
+
+  static String _appendPromptText(String existing, String imported) {
+    final left = existing.trim().replaceFirst(RegExp(r'[,\s]+$'), '');
+    final right = imported.trim().replaceFirst(RegExp(r'^[,\s]+'), '');
+    if (left.isEmpty) return right;
+    if (right.isEmpty) return left;
+    return '$left, $right';
+  }
+
   static List<CharacterConfig>? _metadataCharacters(Map<String, dynamic> json) {
     final v4Prompt = json['v4_prompt'];
     final v4Negative = json['v4_negative_prompt'];
     List<dynamic>? positives;
     List<dynamic>? negatives;
     if (v4Prompt is Map && v4Prompt['caption'] is Map) {
-      positives =
-          (v4Prompt['caption'] as Map)['char_captions'] as List<dynamic>?;
+      final value = (v4Prompt['caption'] as Map)['char_captions'];
+      if (value is List) positives = value;
     }
     if (v4Negative is Map && v4Negative['caption'] is Map) {
-      negatives =
-          (v4Negative['caption'] as Map)['char_captions'] as List<dynamic>?;
+      final value = (v4Negative['caption'] as Map)['char_captions'];
+      if (value is List) negatives = value;
     }
-    positives ??= json['characterPrompts'] as List<dynamic>?;
+    final legacyCharacters = json['characterPrompts'];
+    if (positives == null && legacyCharacters is List) {
+      positives = legacyCharacters;
+    }
     if (positives == null) return null;
     // V5 free-positioning metadata stores the character as a continuous
     // normalized point; preserve it as freeCenter instead of quantizing to a

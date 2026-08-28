@@ -32,22 +32,19 @@ class VibeConfigListViewmodel extends ChangeNotifier {
     final XFile? image = await picker.pickImage(source: ImageSource.gallery);
     if (image == null) return;
     final bytes = await image.readAsBytes();
-    var newConfig = VibeConfig.fromBytes(bytes, image.name, 1.0, 0.3);
-    final wasEmpty = !payloadConfig.hasVibeResources;
-    vibeList.add(newConfig);
-    payloadConfig.noteVibeImported(wasEmpty: wasEmpty);
+    payloadConfig.addVibeImage(bytes, image.name);
     notifyListeners();
   }
 
   Future<void> handleVibeDropEvent(PerformDropEvent event) async {
-    final wasEmpty = !payloadConfig.hasVibeResources;
     final item = event.session.items.first;
     final reader = item.dataReader!;
     reader.getFile(imageFormat, (file) async {
       final data = await file.readAll();
-      vibeList.add(
-          VibeConfig.fromBytes(data, file.fileName ?? 'Unnamed Vibe', 1, 0.3));
-      payloadConfig.noteVibeImported(wasEmpty: wasEmpty);
+      payloadConfig.addVibeImage(
+        data,
+        file.fileName ?? 'Unnamed Vibe',
+      );
       notifyListeners();
     });
   }

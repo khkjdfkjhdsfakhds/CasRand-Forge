@@ -89,6 +89,10 @@ void main() {
     );
 
     expect(await ImageService().extractMetadataFromBytes(png), metadata);
+    expect(
+      await ImageService().extractMetadataFromBytesInBackground(png),
+      metadata,
+    );
   });
 
   test('reads the authoritative NovelAI outer JSON from JPEG UserComment',

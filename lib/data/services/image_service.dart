@@ -164,6 +164,10 @@ class ImageService {
     }
   }
 
+  /// Decodes and scans image metadata outside the UI isolate.
+  Future<String?> extractMetadataFromBytesInBackground(Uint8List bytes) =>
+      compute(_extractMetadataFromBytesInBackground, bytes);
+
   static bool _looksLikeJpeg(Uint8List bytes) =>
       bytes.length >= 2 && bytes[0] == 0xff && bytes[1] == 0xd8;
 
@@ -195,3 +199,6 @@ class ImageService {
     return looksNovelAi ? value : null;
   }
 }
+
+Future<String?> _extractMetadataFromBytesInBackground(Uint8List bytes) =>
+    ImageService().extractMetadataFromBytes(bytes);

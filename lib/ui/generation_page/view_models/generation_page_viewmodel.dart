@@ -13,6 +13,7 @@ import 'package:nai_casrand/data/models/director_tool_config.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/models/generation_performance_diagnostics.dart';
 import 'package:nai_casrand/data/models/i2i_config.dart';
+import 'package:nai_casrand/data/models/image_import_capabilities.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/models/opus_usage.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
@@ -246,8 +247,12 @@ class GenerationPageViewmodel extends ChangeNotifier {
   int get _pendingVibeEncodingAnlas {
     final config = payloadConfig;
     final model = config.paramConfig.model;
-    if (!config.vibeEnabled || !model.contains('-4-')) return 0;
-    if (config.preciseReferenceEnabled && model.contains('-4-5-')) return 0;
+    final capabilities = ImageImportCapabilities.forModel(model);
+    if (!config.vibeEnabled || !capabilities.isV4Family) return 0;
+    if (config.preciseReferenceEnabled &&
+        capabilities.supports(ImageImportAction.preciseReference)) {
+      return 0;
+    }
     final pendingCount = config.vibeConfigListV4
         .where((vibe) => vibe.canEncode && vibe.encodingFor(model) == null)
         .length;
@@ -314,7 +319,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
         : !usage.isNegative;
     final sm = _smActive && paramConfig.sm;
     final smDyn = _smActive && paramConfig.smDyn;
-    final supportsReferences = !paramConfig.model.contains('diffusion-5');
+    final supportsReferences = ImageImportCapabilities.forModel(
+      paramConfig.model,
+    ).supports(ImageImportAction.vibeTransfer);
     final preciseCount =
         supportsReferences && payloadConfig.preciseReferenceEnabled
             ? payloadConfig.preciseReferenceConfigList
@@ -1610,14 +1617,16 @@ class GenerationPageViewmodel extends ChangeNotifier {
     while (true) {
       final config = payloadConfig;
       final model = config.paramConfig.model;
-      if (!config.vibeEnabled || !model.contains('-4-')) {
+      final capabilities = ImageImportCapabilities.forModel(model);
+      if (!config.vibeEnabled || !capabilities.isV4Family) {
         return extractedCount * 2;
       }
       // Precise Reference takes the V4.5 reference payload slot. The normal
       // setters keep the two features mutually exclusive, but this guard also
       // protects migrated or transient state from spending 2 Anlas on an
       // encoding that would not be sent.
-      if (config.preciseReferenceEnabled && model.contains('-4-5-')) {
+      if (config.preciseReferenceEnabled &&
+          capabilities.supports(ImageImportAction.preciseReference)) {
         return extractedCount * 2;
       }
 
@@ -1666,11 +1675,13 @@ class GenerationPageViewmodel extends ChangeNotifier {
 
       final currentConfig = payloadConfig;
       final currentModel = currentConfig.paramConfig.model;
-      if (!currentConfig.vibeEnabled || !currentModel.contains('-4-')) {
+      final currentCapabilities =
+          ImageImportCapabilities.forModel(currentModel);
+      if (!currentConfig.vibeEnabled || !currentCapabilities.isV4Family) {
         return extractedCount * 2;
       }
       if (currentConfig.preciseReferenceEnabled &&
-          currentModel.contains('-4-5-')) {
+          currentCapabilities.supports(ImageImportAction.preciseReference)) {
         return extractedCount * 2;
       }
       if (currentConfig.vibeConfigListV4
@@ -1683,7 +1694,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
   void _applyCurrentVibesToPayload(PayloadGenerationResult result) {
     final config = payloadConfig;
     final model = config.paramConfig.model;
-    if (!model.contains('-4-')) return;
+    final capabilities = ImageImportCapabilities.forModel(model);
+    if (!capabilities.isV4Family) return;
 
     final parameters = result.payload['parameters'];
     if (parameters is! Map<String, dynamic>) return;
@@ -1695,7 +1707,10 @@ class GenerationPageViewmodel extends ChangeNotifier {
     parameters['reference_information_extracted_multiple'] = <double>[];
 
     if (!config.vibeEnabled) return;
-    if (config.preciseReferenceEnabled && model.contains('-4-5-')) return;
+    if (config.preciseReferenceEnabled &&
+        capabilities.supports(ImageImportAction.preciseReference)) {
+      return;
+    }
 
     final encodings = <String>[];
     final strengths = <double>[];

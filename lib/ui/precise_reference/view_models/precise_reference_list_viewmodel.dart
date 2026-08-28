@@ -2,6 +2,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
+import 'package:nai_casrand/data/models/image_import_capabilities.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/precise_reference_config.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
@@ -12,7 +13,9 @@ class PreciseReferenceListViewmodel extends ChangeNotifier {
   List<PreciseReferenceConfig> get referenceList =>
       payloadConfig.preciseReferenceConfigList;
 
-  bool get isSupported => payloadConfig.paramConfig.model.contains('-4-5-');
+  bool get isSupported => ImageImportCapabilities.forModel(
+        payloadConfig.paramConfig.model,
+      ).supports(ImageImportAction.preciseReference);
   int get nSamples => payloadConfig.paramConfig.nSamples;
   int get activeReferenceCount =>
       referenceList.where((config) => config.enabled).length;
@@ -47,9 +50,7 @@ class PreciseReferenceListViewmodel extends ChangeNotifier {
   }
 
   Future<void> addReferenceBytes(Uint8List bytes, String fileName) async {
-    final wasEmpty = referenceList.isEmpty;
-    referenceList.add(await PreciseReferenceConfig.fromBytes(bytes, fileName));
-    payloadConfig.notePreciseReferenceImported(wasEmpty: wasEmpty);
+    await payloadConfig.addPreciseReferenceImage(bytes, fileName);
     notifyListeners();
   }
 
