@@ -708,5 +708,6 @@ void main() {
       expect(zh[key], isA<String>());
       expect((zh[key] as String).trim(), isNotEmpty);
     }
+    expect(zh['image_import_undesired_content'], '负面提示词');
   });
 }

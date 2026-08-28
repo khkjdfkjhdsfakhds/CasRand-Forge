@@ -161,7 +161,7 @@
     "image_import_metadata_invalid": "图片元数据无法读取，但仍可继续使用这张图片。",
     "image_import_fixed_mode_warning": "导入图片元数据后会进入固定提示词模式；需要继续随机级联生成时，请手动切回随机提示词模式。",
     "image_import_prompt": "提示词",
-    "image_import_undesired_content": "不期望内容",
+    "image_import_undesired_content": "负面提示词",
     "image_import_characters": "角色",
     "image_import_settings": "生成设置",
     "image_import_seed": "种子",
