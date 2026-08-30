@@ -226,7 +226,7 @@ class _WeightSyntax {
         );
       }
       final formatted = _formatWeight(weight);
-      final replacement = '$formatted::$body::';
+      final replacement = '$formatted::${_safeNumericWeightBody(body)}::';
       return _WeightSyntax(
         source: replacement,
         numericWeight: weight,
@@ -289,7 +289,7 @@ class _WeightSyntax {
       ),
     );
     final formatted = _formatWeight(weight);
-    final replacement = '$formatted::$_trimmed::';
+    final replacement = '$formatted::${_safeNumericWeightBody(_trimmed)}::';
     return _WeightSyntax(
       source: replacement,
       numericWeight: weight,
@@ -471,6 +471,14 @@ bool _isCommentLineStart(String text, int lineStart, int index) {
 
 bool _isPromptWhitespace(String value) =>
     value == ' ' || value == '\t' || value == '\r' || value == '　';
+
+String _safeNumericWeightBody(String body) {
+  if (body.isNotEmpty) {
+    final last = body.codeUnitAt(body.length - 1);
+    if (last >= 0x30 && last <= 0x39) return '$body ';
+  }
+  return body;
+}
 
 bool _matchingDelimiter(String opening, String closing) =>
     (opening == '(' && closing == ')') ||

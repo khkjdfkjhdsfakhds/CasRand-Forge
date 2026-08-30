@@ -1,6 +1,7 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:nai_casrand/ui/prompt_assistance/prompt_editing_assistance.dart';
+import 'package:nai_casrand/ui/prompt_assistance/prompt_weight_syntax.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_entry_divider.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_entry_editor.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_config_delete_view.dart';
@@ -281,7 +282,11 @@ class _PromptEntryEditorDialogState extends State<_PromptEntryEditorDialog> {
         TextButton(
           child: Text(context.tr('confirm')),
           onPressed: () {
-            widget.viewModel.setEntries(_entries);
+            widget.viewModel.setEntries(
+              _entries
+                  .map(PromptWeightSyntax.normalizeText)
+                  .toList(growable: false),
+            );
             Navigator.of(context).pop();
           },
         ),
@@ -302,7 +307,10 @@ class _PromptEntryPreview extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         for (final (index, entry) in entries.indexed) ...[
-          Text(entry),
+          PromptWeightText(
+            entry,
+            key: Key('prompt-preview-entry-$index'),
+          ),
           if (index < entries.length - 1)
             PromptEntryDivider(
               key: Key('prompt-preview-divider-$index'),

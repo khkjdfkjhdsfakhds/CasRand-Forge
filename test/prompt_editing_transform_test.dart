@@ -64,6 +64,14 @@ void main() {
       expect(result.value.selection.extentOffset, '0.9::tag'.length);
     });
 
+    test('adds the safe separator when a newly weighted tag ends in a digit',
+        () {
+      final result = weight('haku89', 6, PromptWeightDirection.increase);
+
+      expect(result.value.text, '1.1::haku89 ::');
+      expect(result.value.selection.extentOffset, '1.1::haku89'.length);
+    });
+
     test('rounds numeric weights and unwraps exactly at one', () {
       final up = weight('0.9::tag::', 9, PromptWeightDirection.increase);
       expect(up.value.text, 'tag');
@@ -141,11 +149,13 @@ void main() {
     });
 
     test('adjusts weight when tags are separated by Chinese comma', () {
-      final firstTag = weight('blue eyes，red hair', 4, PromptWeightDirection.increase);
+      final firstTag =
+          weight('blue eyes，red hair', 4, PromptWeightDirection.increase);
       expect(firstTag.changed, isTrue);
       expect(firstTag.value.text, '1.1::blue eyes::，red hair');
 
-      final secondTag = weight('blue eyes，red hair', 14, PromptWeightDirection.increase);
+      final secondTag =
+          weight('blue eyes，red hair', 14, PromptWeightDirection.increase);
       expect(secondTag.changed, isTrue);
       expect(secondTag.value.text, 'blue eyes，1.1::red hair::');
     });

@@ -10,6 +10,7 @@ import 'package:nai_casrand/ui/prompt_config/widgets/prompt_search_replace_bar.d
 import 'package:nai_casrand/ui/prompt_config/view_models/prompt_config_viewmodel.dart';
 import 'package:nai_casrand/ui/prompt_assistance/prompt_editing_assistance.dart';
 import 'package:nai_casrand/ui/prompt_assistance/prompt_editing_transform.dart';
+import 'package:nai_casrand/ui/prompt_assistance/prompt_weight_syntax.dart';
 import 'package:nai_casrand/ui/saved_config_list/view_models/saved_config_list_viewmodel.dart';
 import 'package:nai_casrand/ui/saved_config_list/widgets/saved_config_list_view.dart';
 import 'package:provider/provider.dart';
@@ -397,6 +398,7 @@ class _FixedTextFieldState extends State<_FixedTextField> {
             onChanged: widget.onChanged,
             assistance: widget.assistance,
             completionEnabled: widget.autocompleteEnabled,
+            normalizeWeightOnFocusLoss: true,
           ),
         ],
       ),
@@ -421,7 +423,8 @@ class _HighlightableTextController extends TextEditingController
       style: style,
       withComposing: withComposing,
     );
-    return applySearchHighlights(base, context);
+    final weighted = PromptWeightSyntax.applyHighlights(base, text);
+    return applySearchHighlights(weighted, context);
   }
 }
 

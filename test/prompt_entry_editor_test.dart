@@ -7,6 +7,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_entry_divider.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_entry_editor.dart';
 import 'package:nai_casrand/ui/prompt_assistance/prompt_editing_assistance.dart';
+import 'package:nai_casrand/ui/prompt_assistance/prompt_weight_syntax.dart';
+
+List<TextSpan> leafTextSpans(TextSpan span) {
+  final result = <TextSpan>[];
+  if (span.text case final text? when text.isNotEmpty) result.add(span);
+  for (final child in span.children ?? const <InlineSpan>[]) {
+    if (child is TextSpan) result.addAll(leafTextSpans(child));
+  }
+  return result;
+}
 
 class _CountingPromptEditingAssistance extends PromptEditingAssistance {
   _CountingPromptEditingAssistance({required Future<DanbooruTagIndex> index})
@@ -1586,6 +1596,47 @@ void main() {
     expect(controller.text, '1.1::masterpiece::\n1.2::1girl::\n0.9::solo::');
     expect(
         recordedEntries, ['1.1::masterpiece::', '1.2::1girl::', '0.9::solo::']);
+  });
+
+  testWidgets('cascade editor makes a digit-ending weight safe while typing', (
+    tester,
+  ) async {
+    List<String>? recordedEntries;
+    await pumpEditor(
+      tester,
+      entries: const ['initial'],
+      onChanged: (entries) => recordedEntries = entries,
+    );
+
+    final field = find.byKey(const Key('prompt-entry-editor'));
+    await tester.tap(field);
+    await tester.enterText(field, '1.2::haku89::');
+    await tester.pump();
+
+    expect(controllerFor(tester).text, '1.2::haku89 ::');
+    expect(recordedEntries, ['1.2::haku89 ::']);
+    final controller = controllerFor(tester);
+    final rendered = controller.buildTextSpan(
+      context: tester.element(field),
+      withComposing: false,
+    );
+    final spans = leafTextSpans(rendered);
+    expect(
+      spans.any(
+        (span) =>
+            span.style?.backgroundColor ==
+            PromptWeightSyntax.increaseBackground,
+      ),
+      isTrue,
+    );
+    expect(
+      spans.any(
+        (span) =>
+            span.style?.backgroundColor ==
+            PromptWeightSyntax.delimiterBackground,
+      ),
+      isTrue,
+    );
   });
 }
 

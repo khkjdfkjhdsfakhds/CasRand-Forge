@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/ui/prompt_assistance/prompt_editing_assistance.dart';
 import 'package:nai_casrand/ui/prompt_assistance/prompt_editing_transform.dart';
+import 'package:nai_casrand/ui/prompt_assistance/prompt_weight_syntax.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_entry_divider.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_search_replace_bar.dart';
 
@@ -496,8 +497,8 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
                     onChanged: onChanged,
                     decoration: InputDecoration(
                       filled: true,
-                      fillColor:
-                          theme.colorScheme.surfaceContainerHighest.withAlpha(70),
+                      fillColor: theme.colorScheme.surfaceContainerHighest
+                          .withAlpha(70),
                       border: const OutlineInputBorder(),
                       contentPadding: _contentPadding,
                       suffixIcon: loading
@@ -507,7 +508,8 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
                               child: SizedBox(
                                 width: 16,
                                 height: 16,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2),
                               ),
                             )
                           : null,

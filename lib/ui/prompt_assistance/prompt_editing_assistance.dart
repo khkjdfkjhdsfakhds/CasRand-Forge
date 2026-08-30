@@ -5,6 +5,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
+import 'package:nai_casrand/ui/prompt_assistance/prompt_weight_syntax.dart';
 import 'package:archive/archive.dart';
 
 /// A single completion candidate from the bundled Danbooru corpus.
@@ -648,6 +649,7 @@ class PromptAssistedTextField extends StatefulWidget {
     this.fieldBuilder,
     this.onExternalEdit,
     this.refreshController,
+    this.normalizeWeightOnFocusLoss = false,
   });
 
   final String initialValue;
@@ -696,6 +698,10 @@ class PromptAssistedTextField extends StatefulWidget {
   /// candidates are published.  A document controller can expose a public
   /// wrapper around its protected [ChangeNotifier.notifyListeners] method.
   final VoidCallback? refreshController;
+
+  /// Treats focus loss as confirmation for fixed prompt fields, which do not
+  /// have an explicit Confirm action.
+  final bool normalizeWeightOnFocusLoss;
 
   /// Keeps the field editable while suppressing only the completion popup.
   /// Weight and position shortcuts remain available when this is false.
@@ -829,6 +835,15 @@ class PromptAssistedTextFieldState extends State<PromptAssistedTextField> {
 
   void _handleFocusChanged() {
     if (!_focusNode.hasFocus) {
+      if (widget.normalizeWeightOnFocusLoss) {
+        final normalized = PromptWeightSyntax.normalizeAll(_controller.value);
+        if (normalized != _controller.value) {
+          _accepting = true;
+          _controller.value = normalized;
+          _accepting = false;
+          widget.onChanged(normalized.text);
+        }
+      }
       _hideSuggestions();
     } else if (_result != null && _candidates.isNotEmpty) {
       _syncOptionsOverlay();
@@ -1141,6 +1156,7 @@ class PromptAssistedTextFieldState extends State<PromptAssistedTextField> {
             minLines: widget.minLines,
             maxLines: widget.maxLines,
             keyboardType: TextInputType.multiline,
+            inputFormatters: const [PromptWeightSafetyFormatter()],
             decoration: InputDecoration(
               hintText: widget.hintText,
               border: const OutlineInputBorder(),
@@ -1390,4 +1406,18 @@ class _PromptTextEditingController extends TextEditingController {
   _PromptTextEditingController({required super.text});
 
   void refresh() => notifyListeners();
+
+  @override
+  TextSpan buildTextSpan({
+    required BuildContext context,
+    TextStyle? style,
+    required bool withComposing,
+  }) {
+    final base = super.buildTextSpan(
+      context: context,
+      style: style,
+      withComposing: withComposing,
+    );
+    return PromptWeightSyntax.applyHighlights(base, text);
+  }
 }

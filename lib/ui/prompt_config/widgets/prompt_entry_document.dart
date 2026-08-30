@@ -288,7 +288,8 @@ class _PromptDocumentController extends TextEditingController
       ),
       withComposing: withComposing,
     );
-    return applySearchHighlights(base, context);
+    final weighted = PromptWeightSyntax.applyHighlights(base, text);
+    return applySearchHighlights(weighted, context);
   }
 
   static String _textForEntries(List<String> initialEntries) {
@@ -367,23 +368,31 @@ class _PromptDocumentFormatter extends TextInputFormatter {
         normalizedValue,
         replacement,
       );
-      controller.remapBoundaries(
+      final safeCommittedValue = PromptWeightSyntax.normalizeEdit(
         oldValue,
         committedValue,
+      );
+      controller.remapBoundaries(
+        oldValue,
+        safeCommittedValue,
         insertedNewlinesAreBoundaries: false,
       );
-      return committedValue;
+      return safeCommittedValue;
     }
 
     _expectingImeConfirmation = false;
     final internalLineBreak = HardwareKeyboard.instance.isShiftPressed &&
         replacement.insertedText == '\n';
-    controller.remapBoundaries(
+    final safeValue = PromptWeightSyntax.normalizeEdit(
       oldValue,
       normalizedValue,
+    );
+    controller.remapBoundaries(
+      oldValue,
+      safeValue,
       insertedNewlinesAreBoundaries: !internalLineBreak,
     );
-    return normalizedValue;
+    return safeValue;
   }
 
   TextEditingValue _committedImeValue(

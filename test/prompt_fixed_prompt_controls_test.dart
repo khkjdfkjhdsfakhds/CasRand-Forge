@@ -7,8 +7,18 @@ import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
 import 'package:nai_casrand/ui/prompt_assistance/prompt_editing_assistance.dart';
+import 'package:nai_casrand/ui/prompt_assistance/prompt_weight_syntax.dart';
 import 'package:nai_casrand/ui/prompt_tab/view_models/prompt_tab_viewmodel.dart';
 import 'package:nai_casrand/ui/prompt_tab/widgets/prompt_tab_view.dart';
+
+List<TextSpan> leafTextSpans(TextSpan span) {
+  final result = <TextSpan>[];
+  if (span.text case final text? when text.isNotEmpty) result.add(span);
+  for (final child in span.children ?? const <InlineSpan>[]) {
+    if (child is TextSpan) result.addAll(leafTextSpans(child));
+  }
+  return result;
+}
 
 void main() {
   setUpAll(() async {
@@ -52,6 +62,13 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pumpAndSettle();
+    if (find
+        .byKey(const Key('fixed-positive-prompt'), skipOffstage: false)
+        .evaluate()
+        .isEmpty) {
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pumpAndSettle();
+    }
   }
 
   testWidgets(
@@ -64,7 +81,7 @@ void main() {
       savedPromptConfigList: [],
       paramConfig: ParamConfig(negativePrompt: 'initial'),
       settings: Settings.fromJson({}),
-      overridePrompt: 'positive',
+      overridePrompt: '1.2::legacy2::',
       useOverridePrompt: true,
       useCharacterPromptWithOverride: false,
       promptMode: PromptMode.fixed,
@@ -74,13 +91,22 @@ void main() {
     ]);
     await pumpFixedPrompt(tester, payload: payload, assistance: assistance);
 
+    final positive = find.byKey(
+      const Key('fixed-positive-prompt'),
+      skipOffstage: false,
+    );
     final field = find.byKey(
       const Key('fixed-negative-prompt'),
       skipOffstage: false,
     );
     expect(field, findsOneWidget);
+    expect(payload.fixedProfile.rootPromptConfig.strs, ['1.2::legacy2::']);
+    await tester.ensureVisible(positive);
+    await tester.tap(positive);
     await tester.ensureVisible(field);
     await tester.tap(field);
+    await tester.pump();
+    expect(payload.fixedProfile.rootPromptConfig.strs, ['1.2::legacy2 ::']);
     await tester.enterText(field, 'low_qu');
     await tester.pump();
     await tester.pump(const Duration(seconds: 2));
@@ -94,10 +120,6 @@ void main() {
 
     expect(payload.fixedProfile.negativePromptConfig.strs, ['low_quality, ']);
 
-    final positive = find.byKey(
-      const Key('fixed-positive-prompt'),
-      skipOffstage: false,
-    );
     await tester.ensureVisible(positive);
     await tester.tap(positive);
     await tester.enterText(positive, 'one, two');
@@ -121,5 +143,37 @@ void main() {
     await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
     await tester.pump();
     expect(payload.fixedProfile.negativePromptConfig.strs, ['worse, bad']);
+
+    await tester.ensureVisible(positive);
+    await tester.tap(positive);
+    await tester.enterText(positive, '1.2::haku89::');
+    await tester.pump();
+
+    final textField = tester.widget<TextField>(positive);
+    expect(textField.controller!.text, '1.2::haku89 ::');
+    expect(payload.fixedProfile.rootPromptConfig.strs, ['1.2::haku89 ::']);
+    final rendered = textField.controller!.buildTextSpan(
+      context: tester.element(positive),
+      withComposing: false,
+    );
+    final spans = leafTextSpans(rendered);
+    expect(
+      spans.any(
+        (span) =>
+            span.text == '1.2::haku89 ' &&
+            span.style?.backgroundColor ==
+                PromptWeightSyntax.increaseBackground,
+      ),
+      isTrue,
+    );
+    expect(
+      spans.any(
+        (span) =>
+            span.text == '::' &&
+            span.style?.backgroundColor ==
+                PromptWeightSyntax.delimiterBackground,
+      ),
+      isTrue,
+    );
   });
 }

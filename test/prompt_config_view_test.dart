@@ -4,9 +4,19 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
+import 'package:nai_casrand/ui/prompt_assistance/prompt_weight_syntax.dart';
 import 'package:nai_casrand/ui/prompt_config/view_models/prompt_config_viewmodel.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_config_view.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_entry_editor.dart';
+
+List<TextSpan> leafTextSpans(TextSpan span) {
+  final result = <TextSpan>[];
+  if (span.text case final text? when text.isNotEmpty) result.add(span);
+  for (final child in span.children ?? const <InlineSpan>[]) {
+    if (child is TextSpan) result.addAll(leafTextSpans(child));
+  }
+  return result;
+}
 
 void main() {
   setUpAll(() async {
@@ -25,7 +35,7 @@ void main() {
   ) async {
     final config = PromptConfig(
       shuffled: false,
-      strs: const ['one', '# saved note'],
+      strs: const ['1.2::legacy2::', '# saved note'],
       prompts: [],
     );
     final viewModel = PromptConfigViewModel(config: config);
@@ -50,7 +60,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('String Values: 1 items'), findsOneWidget);
-    expect(find.text('one'), findsOneWidget);
+    expect(find.text('1.2::legacy2::'), findsOneWidget);
     expect(find.text('# saved note'), findsOneWidget);
     expect(
       find.byKey(const Key('prompt-preview-divider-0')),
@@ -60,18 +70,42 @@ void main() {
       find.byKey(const Key('prompt-preview-divider-1')),
       findsNothing,
     );
+    expect(config.strs.first, '1.2::legacy2::');
+    final unsafePreview = find.descendant(
+      of: find.byKey(const Key('prompt-preview-entry-0')),
+      matching: find.byType(RichText),
+    );
+    final unsafeSpans = leafTextSpans(
+      tester.widget<RichText>(unsafePreview).text as TextSpan,
+    );
+    expect(
+      unsafeSpans.any(
+        (span) =>
+            span.style?.backgroundColor ==
+            PromptWeightSyntax.increaseBackground,
+      ),
+      isTrue,
+    );
+    expect(
+      unsafeSpans.any(
+        (span) =>
+            span.style?.backgroundColor ==
+            PromptWeightSyntax.delimiterBackground,
+      ),
+      isFalse,
+    );
     final previewDivider = tester.getRect(
       find.byKey(const Key('prompt-preview-divider-0')),
     );
     final previewFirstEntry = tester.renderObject<RenderParagraph>(
-      find.text('one'),
+      find.text('1.2::legacy2::'),
     );
     final previewSecondEntry = tester.renderObject<RenderParagraph>(
       find.text('# saved note'),
     );
     final previewFirstBox = previewFirstEntry
         .getBoxesForSelection(
-          const TextSelection(baseOffset: 0, extentOffset: 3),
+          TextSelection(baseOffset: 0, extentOffset: config.strs.first.length),
         )
         .first;
     final previewSecondBox = previewSecondEntry
@@ -96,10 +130,13 @@ void main() {
         .state<EditableTextState>(find.byType(EditableText))
         .renderEditable;
     final firstEntryCaret = editable.getLocalRectForCaret(
-      const TextPosition(offset: 3, affinity: TextAffinity.upstream),
+      TextPosition(
+        offset: config.strs.first.length,
+        affinity: TextAffinity.upstream,
+      ),
     );
     final secondEntryCaret = editable.getLocalRectForCaret(
-      const TextPosition(offset: 4),
+      TextPosition(offset: config.strs.first.length + 1),
     );
     final editorDividerPaint =
         find.byKey(const Key('prompt-entry-divider-overlay'));
@@ -129,6 +166,34 @@ void main() {
     final actualBottomGap = secondEntryTop - dividerY;
     expect(actualTopGap, closeTo(expectedTopGap, 0.5));
     expect(actualBottomGap, closeTo(expectedBottomGap, 0.5));
+
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(config.strs, ['1.2::legacy2::', '# saved note']);
+
+    await tester.tap(find.text('String Values: 1 items'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Confirm'));
+    await tester.pumpAndSettle();
+    expect(config.strs, ['1.2::legacy2 ::', '# saved note']);
+    final safePreview = find.descendant(
+      of: find.byKey(const Key('prompt-preview-entry-0')),
+      matching: find.byType(RichText),
+    );
+    final safeSpans = leafTextSpans(
+      tester.widget<RichText>(safePreview).text as TextSpan,
+    );
+    expect(
+      safeSpans.any(
+        (span) =>
+            span.style?.backgroundColor ==
+            PromptWeightSyntax.delimiterBackground,
+      ),
+      isTrue,
+    );
+
+    await tester.tap(find.text('String Values: 1 items'));
+    await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const Key('prompt-entry-editor')),
       'first\nsecond\n# saved note',

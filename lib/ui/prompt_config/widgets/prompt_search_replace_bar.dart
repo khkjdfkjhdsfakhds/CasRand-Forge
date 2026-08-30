@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:nai_casrand/ui/prompt_assistance/prompt_text_highlighting.dart';
 
 /// Mixin for [TextEditingController] subclasses that wish to render search-match
 /// highlights inside their [buildTextSpan] override.
@@ -36,123 +37,21 @@ mixin SearchHighlightable on TextEditingController {
     if (_searchMatches.isEmpty) return base;
     final highlightBg =
         Theme.of(context).colorScheme.primaryContainer.withAlpha(140);
-    final currentBg =
-        Theme.of(context).colorScheme.primary.withAlpha(100);
-    return _rebuildSpanWithHighlights(base, highlightBg, currentBg);
+    final currentBg = Theme.of(context).colorScheme.primary.withAlpha(100);
+    return applyPromptTextHighlights(
+      base,
+      [
+        for (var index = 0; index < _searchMatches.length; index++)
+          PromptTextHighlight(
+            range: _searchMatches[index],
+            style: TextStyle(
+              backgroundColor:
+                  index == _searchCurrentIndex ? currentBg : highlightBg,
+            ),
+          ),
+      ],
+    );
   }
-
-  TextSpan _rebuildSpanWithHighlights(
-    TextSpan root,
-    Color highlightBg,
-    Color currentBg,
-  ) {
-    // Flatten root into a list of (offset, text, style) segments, then
-    // re-split them around match ranges.
-    final segments = <_TextSegment>[];
-    _flattenSpan(root, 0, segments);
-    if (segments.isEmpty) return root;
-
-    final result = <InlineSpan>[];
-    for (final seg in segments) {
-      result.addAll(
-        _splitSegment(seg, highlightBg, currentBg),
-      );
-    }
-    return TextSpan(children: result);
-  }
-
-  void _flattenSpan(TextSpan span, int offset, List<_TextSegment> out) {
-    if (span.text != null && span.text!.isNotEmpty) {
-      out.add(_TextSegment(offset, span.text!, span.style));
-      offset += span.text!.length;
-    }
-    if (span.children != null) {
-      for (final child in span.children!) {
-        if (child is TextSpan) {
-          // Inherit parent style for children without their own.
-          final effectiveChild = TextSpan(
-            text: child.text,
-            style: child.style ?? span.style,
-            children: child.children,
-          );
-          _flattenSpan(effectiveChild, offset, out);
-          offset += _spanTextLength(child);
-        }
-      }
-    }
-  }
-
-  int _spanTextLength(TextSpan span) {
-    var len = span.text?.length ?? 0;
-    if (span.children != null) {
-      for (final c in span.children!) {
-        if (c is TextSpan) len += _spanTextLength(c);
-      }
-    }
-    return len;
-  }
-
-  List<InlineSpan> _splitSegment(
-    _TextSegment seg,
-    Color highlightBg,
-    Color currentBg,
-  ) {
-    final spans = <InlineSpan>[];
-    var pos = seg.offset;
-    final end = seg.offset + seg.text.length;
-    var textIdx = 0;
-
-    for (var mi = 0; mi < _searchMatches.length; mi++) {
-      final m = _searchMatches[mi];
-      if (m.end <= pos) continue;
-      if (m.start >= end) break;
-
-      final mStart = math.max(m.start, pos);
-      final mEnd = math.min(m.end, end);
-
-      // Text before this match.
-      if (mStart > pos) {
-        spans.add(TextSpan(
-          text: seg.text.substring(textIdx, textIdx + (mStart - pos)),
-          style: seg.style,
-        ));
-      }
-
-      // The highlighted match portion.
-      final bg = mi == _searchCurrentIndex ? currentBg : highlightBg;
-      spans.add(TextSpan(
-        text: seg.text.substring(
-          textIdx + (mStart - pos),
-          textIdx + (mEnd - pos),
-        ),
-        style: (seg.style ?? const TextStyle()).copyWith(
-          backgroundColor: bg,
-        ),
-      ));
-
-      textIdx += mEnd - pos;
-      pos = mEnd;
-    }
-
-    // Remaining text after all matches.
-    if (pos < end) {
-      spans.add(TextSpan(
-        text: seg.text.substring(textIdx),
-        style: seg.style,
-      ));
-    }
-
-    return spans.isEmpty
-        ? [TextSpan(text: seg.text, style: seg.style)]
-        : spans;
-  }
-}
-
-class _TextSegment {
-  const _TextSegment(this.offset, this.text, this.style);
-  final int offset;
-  final String text;
-  final TextStyle? style;
 }
 
 /// A compact, theme-aware Search and Replace bar that attaches to any [TextEditingController].
@@ -309,7 +208,8 @@ class PromptSearchReplaceBarState extends State<PromptSearchReplaceBar> {
     return KeyEventResult.ignored;
   }
 
-  void _updateMatches({bool preserveCurrentIndex = false, int? preferredOffset}) {
+  void _updateMatches(
+      {bool preserveCurrentIndex = false, int? preferredOffset}) {
     final query = searchController.text;
     if (query.isEmpty) {
       setState(() {
@@ -531,7 +431,8 @@ class PromptSearchReplaceBarState extends State<PromptSearchReplaceBar> {
   @override
   Widget build(BuildContext context) {
     if (!widget.visible) {
-      return const SizedBox.shrink(key: Key('prompt-search-replace-bar-hidden'));
+      return const SizedBox.shrink(
+          key: Key('prompt-search-replace-bar-hidden'));
     }
 
     final theme = Theme.of(context);
@@ -575,7 +476,8 @@ class PromptSearchReplaceBarState extends State<PromptSearchReplaceBar> {
               const SizedBox(width: 6),
               Expanded(
                 child: TextField(
-                  key: widget.searchFieldKey ?? const Key('prompt-search-field'),
+                  key:
+                      widget.searchFieldKey ?? const Key('prompt-search-field'),
                   controller: searchController,
                   focusNode: searchFocusNode,
                   style: theme.textTheme.bodyMedium,
@@ -613,7 +515,8 @@ class PromptSearchReplaceBarState extends State<PromptSearchReplaceBar> {
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
                 splashRadius: 14,
-                tooltip: _tr(context, 'previous_match', fallback: 'Previous match'),
+                tooltip:
+                    _tr(context, 'previous_match', fallback: 'Previous match'),
                 onPressed: _matches.isEmpty ? null : findPrevious,
               ),
               IconButton(
@@ -635,7 +538,8 @@ class PromptSearchReplaceBarState extends State<PromptSearchReplaceBar> {
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
                 splashRadius: 14,
-                tooltip: _tr(context, 'toggle_replace', fallback: 'Toggle replace'),
+                tooltip:
+                    _tr(context, 'toggle_replace', fallback: 'Toggle replace'),
                 onPressed: toggleReplaceMode,
               ),
               IconButton(
