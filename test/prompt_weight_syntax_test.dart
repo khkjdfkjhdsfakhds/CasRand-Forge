@@ -1,6 +1,24 @@
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nai_casrand/ui/prompt_assistance/prompt_weight_syntax.dart';
+
+List<TextSpan> _leafSpans(TextSpan span) {
+  final result = <TextSpan>[];
+  if (span.text case final text? when text.isNotEmpty) result.add(span);
+  for (final child in span.children ?? const <InlineSpan>[]) {
+    if (child is TextSpan) result.addAll(_leafSpans(child));
+  }
+  return result;
+}
+
+double _contrastRatio(Color foreground, Color background) {
+  final first = foreground.computeLuminance();
+  final second = background.computeLuminance();
+  final lighter = first > second ? first : second;
+  final darker = first > second ? second : first;
+  return (lighter + 0.05) / (darker + 0.05);
+}
 
 void main() {
   group('PromptWeightSyntax normalization', () {
@@ -187,5 +205,48 @@ void main() {
       expect(kinds.where((kind) => kind == PromptWeightKind.decrease),
           hasLength(2));
     });
+  });
+
+  testWidgets(
+      'semantic backgrounds keep readable text in light and dark themes',
+      (tester) async {
+    for (final theme in [ThemeData.light(), ThemeData.dark()]) {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: theme,
+          home: const Scaffold(
+            body: PromptWeightText(
+              '1.2::high ::, 0.7::low::, 1::neutral ::',
+            ),
+          ),
+        ),
+      );
+
+      final richText = tester.widget<RichText>(find.byType(RichText).first);
+      final context = tester.element(find.byType(PromptWeightText));
+      final defaultColor = DefaultTextStyle.of(context).style.color!;
+      final surface = Theme.of(context).scaffoldBackgroundColor;
+      final semanticSpans = _leafSpans(richText.text as TextSpan).where(
+        (span) => span.style?.backgroundColor != null,
+      );
+
+      expect(
+        semanticSpans.map((span) => span.style!.backgroundColor).toSet(),
+        containsAll([
+          PromptWeightSyntax.increaseBackground,
+          PromptWeightSyntax.decreaseBackground,
+          PromptWeightSyntax.delimiterBackground,
+        ]),
+      );
+      for (final span in semanticSpans) {
+        final foreground = span.style?.color ?? defaultColor;
+        final background = Color.alphaBlend(
+          span.style!.backgroundColor!,
+          surface,
+        );
+        expect(
+            _contrastRatio(foreground, background), greaterThanOrEqualTo(4.5));
+      }
+    }
   });
 }
