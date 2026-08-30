@@ -18,7 +18,6 @@ abstract final class PromptWeightSyntax {
     final stack = <PromptWeightKind?>[];
     PromptWeightKind? activeKind;
     var segmentStart = 0;
-    var offset = 0;
 
     void flush(int end) {
       if (activeKind != null && end > segmentStart) {
@@ -26,64 +25,35 @@ abstract final class PromptWeightSyntax {
       }
     }
 
-    while (offset < text.length) {
-      final commentEnd = _commentLineEnd(text, offset);
-      if (commentEnd != null) {
-        flush(offset);
-        activeKind = null;
-        offset = commentEnd;
-        segmentStart = offset;
-        continue;
-      }
-
-      if (text.codeUnitAt(offset) == 0x0A) {
-        flush(offset);
-        stack.clear();
-        activeKind = null;
-        offset++;
-        segmentStart = offset;
-        continue;
-      }
-
-      final opener = _numericOpener.matchAsPrefix(text, offset);
-      if (opener != null) {
-        flush(offset);
-        final end = opener.end;
-        final rawWeight = text.substring(offset, end - 2);
-        final weight = double.parse(rawWeight);
-        final kind = weight > 1
-            ? PromptWeightKind.increase
-            : weight < 1
-                ? PromptWeightKind.decrease
-                : null;
-        _addSpan(
-          spans,
-          TextRange(start: offset, end: end),
-          kind ?? PromptWeightKind.delimiter,
-        );
-        stack.add(kind);
-        activeKind = kind;
-        offset = end;
-        segmentStart = offset;
-        continue;
-      }
-
-      if (offset + 1 < text.length && text.startsWith('::', offset)) {
-        flush(offset);
-        if (stack.isNotEmpty) {
+    for (final token in _scan(text)) {
+      flush(token.start);
+      switch (token.type) {
+        case _WeightTokenType.comment:
+          activeKind = null;
+        case _WeightTokenType.lineBreak:
+          stack.clear();
+          activeKind = null;
+        case _WeightTokenType.opener:
+          final kind = token.weightKind;
           _addSpan(
             spans,
-            TextRange(start: offset, end: offset + 2),
-            PromptWeightKind.delimiter,
+            TextRange(start: token.start, end: token.end),
+            kind ?? PromptWeightKind.delimiter,
           );
-          stack.removeLast();
-        }
-        activeKind = null;
-        offset += 2;
-        segmentStart = offset;
-        continue;
+          stack.add(kind);
+          activeKind = kind;
+        case _WeightTokenType.closer:
+          if (stack.isNotEmpty) {
+            _addSpan(
+              spans,
+              TextRange(start: token.start, end: token.end),
+              PromptWeightKind.delimiter,
+            );
+            stack.removeLast();
+          }
+          activeKind = null;
       }
-      offset++;
+      segmentStart = token.end;
     }
     flush(text.length);
     return PromptWeightAnalysis(List.unmodifiable(spans));
@@ -132,10 +102,11 @@ abstract final class PromptWeightSyntax {
     TextEditingValue oldValue,
     TextEditingValue newValue,
   ) {
-    if (_hasComposingText(newValue) || oldValue.text == newValue.text) {
-      return newValue;
-    }
-    final changed = _changedRange(oldValue.text, newValue.text);
+    if (_hasComposingText(newValue)) return newValue;
+    final changed = oldValue.text == newValue.text
+        ? _committedComposingRange(oldValue)
+        : _changedRange(oldValue.text, newValue.text);
+    if (changed == null) return newValue;
     final insertions = _ambiguousClosings(newValue.text)
         .where(
           (candidate) =>
@@ -144,6 +115,13 @@ abstract final class PromptWeightSyntax {
         .map((candidate) => candidate.insertionOffset)
         .toList(growable: false);
     return _applyInsertions(newValue, insertions);
+  }
+
+  static ({int start, int end})? _committedComposingRange(
+    TextEditingValue oldValue,
+  ) {
+    if (!_hasComposingText(oldValue)) return null;
+    return (start: oldValue.composing.start, end: oldValue.composing.end);
   }
 
   static TextEditingValue _applyInsertions(
@@ -172,42 +150,80 @@ abstract final class PromptWeightSyntax {
   static List<_AmbiguousClosing> _ambiguousClosings(String text) {
     final result = <_AmbiguousClosing>[];
     final stack = <int>[];
+    for (final token in _scan(text)) {
+      switch (token.type) {
+        case _WeightTokenType.comment:
+          break;
+        case _WeightTokenType.lineBreak:
+          stack.clear();
+        case _WeightTokenType.opener:
+          if (stack.isNotEmpty &&
+              !_startsAtPromptBoundary(text, token.start, stack)) {
+            result.add(
+              _AmbiguousClosing(
+                start: token.start,
+                end: token.end,
+                insertionOffset: token.end - 2,
+              ),
+            );
+          }
+          stack.add(token.end);
+        case _WeightTokenType.closer:
+          if (stack.isNotEmpty) stack.removeLast();
+      }
+    }
+    return result;
+  }
+
+  static Iterable<_WeightToken> _scan(String text) sync* {
     var offset = 0;
     while (offset < text.length) {
       final commentEnd = _commentLineEnd(text, offset);
       if (commentEnd != null) {
+        yield _WeightToken(
+          type: _WeightTokenType.comment,
+          start: offset,
+          end: commentEnd,
+        );
         offset = commentEnd;
         continue;
       }
       if (text.codeUnitAt(offset) == 0x0A) {
-        stack.clear();
+        yield _WeightToken(
+          type: _WeightTokenType.lineBreak,
+          start: offset,
+          end: offset + 1,
+        );
         offset++;
         continue;
       }
       final opener = _numericOpener.matchAsPrefix(text, offset);
       if (opener != null) {
-        final openerEnd = opener.end;
-        if (stack.isNotEmpty && !_startsAtPromptBoundary(text, offset, stack)) {
-          result.add(
-            _AmbiguousClosing(
-              start: offset,
-              end: openerEnd,
-              insertionOffset: openerEnd - 2,
-            ),
-          );
-        }
-        stack.add(openerEnd);
-        offset = openerEnd;
+        final weight = double.parse(text.substring(offset, opener.end - 2));
+        yield _WeightToken(
+          type: _WeightTokenType.opener,
+          start: offset,
+          end: opener.end,
+          weightKind: weight > 1
+              ? PromptWeightKind.increase
+              : weight < 1
+                  ? PromptWeightKind.decrease
+                  : null,
+        );
+        offset = opener.end;
         continue;
       }
       if (offset + 1 < text.length && text.startsWith('::', offset)) {
-        if (stack.isNotEmpty) stack.removeLast();
+        yield _WeightToken(
+          type: _WeightTokenType.closer,
+          start: offset,
+          end: offset + 2,
+        );
         offset += 2;
         continue;
       }
       offset++;
     }
-    return result;
   }
 
   static void _addSpan(
@@ -381,4 +397,20 @@ class _AmbiguousClosing {
   final int start;
   final int end;
   final int insertionOffset;
+}
+
+enum _WeightTokenType { opener, closer, lineBreak, comment }
+
+class _WeightToken {
+  const _WeightToken({
+    required this.type,
+    required this.start,
+    required this.end,
+    this.weightKind,
+  });
+
+  final _WeightTokenType type;
+  final int start;
+  final int end;
+  final PromptWeightKind? weightKind;
 }

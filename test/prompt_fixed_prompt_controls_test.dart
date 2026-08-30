@@ -175,5 +175,46 @@ void main() {
       ),
       isTrue,
     );
+
+    await tester.enterText(positive, 'before');
+    await tester.pump(const Duration(milliseconds: 600));
+    tester.testTextInput.updateEditingValue(
+      const TextEditingValue(
+        text: '1.2::paste89::',
+        selection: TextSelection.collapsed(offset: 14),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(textField.controller!.text, '1.2::paste89 ::');
+
+    final undoHistory = tester.state<UndoHistoryState<TextEditingValue>>(
+      find.descendant(
+        of: positive,
+        matching: find.byType(UndoHistory<TextEditingValue>),
+      ),
+    );
+    expect(undoHistory.canUndo, isTrue);
+    undoHistory.undo();
+    await tester.pump();
+    expect(textField.controller!.text, 'before');
+
+    expect(undoHistory.canRedo, isTrue);
+    undoHistory.redo();
+    await tester.pump();
+    expect(textField.controller!.text, '1.2::paste89 ::');
+
+    textField.controller!.value = const TextEditingValue(
+      text: '1.2::ime89::',
+      selection: TextSelection.collapsed(offset: 12),
+      composing: TextRange(start: 5, end: 10),
+    );
+    await tester.pump();
+    expect(textField.controller!.text, '1.2::ime89::');
+    textField.controller!.value = const TextEditingValue(
+      text: '1.2::ime89::',
+      selection: TextSelection.collapsed(offset: 12),
+    );
+    await tester.pump();
+    expect(textField.controller!.text, '1.2::ime89 ::');
   });
 }

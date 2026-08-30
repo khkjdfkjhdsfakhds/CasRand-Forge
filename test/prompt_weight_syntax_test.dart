@@ -93,6 +93,32 @@ void main() {
       expect(PromptWeightSyntax.normalizeAll(value), value);
     });
 
+    test('normalizes the composing range when IME commits unchanged text', () {
+      const source = '1.2::haku89::';
+      final result = PromptWeightSyntax.normalizeEdit(
+        const TextEditingValue(
+          text: source,
+          composing: TextRange(start: 5, end: 11),
+        ),
+        const TextEditingValue(
+          text: source,
+          selection: TextSelection.collapsed(offset: source.length),
+        ),
+      );
+
+      expect(result.text, '1.2::haku89 ::');
+    });
+
+    test('normalizes every ambiguous occurrence and leaves incomplete syntax',
+        () {
+      expect(
+        PromptWeightSyntax.normalizeText('1.2::a2::, 0.8::b3::'),
+        '1.2::a2 ::, 0.8::b3 ::',
+      );
+      expect(PromptWeightSyntax.normalizeText('1.2::unfinished'),
+          '1.2::unfinished');
+    });
+
     test('does not carry an unfinished weight into the next physical line', () {
       const source = '1.2::unfinished\nmodel2::';
 
@@ -148,6 +174,18 @@ void main() {
       expect(spans, hasLength(1));
       expect(spans.single.kind, PromptWeightKind.increase);
       expect(spans.single.range.textInside(source), source);
+    });
+
+    test('uses fixed semantics for extreme zero and negative weights', () {
+      const source = '9999::high::, 0::zero::, -2::negative::';
+      final kinds = PromptWeightSyntax.analyze(source).spans.map(
+            (span) => span.kind,
+          );
+
+      expect(kinds.where((kind) => kind == PromptWeightKind.increase),
+          hasLength(1));
+      expect(kinds.where((kind) => kind == PromptWeightKind.decrease),
+          hasLength(2));
     });
   });
 }

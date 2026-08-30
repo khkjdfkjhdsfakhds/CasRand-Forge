@@ -713,6 +713,7 @@ class PromptAssistedTextField extends StatefulWidget {
 
 class PromptAssistedTextFieldState extends State<PromptAssistedTextField> {
   late final TextEditingController _controller;
+  late TextEditingValue _lastControllerValue;
   late final FocusNode _focusNode;
   late final bool _ownsController;
   late final bool _ownsFocusNode;
@@ -766,6 +767,7 @@ class PromptAssistedTextFieldState extends State<PromptAssistedTextField> {
     _ownsController = suppliedController == null;
     _controller = suppliedController ??
         _PromptTextEditingController(text: widget.initialValue);
+    _lastControllerValue = _controller.value;
     final suppliedFocusNode = widget.focusNode;
     _ownsFocusNode = suppliedFocusNode == null;
     _focusNode = suppliedFocusNode ?? FocusNode(onKeyEvent: _handleKeyEvent);
@@ -851,7 +853,26 @@ class PromptAssistedTextFieldState extends State<PromptAssistedTextField> {
   }
 
   void _handleControllerChanged() {
+    final previousValue = _lastControllerValue;
+    final currentValue = _controller.value;
+    _lastControllerValue = currentValue;
     if (_accepting) return;
+    if (previousValue.composing.isValid &&
+        !previousValue.composing.isCollapsed &&
+        (!currentValue.composing.isValid ||
+            currentValue.composing.isCollapsed)) {
+      final normalized = PromptWeightSyntax.normalizeEdit(
+        previousValue,
+        currentValue,
+      );
+      if (normalized != currentValue) {
+        _accepting = true;
+        _controller.value = normalized;
+        _accepting = false;
+        widget.onChanged(normalized.text);
+        return;
+      }
+    }
     final result = _result;
     if (result != null && !result.matches(_controller.value)) {
       final sameText = _controller.text == result.sourceText;

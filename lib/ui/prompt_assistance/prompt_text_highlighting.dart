@@ -24,11 +24,16 @@ TextSpan applyPromptTextHighlights(
   _flattenSpan(root, 0, null, segments);
   if (segments.isEmpty) return root;
 
-  return TextSpan(
-    children: [
-      for (final segment in segments) ..._splitSegment(segment, ordered),
-    ],
-  );
+  final result = <InlineSpan>[];
+  var highlightIndex = 0;
+  for (final segment in segments) {
+    while (highlightIndex < ordered.length &&
+        ordered[highlightIndex].range.end <= segment.offset) {
+      highlightIndex++;
+    }
+    result.addAll(_splitSegment(segment, ordered, highlightIndex));
+  }
+  return TextSpan(children: result);
 }
 
 void _flattenSpan(
@@ -62,12 +67,14 @@ int _spanTextLength(TextSpan span) {
 List<InlineSpan> _splitSegment(
   _TextSegment segment,
   List<PromptTextHighlight> highlights,
+  int startIndex,
 ) {
   final result = <InlineSpan>[];
   final segmentEnd = segment.offset + segment.text.length;
   var position = segment.offset;
 
-  for (final highlight in highlights) {
+  for (var index = startIndex; index < highlights.length; index++) {
+    final highlight = highlights[index];
     if (highlight.range.end <= position) continue;
     if (highlight.range.start >= segmentEnd) break;
     final start = math.max(position, highlight.range.start);
