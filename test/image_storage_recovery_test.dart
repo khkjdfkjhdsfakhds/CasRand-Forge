@@ -112,7 +112,8 @@ void main() {
           desktopJpegSupported: true,
           jpegEncoder: encoder,
           sessionDirectoryProvider: () =>
-              Directory('${root.path}/session').create());
+              Directory('${root.path}${Platform.pathSeparator}session')
+                  .create());
       final accepted = request(png, output.path, jpeg: true, retain: retain);
       final first = storage.submit(accepted);
       await expectLater(first.completed, throwsStateError);
@@ -149,7 +150,7 @@ void main() {
         desktopJpegSupported: true,
         jpegEncoder: encoder,
         sessionDirectoryProvider: () =>
-            Directory('${root.path}/session').create());
+            Directory('${root.path}${Platform.pathSeparator}session').create());
     final accepted = request(png, outputPath, jpeg: true);
     final first = storage.submit(accepted);
     await expectLater(first.completed, throwsA(isA<FileSystemException>()));
@@ -202,7 +203,7 @@ void storageRecoveryGuards() {
         desktopJpegSupported: true,
         jpegEncoder: encoder,
         sessionDirectoryProvider: () =>
-            Directory('${root.path}/session').create(),
+            Directory('${root.path}${Platform.pathSeparator}session').create(),
       );
       final accepted = request(png, output.path, jpeg: true, retain: true);
       final first = storage.submit(accepted);
