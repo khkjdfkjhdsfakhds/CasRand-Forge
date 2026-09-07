@@ -1,5 +1,5 @@
 name: nai_casrand
-description: "CasRand Forge: a cross-platform community fork for generating images from random prompts."
+description: "NAI CasRand Forge: a cross-platform community fork for generating images from random prompts."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 0.9.1+1
+version: 0.9.8+95
 
 environment:
   sdk: '>=3.3.4 <4.0.0'
@@ -40,6 +40,7 @@ dependencies:
   archive: ^3.1.2
   provider: ^6.1.2
   http: ^1.2.1
+  crypto: ^3.0.5
   universal_html: ^2.2.4
   image_picker: ^1.1.2
   hive: ^2.2.3
@@ -48,10 +49,10 @@ dependencies:
   device_info_plus: ^10.1.0
   image: ^4.2.0
   package_info_plus: ^8.0.1
-  gzip: ^0.2.0
+  gzip: ^1.1.0
   image_size_getter: ^2.1.3
-  super_drag_and_drop: ^0.8.19
-  super_clipboard: ^0.8.19
+  super_drag_and_drop: ^0.8.24
+  super_clipboard: ^0.8.24
   easy_localization: ^3.0.7
   encrypt: ^5.0.3
   flutter_markdown: ^0.7.3+2
@@ -87,7 +88,10 @@ flutter:
     - assets/appicon.png
     - assets/qrcode1.jpg
     - assets/qrcode2.jpg
+    - assets/donation/
     - assets/l10n/
+    - assets/prompt_assistance/danbooru-index.json.gz
+    - assets/prompt_assistance/danbooru-translations.json.gz
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in

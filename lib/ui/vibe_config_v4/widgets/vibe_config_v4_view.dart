@@ -1,10 +1,12 @@
+import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:nai_casrand/ui/core/widgets/slider_list_tile.dart';
 
 import '../viewmodels/vibe_config_v4_viewmodel.dart';
 
 class VibeConfigV4View extends StatelessWidget {
   final VibeConfigV4Viewmodel viewmodel;
-  final VoidCallback? onDelete; // Callback for delete action
+  final VoidCallback? onDelete;
 
   const VibeConfigV4View({
     super.key,
@@ -14,38 +16,38 @@ class VibeConfigV4View extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Changed Object to BuildContext
-    final thumbnail = viewmodel.imageBytes != null
-        ? Image.memory(viewmodel.imageBytes!, fit: BoxFit.cover)
-        : const Icon(Icons.broken_image_outlined, size: 50);
-
-    final widgetImage = SizedBox(
-      height: 120.0, // Adjusted size for better fit in a list
-      width: 120.0,
-      child: ClipRRect(
-        // Optional: to make image have rounded corners
-        borderRadius: BorderRadius.circular(8.0),
-        child: thumbnail,
-      ),
-    );
-
     return ListenableBuilder(
       listenable: viewmodel,
       builder: (context, child) {
+        final imageBytes = viewmodel.imageBytes;
+        final thumbnail = imageBytes != null
+            ? Image.memory(
+                imageBytes,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) =>
+                    const Icon(Icons.broken_image_outlined, size: 50),
+              )
+            : const Icon(Icons.auto_awesome_outlined, size: 50);
+
         return Card(
-          // Wrap with Card for better visual separation
           margin: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 4.0),
           child: Padding(
             padding: const EdgeInsets.all(12.0),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                widgetImage,
+                SizedBox(
+                  height: 120,
+                  width: 120,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: thumbnail,
+                  ),
+                ),
                 const SizedBox(width: 16),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.start,
                     children: [
                       Text(
                         viewmodel.fileName,
@@ -55,38 +57,30 @@ class VibeConfigV4View extends StatelessWidget {
                             ?.copyWith(fontWeight: FontWeight.bold),
                         overflow: TextOverflow.ellipsis,
                       ),
+                      const SizedBox(height: 4),
+                      _EncodingStatus(viewmodel: viewmodel),
                       const SizedBox(height: 8),
-                      // Reference Strength
-                      Text(
-                          'Strength: ${viewmodel.referenceStrength.toStringAsFixed(2)}'),
-                      Row(children: [
-                        Expanded(
-                          child: Slider(
-                            value: viewmodel.referenceStrength.clamp(0.0, 1.0),
-                            min: 0.0,
-                            max: 1.0,
-                            divisions: 100,
-                            label:
-                                viewmodel.referenceStrength.toStringAsFixed(2),
-                            onChanged: (value) =>
-                                viewmodel.setReferenceStrength(value),
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.edit_note), // Changed icon
-                          tooltip: "Edit Strength Value",
-                          onPressed: () => _showEditReferenceStrengthDialog(
-                              context, viewmodel),
-                        )
-                      ]),
+                      _VibeSlider(
+                        title: context.tr('vibe_reference_strength'),
+                        value: viewmodel.referenceStrength,
+                        keyPrefix: 'vibe-reference-strength',
+                        onChanged: viewmodel.setReferenceStrength,
+                        onEdit: () => _showReferenceStrengthDialog(context),
+                      ),
+                      _VibeSlider(
+                        title: context.tr('vibe_information_extracted'),
+                        value: viewmodel.informationExtracted,
+                        keyPrefix: 'vibe-information-extracted',
+                        onChanged: viewmodel.setInformationExtracted,
+                        onEdit: () => _showInformationExtractedDialog(context),
+                      ),
                     ],
                   ),
                 ),
-                if (onDelete !=
-                    null) // Show delete button only if callback is provided
+                if (onDelete != null)
                   IconButton(
                     icon: Icon(Icons.delete_outline, color: Colors.red[700]),
-                    tooltip: "Delete Vibe Config",
+                    tooltip: context.tr('vibe_delete'),
                     onPressed: onDelete,
                   ),
               ],
@@ -97,48 +91,122 @@ class VibeConfigV4View extends StatelessWidget {
     );
   }
 
-  void _showEditReferenceStrengthDialog(
-      BuildContext context, VibeConfigV4Viewmodel vm) {
-    final TextEditingController controller =
-        TextEditingController(text: vm.referenceStrength.toStringAsFixed(2));
-    showDialog(
+  void _showReferenceStrengthDialog(BuildContext context) {
+    showSliderValueInputDialog(
       context: context,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          title: const Text('Edit Reference Strength'),
-          content: TextField(
-            controller: controller,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(labelText: 'Value (0.0 to 1.0)'),
-            autofocus: true,
+      title: context.tr('vibe_reference_strength'),
+      value: viewmodel.referenceStrength,
+      min: 0,
+      max: 1,
+      divisions: 100,
+      decimalPlaces: 2,
+      onChanged: viewmodel.setReferenceStrength,
+    );
+  }
+
+  void _showInformationExtractedDialog(BuildContext context) {
+    showSliderValueInputDialog(
+      context: context,
+      title: context.tr('vibe_information_extracted'),
+      value: viewmodel.informationExtracted,
+      min: 0,
+      max: 1,
+      divisions: 100,
+      decimalPlaces: 2,
+      onChanged: viewmodel.setInformationExtracted,
+    );
+  }
+}
+
+class _EncodingStatus extends StatelessWidget {
+  final VibeConfigV4Viewmodel viewmodel;
+
+  const _EncodingStatus({required this.viewmodel});
+
+  @override
+  Widget build(BuildContext context) {
+    final (icon, color, text) = viewmodel.encodingReady
+        ? (
+            Icons.check_circle_outline,
+            Colors.green,
+            context.tr('vibe_encoding_ready'),
+          )
+        : viewmodel.canEncode
+            ? (
+                Icons.pending_outlined,
+                Colors.orange,
+                context.tr('vibe_encoding_pending'),
+              )
+            : (
+                Icons.error_outline,
+                Colors.red,
+                context.tr('vibe_encoding_unavailable'),
+              );
+    return Row(
+      children: [
+        Icon(icon, size: 16, color: color),
+        const SizedBox(width: 5),
+        Expanded(
+          child: Text(
+            text,
+            style: Theme.of(context).textTheme.bodySmall,
           ),
-          actions: <Widget>[
-            TextButton(
-              child: const Text('Cancel'),
-              onPressed: () {
-                Navigator.of(dialogContext).pop();
-              },
+        ),
+      ],
+    );
+  }
+}
+
+class _VibeSlider extends StatelessWidget {
+  final String title;
+  final double value;
+  final String keyPrefix;
+  final ValueChanged<double> onChanged;
+  final VoidCallback onEdit;
+
+  const _VibeSlider({
+    required this.title,
+    required this.value,
+    required this.keyPrefix,
+    required this.onChanged,
+    required this.onEdit,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InkWell(
+          key: Key('$keyPrefix-label'),
+          onTap: onEdit,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Text('$title: ${value.toStringAsFixed(2)}'),
+          ),
+        ),
+        Row(
+          children: [
+            Expanded(
+              child: Slider(
+                key: Key('$keyPrefix-slider'),
+                value: value.clamp(0.0, 1.0),
+                min: 0,
+                max: 1,
+                divisions: 100,
+                label: value.toStringAsFixed(2),
+                onChanged: onChanged,
+              ),
             ),
-            TextButton(
-              child: const Text('OK'),
-              onPressed: () {
-                final double? newValue = double.tryParse(controller.text);
-                if (newValue != null && newValue >= 0.0 && newValue <= 1.0) {
-                  vm.setReferenceStrength(newValue);
-                  Navigator.of(dialogContext).pop();
-                } else {
-                  // Optional: Show an error message within the dialog
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                        content: Text(
-                            'Invalid value. Please enter a number between 0.0 and 1.0.')),
-                  );
-                }
-              },
+            IconButton(
+              key: Key('$keyPrefix-edit'),
+              icon: const Icon(Icons.edit_note),
+              tooltip: context.tr('edit_value'),
+              onPressed: onEdit,
             ),
           ],
-        );
-      },
+        ),
+      ],
     );
   }
 }

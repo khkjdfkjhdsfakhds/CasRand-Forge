@@ -3,8 +3,6 @@ import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/ui/core/widgets/editable_list_tile.dart';
 
-import '../../../data/services/config_service.dart';
-
 class DebugSettingsView extends StatefulWidget {
   final PayloadConfig payloadConfig = GetIt.instance<PayloadConfig>();
 
@@ -37,16 +35,6 @@ class DebugSettingsViewState extends State<DebugSettingsView> {
                     widget.payloadConfig.settings.debugApiPath = value;
                   },
                 )),
-        ListTile(
-          title: const Text('Reset welcome dialog version'),
-          onTap: () {
-            GetIt.I<PayloadConfig>().settings.welcomeMessageVersion = '';
-            // Save the config
-            final config = GetIt.instance<PayloadConfig>();
-            final service = GetIt.instance<ConfigService>();
-            service.saveConfig(config.toJson());
-          },
-        )
       ],
     );
   }

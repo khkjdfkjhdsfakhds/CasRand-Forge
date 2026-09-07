@@ -4,6 +4,10 @@ import '../../core/constants/defaults.dart';
 import 'generation_size.dart';
 
 class ParamConfig {
+  static const String defaultModel = 'nai-diffusion-5-full';
+  static const double defaultScale = 5.0;
+  static const double defaultCfgRescale = 0.0;
+
   List<GenerationSize> sizes;
   int nSamples;
 
@@ -16,8 +20,15 @@ class ParamConfig {
   bool smDyn;
   bool varietyPlus;
 
+  bool? deliberateEulerAncestralBug;
+  bool? preferBrownian;
+
+  bool? straightAlpha;
+  int? tagHintQt;
+  int? tagHintUcPreset;
+
   bool randomSeed;
-  int seed;
+  int? seed;
 
   bool dynamicThresholding;
   double controlNetStrength;
@@ -30,15 +41,15 @@ class ParamConfig {
   bool legacy;
   bool addOriginalImage;
 
-  String model = 'nai-diffusion-4-curated-preview';
+  String model = defaultModel;
 
   bool autoPosition;
   bool legacyUc;
 
   ParamConfig({
-    this.model = 'nai-diffusion-4-curated-preview',
+    this.model = defaultModel,
     this.sizes = const [GenerationSize(height: 1216, width: 832)],
-    this.scale = 6.5,
+    this.scale = defaultScale,
     this.sampler = 'k_euler_ancestral',
     this.steps = 28,
     this.randomSeed = true,
@@ -53,11 +64,16 @@ class ParamConfig {
     this.legacy = false,
     this.addOriginalImage = false,
     this.uncondScale = 1.0,
-    this.cfgRescale = 0.1,
+    this.cfgRescale = defaultCfgRescale,
     this.noiseSchedule = 'native',
     this.varietyPlus = false,
+    this.deliberateEulerAncestralBug,
+    this.preferBrownian,
+    this.straightAlpha,
+    this.tagHintQt,
+    this.tagHintUcPreset,
     this.negativePrompt = defaultUC,
-    this.autoPosition = false,
+    this.autoPosition = true,
     this.legacyUc = false,
   });
 
@@ -74,6 +90,7 @@ class ParamConfig {
       'sm': sm,
       'sm_dyn': smDyn,
       'random_seed': randomSeed,
+      'seed': seed,
       'dynamic_thresholding': dynamicThresholding,
       'controlnet_strength': controlNetStrength,
       'legacy': legacy,
@@ -86,21 +103,36 @@ class ParamConfig {
       'reference_information_extracted_multiple': [],
       'reference_strength_multiple': [],
       'variety_plus': varietyPlus,
+      'deliberate_euler_ancestral_bug': deliberateEulerAncestralBug,
+      'prefer_brownian': preferBrownian,
+      'straight_alpha': straightAlpha,
+      'tag_hint_qt': tagHintQt,
+      'tag_hint_uc_preset': tagHintUcPreset,
       'auto_position': autoPosition,
       'legacy_uc': legacyUc,
     };
   }
 
+  /// Picks the generation size for one request (uniformly random when
+  /// multiple sizes are configured).
+  GenerationSize pickSize() => sizes[Random().nextInt(sizes.length)];
+
   /// Different from toJson(), some fields in payload need to be calculated from other params.
-  Map<String, dynamic> getPayload() {
-    bool? preferBrownian;
-    bool? deliberateEulerAncestralBug;
-    if (sampler == 'k_euler_ancestral' && noiseSchedule != 'native') {
-      preferBrownian = true;
-      deliberateEulerAncestralBug = false;
+  /// [overrideSize] replaces the random size pick (used by img2img/inpaint
+  /// requests whose size is derived from the input image).
+  Map<String, dynamic> getPayload({GenerationSize? overrideSize}) {
+    bool? effectiveDeliberateEulerAncestralBug = deliberateEulerAncestralBug;
+    bool? effectivePreferBrownian = preferBrownian;
+    final hasImportedSamplerOverrides =
+        deliberateEulerAncestralBug != null || preferBrownian != null;
+    if (!hasImportedSamplerOverrides &&
+        sampler == 'k_euler_ancestral' &&
+        noiseSchedule != 'native') {
+      effectiveDeliberateEulerAncestralBug = false;
+      effectivePreferBrownian = true;
     }
     double? skipCfgAboveSigma;
-    final selectedSize = sizes[Random().nextInt(sizes.length)];
+    final selectedSize = overrideSize ?? pickSize();
     final width = selectedSize.width;
     final height = selectedSize.height;
     if (varietyPlus) {
@@ -117,8 +149,8 @@ class ParamConfig {
       "sampler": sampler,
       "steps": steps,
       "n_samples": nSamples,
-      "ucPreset": 2,
-      "qualityToggle": false,
+      "ucPreset": ucPreset,
+      "qualityToggle": qualityToggle,
       'sm': sm,
       'sm_dyn': smDyn,
       "dynamic_thresholding": dynamicThresholding,
@@ -129,7 +161,7 @@ class ParamConfig {
       "noise_schedule": noiseSchedule,
       "skip_cfg_above_sigma": skipCfgAboveSigma,
       "use_coords": true,
-      "seed": randomSeed ? Random().nextInt(1 << 32 - 1) : seed,
+      "seed": randomSeed ? Random().nextInt(1 << 32 - 1) : seed ?? 0,
       "characterPrompts": [],
       "v4_prompt": {},
       "v4_negative_prompt": {},
@@ -137,80 +169,127 @@ class ParamConfig {
       "reference_image_multiple": [],
       "reference_information_extracted_multiple": [],
       "reference_strength_multiple": [],
-      "deliberate_euler_ancestral_bug": deliberateEulerAncestralBug,
-      "prefer_brownian": preferBrownian,
+      "deliberate_euler_ancestral_bug": effectiveDeliberateEulerAncestralBug,
+      "prefer_brownian": effectivePreferBrownian,
       "legacy_uc": legacyUc,
     };
     payload['legacy_v3_extend'] = false;
     payload.removeWhere((k, v) => v == null);
-    if (model.contains('diffusion-4')) {
+    if (model.contains('diffusion-4') || model.contains('diffusion-5')) {
       payload.remove('sm');
       payload.remove('sm_dyn');
-      if (noiseSchedule.contains('native')) {
+      if (model.contains('diffusion-4') && noiseSchedule.contains('native')) {
         payload['noise_schedule'] = 'karras';
       }
+    }
+    if (model.contains('diffusion-5')) {
+      // V5 uses the newer tag-hint / straight-alpha fields. The web frontend
+      // dropped the legacy ucPreset / qualityToggle pair, so for V5 we send
+      // these instead, defaulting to the official frontend values.
+      payload.remove('ucPreset');
+      payload.remove('qualityToggle');
+      payload['tag_hint_qt'] = tagHintQt ?? 0;
+      payload['tag_hint_uc_preset'] = tagHintUcPreset ?? 0;
+      payload['straight_alpha'] = straightAlpha ?? true;
     }
     return payload;
   }
 
   factory ParamConfig.fromJson(Map<String, dynamic> json) {
     return ParamConfig(
-      model: json['model'] ?? 'nai-diffusion-4-curated-preview',
+      model: json['model'] ?? defaultModel,
       sizes: (json['sizes'] as List<dynamic>?)
               ?.map((elem) => GenerationSize.fromJson(elem))
               .toList() ??
           const [GenerationSize(height: 1216, width: 832)],
-      scale: json['scale'],
-      sampler: json['sampler'],
-      steps: json['steps'],
-      nSamples: json['n_samples'],
+      scale: (json['scale'] as num?)?.toDouble() ?? defaultScale,
+      sampler: json['sampler'] ?? 'k_euler_ancestral',
+      steps: json['steps'] ?? 28,
+      nSamples: json['n_samples'] ?? 1,
+      randomSeed: json['random_seed'] ?? true,
+      seed: json['seed'] ?? 0,
       ucPreset: json['ucPreset'] ?? 0,
       qualityToggle: json['qualityToggle'] ?? false,
-      sm: json['sm'],
-      smDyn: json['sm_dyn'],
-      dynamicThresholding: json['dynamic_thresholding'],
+      sm: json['sm'] ?? true,
+      smDyn: json['sm_dyn'] ?? true,
+      dynamicThresholding: json['dynamic_thresholding'] ?? false,
       varietyPlus: json['variety_plus'] ?? false,
       controlNetStrength: json['controlnet_strength'] is int
           ? (json['controlnet_strength'] as int).toDouble()
-          : json['controlnet_strength'],
-      legacy: json['legacy'],
-      addOriginalImage: json['add_original_image'],
+          : json['controlnet_strength'] ?? 1.0,
+      legacy: json['legacy'] ?? false,
+      addOriginalImage: json['add_original_image'] ?? false,
       uncondScale: json['uncond_scale'] is int
           ? (json['uncond_scale'] as int).toDouble()
-          : json['uncond_scale'],
-      cfgRescale: json['cfg_rescale'] is int
-          ? (json['cfg_rescale'] as int).toDouble()
-          : json['cfg_rescale'],
-      noiseSchedule: json['noise_schedule'],
-      negativePrompt: json['negative_prompt'],
-      autoPosition: json['auto_position'] ?? false,
+          : json['uncond_scale'] ?? 1.0,
+      cfgRescale:
+          (json['cfg_rescale'] as num?)?.toDouble() ?? defaultCfgRescale,
+      noiseSchedule: json['noise_schedule'] ?? 'native',
+      negativePrompt: json['negative_prompt'] ?? defaultUC,
+      autoPosition: json['auto_position'] ?? true,
       legacyUc: json['legacy_uc'] ?? false,
+      deliberateEulerAncestralBug:
+          json['deliberate_euler_ancestral_bug'] as bool?,
+      preferBrownian: json['prefer_brownian'] as bool?,
+      straightAlpha: json['straight_alpha'] as bool?,
+      tagHintQt: (json['tag_hint_qt'] as num?)?.toInt(),
+      tagHintUcPreset: (json['tag_hint_uc_preset'] as num?)?.toInt(),
     );
   }
 
   int loadJson(Map<String, dynamic> json) {
     int loadCount = 0;
+    if (json.containsKey('sampler') || json.containsKey('noise_schedule')) {
+      clearImportedSamplerOverrides();
+    }
+    if (json['model'] is String && (json['model'] as String).isNotEmpty) {
+      model = json['model'] as String;
+      loadCount++;
+    }
+    if (json['sizes'] is List) {
+      final importedSizes = (json['sizes'] as List)
+          .whereType<Map<String, dynamic>>()
+          .map(GenerationSize.fromJson)
+          .toList();
+      if (importedSizes.isNotEmpty) {
+        sizes = importedSizes;
+        loadCount++;
+      }
+    }
     if (json.containsKey('width') && json.containsKey('height')) {
       final width = json['width'];
       final height = json['height'];
-      sizes = [GenerationSize(width: width, height: height)];
-      loadCount += 2;
+      if (width is num && height is num) {
+        sizes = [
+          GenerationSize(width: width.toInt(), height: height.toInt()),
+        ];
+        loadCount += 2;
+      }
     }
     if (json.containsKey('scale')) {
-      scale = json['scale'];
-      loadCount++;
+      final value = json['scale'];
+      if (value is num) {
+        scale = value.toDouble();
+        loadCount++;
+      }
     }
     if (json.containsKey('sampler')) {
       sampler = json['sampler'];
       loadCount++;
     }
     if (json.containsKey('steps')) {
-      steps = json['steps'];
-      loadCount++;
+      final value = json['steps'];
+      if (value is num) {
+        steps = value.toInt();
+        loadCount++;
+      }
     }
     if (json.containsKey('n_samples')) {
-      nSamples = json['n_samples'];
-      loadCount++;
+      final value = json['n_samples'];
+      if (value is num) {
+        nSamples = value.toInt();
+        loadCount++;
+      }
     }
     if (json.containsKey('ucPreset')) {
       ucPreset = json['ucPreset'];
@@ -253,13 +332,35 @@ class ParamConfig {
       loadCount++;
     }
     if (json.containsKey('cfg_rescale')) {
-      cfgRescale = json['cfg_rescale'] is int
-          ? (json['cfg_rescale'] as int).toDouble()
-          : json['cfg_rescale'];
-      loadCount++;
+      final value = json['cfg_rescale'];
+      if (value is num) {
+        cfgRescale = value.toDouble();
+        loadCount++;
+      }
     }
     if (json.containsKey('noise_schedule')) {
       noiseSchedule = json['noise_schedule'];
+      loadCount++;
+    }
+    if (json.containsKey('deliberate_euler_ancestral_bug')) {
+      deliberateEulerAncestralBug =
+          json['deliberate_euler_ancestral_bug'] as bool?;
+      loadCount++;
+    }
+    if (json.containsKey('prefer_brownian')) {
+      preferBrownian = json['prefer_brownian'] as bool?;
+      loadCount++;
+    }
+    if (json.containsKey('straight_alpha')) {
+      straightAlpha = json['straight_alpha'] as bool?;
+      loadCount++;
+    }
+    if (json.containsKey('tag_hint_qt')) {
+      tagHintQt = (json['tag_hint_qt'] as num?)?.toInt();
+      loadCount++;
+    }
+    if (json.containsKey('tag_hint_uc_preset')) {
+      tagHintUcPreset = (json['tag_hint_uc_preset'] as num?)?.toInt();
       loadCount++;
     }
     if (json.containsKey('negative_prompt')) {
@@ -267,18 +368,41 @@ class ParamConfig {
       loadCount++;
     }
     if (json.containsKey('seed')) {
-      seed = json['seed'];
-      randomSeed = false;
+      final importedSeed = json['seed'];
+      if (importedSeed is num) {
+        seed = importedSeed.toInt();
+        randomSeed = false;
+        loadCount++;
+      }
+    } else if (json['random_seed'] is bool) {
+      randomSeed = json['random_seed'] as bool;
       loadCount++;
     }
     if (json.containsKey('use_coords')) {
-      autoPosition = json['use_coords'];
+      autoPosition = !(json['use_coords'] as bool);
       loadCount++;
     }
     if (json.containsKey('uc')) {
       negativePrompt = json['uc'];
       loadCount++;
     }
+    if (json['variety_plus'] is bool) {
+      varietyPlus = json['variety_plus'] as bool;
+      loadCount++;
+    }
+    if (json['legacy_uc'] is bool) {
+      legacyUc = json['legacy_uc'] as bool;
+      loadCount++;
+    }
+    if (json['auto_position'] is bool) {
+      autoPosition = json['auto_position'] as bool;
+      loadCount++;
+    }
     return loadCount;
+  }
+
+  void clearImportedSamplerOverrides() {
+    deliberateEulerAncestralBug = null;
+    preferBrownian = null;
   }
 }

@@ -1,5 +1,9 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:nai_casrand/ui/prompt_assistance/prompt_editing_assistance.dart';
+import 'package:nai_casrand/ui/prompt_assistance/prompt_weight_syntax.dart';
+import 'package:nai_casrand/ui/prompt_config/widgets/prompt_entry_divider.dart';
+import 'package:nai_casrand/ui/prompt_config/widgets/prompt_entry_editor.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_config_delete_view.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_config_edit_view.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_config_reorder_view.dart';
@@ -8,8 +12,15 @@ import 'package:provider/provider.dart';
 
 class PromptConfigView extends StatelessWidget {
   final PromptConfigViewModel viewModel;
+  final PromptEditingAssistance? promptAssistance;
+  final bool autocompleteEnabled;
 
-  const PromptConfigView({super.key, required this.viewModel});
+  const PromptConfigView({
+    super.key,
+    required this.viewModel,
+    this.promptAssistance,
+    this.autocompleteEnabled = true,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -67,7 +78,13 @@ class PromptConfigView extends StatelessWidget {
     if (viewModel.config.type == 'config') {
       List<Widget> children = [];
       for (var subViewModel in viewModel.subConfigs) {
-        children.add(PromptConfigView(viewModel: subViewModel));
+        children.add(
+          PromptConfigView(
+            viewModel: subViewModel,
+            promptAssistance: promptAssistance,
+            autocompleteEnabled: autocompleteEnabled,
+          ),
+        );
       }
       children.add(_buildButtonsRow(viewModel, context));
       return children;
@@ -77,8 +94,8 @@ class PromptConfigView extends StatelessWidget {
           padding: const EdgeInsets.only(left: 20),
           child: ListTile(
             title: Text(
-                '${context.tr('cascaded_strings')}${context.tr('colon')}${viewModel.config.strs.length}${context.tr('items')}'),
-            subtitle: Text(viewModel.config.strs.join('\n')),
+                '${context.tr('cascaded_strings')}${context.tr('colon')}${viewModel.config.usableEntryCount}${context.tr('items')}'),
+            subtitle: _PromptEntryPreview(entries: viewModel.config.strs),
             onTap: () => _editStrList(context),
           ),
         )
@@ -87,43 +104,13 @@ class PromptConfigView extends StatelessWidget {
   }
 
   void _editStrList(BuildContext context) {
-    TextEditingController controller =
-        TextEditingController(text: viewModel.config.strs.join('\n'));
     showDialog(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text('${context.tr('edit')}${context.tr('cascaded_strings')}'),
-          content: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(context.tr('edit_cascaded_config_str_notice')),
-                TextField(
-                  controller: controller,
-                  keyboardType: TextInputType.multiline,
-                  maxLines: null, // 允许无限行
-                  autofocus: true,
-                )
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              child: Text(context.tr('cancel')),
-              onPressed: () => Navigator.of(context).pop(),
-            ),
-            TextButton(
-              child: Text(context.tr('confirm')),
-              onPressed: () {
-                viewModel.setStrs(controller.text);
-                Navigator.of(context).pop();
-              },
-            ),
-          ],
-        );
-      },
+      builder: (context) => _PromptEntryEditorDialog(
+        viewModel: viewModel,
+        promptAssistance: promptAssistance,
+        autocompleteEnabled: autocompleteEnabled,
+      ),
     );
   }
 
@@ -226,6 +213,111 @@ class PromptConfigView extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+}
+
+class _PromptEntryEditorDialog extends StatefulWidget {
+  const _PromptEntryEditorDialog({
+    required this.viewModel,
+    this.promptAssistance,
+    required this.autocompleteEnabled,
+  });
+
+  final PromptConfigViewModel viewModel;
+  final PromptEditingAssistance? promptAssistance;
+  final bool autocompleteEnabled;
+
+  @override
+  State<_PromptEntryEditorDialog> createState() =>
+      _PromptEntryEditorDialogState();
+}
+
+class _PromptEntryEditorDialogState extends State<_PromptEntryEditorDialog> {
+  late List<String> _entries;
+
+  @override
+  void initState() {
+    super.initState();
+    _entries = List.of(widget.viewModel.config.strs);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mediaSize = MediaQuery.sizeOf(context);
+    final availableWidth = mediaSize.width - 128;
+    final availableHeight = mediaSize.height - 220;
+    return AlertDialog(
+      title: Text('${context.tr('edit')}${context.tr('cascaded_strings')}'),
+      content: SizedBox(
+        width: availableWidth.clamp(240, 620),
+        height: availableHeight.clamp(180, 680),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Align(
+              alignment: Alignment.centerRight,
+              child: Text(
+                context.tr('edit_cascaded_config_str_notice'),
+                key: const Key('prompt-entry-help'),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: PromptEntryEditor(
+                initialEntries: _entries,
+                onChanged: (value) => _entries = value,
+                promptAssistance: widget.promptAssistance,
+                autocompleteEnabled: widget.autocompleteEnabled,
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          child: Text(context.tr('cancel')),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        TextButton(
+          child: Text(context.tr('confirm')),
+          onPressed: () {
+            widget.viewModel.setEntries(
+              _entries
+                  .map(PromptWeightSyntax.normalizeText)
+                  .toList(growable: false),
+            );
+            Navigator.of(context).pop();
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _PromptEntryPreview extends StatelessWidget {
+  const _PromptEntryPreview({required this.entries});
+
+  final List<String> entries;
+
+  @override
+  Widget build(BuildContext context) {
+    final dividerColor = promptEntryDividerColor(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final (index, entry) in entries.indexed) ...[
+          PromptWeightText(
+            entry,
+            key: Key('prompt-preview-entry-$index'),
+          ),
+          if (index < entries.length - 1)
+            PromptEntryDivider(
+              key: Key('prompt-preview-divider-$index'),
+              color: dividerColor,
+            ),
+        ],
+      ],
     );
   }
 }

@@ -1,150 +1,270 @@
-import 'dart:convert'; // For utf8 encoding/decoding
-import 'package:flutter/foundation.dart';
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:png_chunks_extract/png_chunks_extract.dart' as png_extract;
 
+/// One NovelAI V4/V4.5 Vibe Transfer source.
+///
+/// A source can be either a normal image that still needs server-side vibe
+/// extraction, or an imported NovelAI vibe file/PNG that already contains one
+/// or more cached encodings. Encodings are keyed by model and Information
+/// Extracted because NovelAI produces a different encoding when either changes.
 class VibeConfigV4 {
+  static const String expectedITXtKeyword = 'NovelAI_Vibe_Encoding_Base64';
+
   String fileName;
-  Uint8List?
-      imageBytes; // The original PNG bytes, stored for potential later use
-  String vibeB64; // The extracted Base64 vibe string
+  Uint8List? imageBytes;
   double referenceStrength;
+  double informationExtracted;
+
+  final Map<String, String> _encodingCache;
+  String _legacyVibeB64;
 
   VibeConfigV4({
     required this.fileName,
-    required this.vibeB64,
+    String vibeB64 = '',
     required this.referenceStrength,
+    this.informationExtracted = 0.7,
     this.imageBytes,
-  });
+    Map<String, String>? encodingCache,
+  })  : _legacyVibeB64 = vibeB64,
+        _encodingCache = Map.of(encodingCache ?? const {});
 
-  // The keyword used when embedding the data in the iTXt chunk
-  static const String _expectedITXtKeyword = "NovelAI_Vibe_Encoding_Base64";
+  /// Compatibility accessor for older call sites and encoded-only fixtures.
+  /// New generation code should use [encodingFor].
+  String get vibeB64 => _legacyVibeB64.isNotEmpty
+      ? _legacyVibeB64
+      : (_encodingCache.isNotEmpty ? _encodingCache.values.first : '');
 
+  set vibeB64(String value) => _legacyVibeB64 = value;
+
+  bool get canEncode => imageBytes != null && imageBytes!.isNotEmpty;
+  bool get hasAnyEncoding =>
+      _legacyVibeB64.isNotEmpty || _encodingCache.isNotEmpty;
+
+  String? encodingFor(
+    String model, {
+    double? informationExtracted,
+  }) {
+    final info = informationExtracted ?? this.informationExtracted;
+    final exact = _encodingCache[_cacheKey(model, info)];
+    if (exact != null && exact.isNotEmpty) return exact;
+
+    // Old CasRand configs and encoded-only test fixtures did not retain model
+    // metadata. They remain usable as a compatibility fallback. Image-backed
+    // imports use exact cache entries and therefore correctly re-encode when
+    // model or Information Extracted changes.
+    if (_legacyVibeB64.isNotEmpty) return _legacyVibeB64;
+    return null;
+  }
+
+  bool needsEncoding(String model) => encodingFor(model) == null;
+
+  void cacheEncoding({
+    required String model,
+    required double informationExtracted,
+    required String encoding,
+  }) {
+    if (encoding.isEmpty) {
+      throw const FormatException('The Vibe encoding response was empty.');
+    }
+    _encodingCache[_cacheKey(model, informationExtracted)] = encoding;
+  }
+
+  Map<String, String> get encodingCache => Map.unmodifiable(_encodingCache);
+
+  factory VibeConfigV4.fromImageBytes(
+    String fileName,
+    Uint8List imageBytes,
+    double referenceStrength, {
+    double informationExtracted = 0.7,
+    String? model,
+  }) {
+    final config = VibeConfigV4(
+      fileName: fileName,
+      referenceStrength: referenceStrength.clamp(0.0, 1.0),
+      informationExtracted: informationExtracted.clamp(0.0, 1.0),
+      imageBytes: imageBytes,
+    );
+
+    final embeddedEncoding = _extractEmbeddedEncoding(imageBytes);
+    if (embeddedEncoding != null && model != null) {
+      config.cacheEncoding(
+        model: model,
+        informationExtracted: config.informationExtracted,
+        encoding: embeddedEncoding,
+      );
+    } else if (embeddedEncoding != null) {
+      config._legacyVibeB64 = embeddedEncoding;
+    }
+    return config;
+  }
+
+  /// Backwards-compatible name retained for callers that only accepted PNG.
+  /// A PNG without an embedded encoding is now a valid normal image source.
   factory VibeConfigV4.fromPngBytes(
     String fileName,
     Uint8List imageBytes,
-    double referenceStrength,
-  ) {
-    final List<Map<String, dynamic>> chunks =
-        png_extract.extractChunks(imageBytes);
-    String? extractedVibeB64;
+    double referenceStrength, {
+    double informationExtracted = 0.7,
+    String? model,
+  }) {
+    return VibeConfigV4.fromImageBytes(
+      fileName,
+      imageBytes,
+      referenceStrength,
+      informationExtracted: informationExtracted,
+      model: model,
+    );
+  }
 
-    for (final chunk in chunks) {
-      if (chunk['name'] == 'iTXt') {
-        final Uint8List iTXtData = chunk['data'] as Uint8List;
+  factory VibeConfigV4.fromNaiV4VibeJson(
+    String originalFileName,
+    Map<String, dynamic> jsonData,
+    double defaultReferenceStrength, {
+    double defaultInformationExtracted = 0.7,
+  }) {
+    final importInfo = _asStringMap(jsonData['importInfo']);
+    final importedModel = importInfo?['model']?.toString();
+    final strength = _asDouble(importInfo?['strength'])?.clamp(0.0, 1.0) ??
+        defaultReferenceStrength.clamp(0.0, 1.0);
+    final informationExtracted =
+        (_asDouble(importInfo?['information_extracted']) ??
+                defaultInformationExtracted)
+            .clamp(0.0, 1.0);
 
-        try {
-          int keywordEndIndex = iTXtData.indexOf(0);
-          if (keywordEndIndex == -1) continue;
-          String keyword = utf8.decode(iTXtData.sublist(0, keywordEndIndex));
+    Uint8List? imageBytes;
+    final imageB64 = jsonData['image'];
+    if (imageB64 is String && imageB64.isNotEmpty) {
+      try {
+        imageBytes = base64Decode(imageB64);
+      } on FormatException {
+        throw FormatException(
+          "Invalid base64 image in '$originalFileName'.",
+        );
+      }
+    }
 
-          if (keyword == _expectedITXtKeyword) {
-            int currentIndex = keywordEndIndex + 1;
+    final config = VibeConfigV4(
+      fileName: jsonData['name'] as String? ?? originalFileName,
+      referenceStrength: strength,
+      informationExtracted: informationExtracted,
+      imageBytes: imageBytes,
+    );
 
-            if (currentIndex >= iTXtData.length) continue;
-            int compressionFlag = iTXtData[currentIndex++];
-            if (compressionFlag != 0) {
-              throw FormatException(
-                  "Unsupported iTXt compression flag: $compressionFlag for keyword '$_expectedITXtKeyword'. Expected 0.");
-            }
+    final encodings = _asStringMap(jsonData['encodings']);
+    if (encodings != null) {
+      for (final modelEntry in encodings.entries) {
+        final modelEncodings = _asStringMap(modelEntry.value);
+        if (modelEncodings == null) continue;
+        final backendModel =
+            _backendModelFromExportKey(modelEntry.key) ?? importedModel;
+        if (backendModel == null) continue;
 
-            if (currentIndex >= iTXtData.length) continue;
-            currentIndex++; // Skip compression method byte
-
-            int langTagEndIndex = iTXtData.indexOf(0, currentIndex);
-            if (langTagEndIndex == -1) continue;
-            currentIndex = langTagEndIndex + 1;
-
-            int translatedKeywordEndIndex = iTXtData.indexOf(0, currentIndex);
-            if (translatedKeywordEndIndex == -1) continue;
-            currentIndex = translatedKeywordEndIndex + 1;
-
-            if (currentIndex < iTXtData.length) {
-              extractedVibeB64 = utf8.decode(iTXtData.sublist(currentIndex));
-              break;
-            } else {
-              throw const FormatException(
-                  "iTXt chunk for '$_expectedITXtKeyword' has an empty text field.");
-            }
-          }
-        } catch (e) {
-          if (kDebugMode) print("Error parsing a candidate iTXt chunk: $e");
-          continue;
+        for (final encodingEntry in modelEncodings.values) {
+          final encodingInfo = _asStringMap(encodingEntry);
+          final encoding = encodingInfo?['encoding'];
+          if (encoding is! String || encoding.isEmpty) continue;
+          final params = _asStringMap(encodingInfo?['params']);
+          final encodingInfoExtracted =
+              (_asDouble(params?['information_extracted']) ??
+                      informationExtracted)
+                  .clamp(0.0, 1.0);
+          config.cacheEncoding(
+            model: backendModel,
+            informationExtracted: encodingInfoExtracted,
+            encoding: encoding,
+          );
         }
       }
     }
 
-    if (extractedVibeB64 != null) {
-      return VibeConfigV4(
-        fileName: fileName,
-        vibeB64: extractedVibeB64,
-        referenceStrength: referenceStrength,
-        imageBytes: imageBytes,
-      );
-    } else {
+    if (!config.hasAnyEncoding && !config.canEncode) {
       throw ArgumentError(
-          "Required iTXt chunk with keyword '$_expectedITXtKeyword' not found in PNG image '$fileName'.");
+        "No usable image or Vibe encoding was found in '$originalFileName'.",
+      );
+    }
+    return config;
+  }
+
+  static String _cacheKey(String model, double informationExtracted) =>
+      '${_normalizeBackendModel(model)}|${informationExtracted.toStringAsFixed(6)}';
+
+  static String _normalizeBackendModel(String model) => model.trim();
+
+  static String? _backendModelFromExportKey(String key) {
+    switch (key) {
+      case 'v4full':
+        return 'nai-diffusion-4-full';
+      case 'v4curated':
+        return 'nai-diffusion-4-curated-preview';
+      case 'v4-5full':
+        return 'nai-diffusion-4-5-full';
+      case 'v4-5curated':
+        return 'nai-diffusion-4-5-curated';
+      default:
+        return key.startsWith('nai-diffusion-') ? key : null;
     }
   }
 
-  // 新增的工厂构造函数，用于 .naiv4vibe 文件
-  factory VibeConfigV4.fromNaiV4VibeJson(
-    String originalFileName, // 从文件选择器获取的文件名
-    Map<String, dynamic> jsonData,
-    double defaultReferenceStrength, // 如果JSON中没有strength，则使用此默认值
-  ) {
-    // 1. 提取 'name'，如果不存在则使用原始文件名
-    String name = jsonData['name'] as String? ?? originalFileName;
+  static Map<String, dynamic>? _asStringMap(dynamic value) {
+    if (value is Map<String, dynamic>) return value;
+    if (value is Map) {
+      return value.map((key, value) => MapEntry(key.toString(), value));
+    }
+    return null;
+  }
 
-    // 2. 提取 'strength'
-    double strength = defaultReferenceStrength;
-    final importInfo = jsonData['importInfo'] as Map<String, dynamic>?;
-    if (importInfo != null && importInfo['strength'] != null) {
-      final dynamic strengthValue = importInfo['strength'];
-      if (strengthValue is double) {
-        strength = strengthValue;
-      } else if (strengthValue is int) {
-        strength = strengthValue.toDouble();
-      } else if (strengthValue is String) {
-        strength = double.tryParse(strengthValue) ?? defaultReferenceStrength;
+  static double? _asDouble(dynamic value) {
+    if (value is num) return value.toDouble();
+    if (value is String) return double.tryParse(value);
+    return null;
+  }
+
+  static String? _extractEmbeddedEncoding(Uint8List bytes) {
+    if (!_looksLikePng(bytes)) return null;
+    final chunks = png_extract.extractChunks(bytes);
+    for (final chunk in chunks) {
+      if (chunk['name'] != 'iTXt') continue;
+      final data = chunk['data'];
+      if (data is! Uint8List) continue;
+      final parsed = _parseITXt(data);
+      if (parsed?.$1 == expectedITXtKeyword && parsed!.$2.isNotEmpty) {
+        return parsed.$2;
       }
     }
+    return null;
+  }
 
-    // 3. 提取 'encoding' (Base64 vibe string)
-    //    直接从 encodings 中取出一个 encoding 即可
-    String? vibeB64String;
-    final encodingsMap = jsonData['encodings'] as Map<String, dynamic>?;
-    if (encodingsMap != null) {
-      // 遍历 encodingsMap 来找到第一个有效的 'encoding' 字符串
-      outerLoop:
-      for (var modelKey in encodingsMap.keys) {
-        final modelEncodings = encodingsMap[modelKey] as Map<String, dynamic>?;
-        if (modelEncodings != null) {
-          for (var typeKey in modelEncodings.keys) {
-            final typeEncodingInfo =
-                modelEncodings[typeKey] as Map<String, dynamic>?;
-            if (typeEncodingInfo != null &&
-                typeEncodingInfo.containsKey('encoding')) {
-              final dynamic encodingValue = typeEncodingInfo['encoding'];
-              if (encodingValue is String && encodingValue.isNotEmpty) {
-                vibeB64String = encodingValue;
-                break outerLoop; // 找到后即跳出所有循环
-              }
-            }
-          }
-        }
-      }
-    }
+  static (String, String)? _parseITXt(Uint8List data) {
+    var index = data.indexOf(0);
+    if (index < 0) return null;
+    final keyword = utf8.decode(data.sublist(0, index), allowMalformed: true);
+    index++;
+    if (index + 1 >= data.length) return null;
+    final compressionFlag = data[index++];
+    index++; // Compression method.
+    if (compressionFlag != 0) return null;
 
-    if (vibeB64String == null) {
-      throw ArgumentError(
-          "Could not find a valid 'encoding' field in the .naiv4vibe JSON data for file '$originalFileName'.");
-    }
-
-    return VibeConfigV4(
-      fileName: name, // 使用从JSON中提取的name，或原始文件名
-      vibeB64: vibeB64String,
-      referenceStrength: strength.clamp(0.0, 1.0), // 确保强度在有效范围内
-      imageBytes: null, // .naiv4vibe 文件不包含图片预览
+    final languageEnd = data.indexOf(0, index);
+    if (languageEnd < 0) return null;
+    index = languageEnd + 1;
+    final translatedKeywordEnd = data.indexOf(0, index);
+    if (translatedKeywordEnd < 0) return null;
+    index = translatedKeywordEnd + 1;
+    if (index > data.length) return null;
+    return (
+      keyword,
+      utf8.decode(data.sublist(index), allowMalformed: true),
     );
+  }
+
+  static bool _looksLikePng(Uint8List bytes) {
+    const signature = [137, 80, 78, 71, 13, 10, 26, 10];
+    if (bytes.length < signature.length) return false;
+    for (var index = 0; index < signature.length; index++) {
+      if (bytes[index] != signature[index]) return false;
+    }
+    return true;
   }
 }

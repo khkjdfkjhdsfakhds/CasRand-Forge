@@ -94,6 +94,8 @@ class ConfigService {
   }
 
   Future<void> saveConfig(Map<String, dynamic> jsonData) async {
+    // Let the initiating UI event finish before encoding and writing the config.
+    await Future<void>.delayed(Duration.zero);
     saveBox.put('savedUuid', currentUuid);
     saveConfigByUuid(currentUuid, jsonData);
   }
@@ -156,6 +158,31 @@ class ConfigService {
     }
     configIndex[uuid]!.lastModified = DateTime.now();
     saveConfigIndex();
+  }
+
+  Future<String> saveNewConfig(
+    Map<String, dynamic> jsonData, {
+    required String title,
+    bool makeCurrent = false,
+  }) async {
+    final uuid = const Uuid().v4();
+    await saveBox.put('savedConfig-$uuid', json.encode(jsonData));
+    configIndex[uuid] = SavedConfigInfo(
+      title: title,
+      lastModified: DateTime.now(),
+    );
+    final encodedIndex = configIndex.map(
+      (configUuid, savedConfigInfo) => MapEntry(
+        configUuid,
+        savedConfigInfo.toJson(),
+      ),
+    );
+    await saveBox.put('configIndex', json.encode(encodedIndex));
+    if (makeCurrent) {
+      currentUuid = uuid;
+      await saveBox.put('savedUuid', uuid);
+    }
+    return uuid;
   }
 
   void deleteConfigByUuid(String uuid) {

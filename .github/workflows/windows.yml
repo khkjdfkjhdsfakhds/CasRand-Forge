@@ -1,10 +1,7 @@
-name: Build Windows Stable
+name: Build Windows (Manual Only)
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "v0.9.1-forge.*"
 
 permissions:
   contents: read
@@ -14,7 +11,7 @@ jobs:
     # super_native_extensions 0.8.x still uses the VS 2022 coroutine headers.
     runs-on: windows-2022
     env:
-      ASSET_NAME: CasRand-Forge-${{ github.ref_name }}-Windows-x64.zip
+      ASSET_NAME: NAI-CasRand-Forge-v0.9.8-Windows-x64.zip
 
     steps:
       - name: Check out source
@@ -34,7 +31,7 @@ jobs:
         run: flutter analyze --no-fatal-infos
 
       - name: Test
-        run: flutter test
+        run: flutter test --concurrency=1
 
       - name: Enable Windows desktop
         run: flutter config --enable-windows-desktop
@@ -52,8 +49,16 @@ jobs:
       - name: Validate Windows package
         shell: powershell
         run: |
-          if (-not (Test-Path "build\windows\x64\runner\Release\CasRandForge.exe")) {
-            throw "CasRandForge.exe is missing from the release directory"
+          $exePath = "build\windows\x64\runner\Release\NAICasRandForge.exe"
+          if (-not (Test-Path $exePath)) {
+            throw "NAICasRandForge.exe is missing from the release directory"
+          }
+          $version = (Get-Item $exePath).VersionInfo
+          if ($version.FileVersion -ne "0.9.8+95") {
+            throw "Unexpected Windows file version: $($version.FileVersion)"
+          }
+          if ($version.ProductVersion -ne "0.9.8+95") {
+            throw "Unexpected Windows product version: $($version.ProductVersion)"
           }
           tar.exe -t -f "$env:ASSET_NAME" | Out-Null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

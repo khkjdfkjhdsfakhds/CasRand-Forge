@@ -12,6 +12,15 @@ if (localPropertiesFile.exists()) {
     }
 }
 
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file('key.properties')
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.withInputStream { stream ->
+        keystoreProperties.load(stream)
+    }
+}
+def hasReleaseKeystore = keystorePropertiesFile.exists()
+
 def flutterVersionCode = localProperties.getProperty('flutter.versionCode')
 if (flutterVersionCode == null) {
     flutterVersionCode = '1'
@@ -23,7 +32,7 @@ if (flutterVersionName == null) {
 }
 
 android {
-    namespace "io.github.khkjdfkjhdsfakhds.casrandforge"
+    namespace "io.github.khkjdfkjhdsfakhds.casrandforge.beta"
     compileSdk flutter.compileSdkVersion
     ndkVersion flutter.ndkVersion
 
@@ -41,10 +50,10 @@ android {
     }
 
     defaultConfig {
-        applicationId "io.github.khkjdfkjhdsfakhds.casrandforge"
+        applicationId "io.github.khkjdfkjhdsfakhds.casrandforge.beta"
         // You can update the following values to match your application needs.
         // For more information, see: https://docs.flutter.dev/deployment/android#reviewing-the-gradle-build-configuration.
-        minSdkVersion 23  
+        minSdkVersion flutter.minSdkVersion
         targetSdkVersion flutter.targetSdkVersion
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
@@ -56,10 +65,21 @@ android {
         }
     }
 
+    signingConfigs {
+        release {
+            if (hasReleaseKeystore) {
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // Public builds use a test key until a long-lived release key is configured.
-            signingConfig signingConfigs.debug
+            // Local builds fall back to debug; CI supplies the long-lived release key.
+            signingConfig hasReleaseKeystore ? signingConfigs.release : signingConfigs.debug
         }
     }
 }

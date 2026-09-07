@@ -1,6 +1,7 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:nai_casrand/ui/prompt_assistance/prompt_editing_assistance.dart';
 import 'package:nai_casrand/ui/prompt_config/view_models/prompt_config_viewmodel.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_config_view.dart';
 import 'package:nai_casrand/ui/saved_config_list/view_models/saved_config_list_viewmodel.dart';
@@ -8,8 +9,15 @@ import 'package:provider/provider.dart';
 
 class SavedConfigListView extends StatelessWidget {
   final SavedConfigListViewmodel viewmodel;
+  final PromptEditingAssistance? promptAssistance;
+  final bool autocompleteEnabled;
 
-  const SavedConfigListView({super.key, required this.viewmodel});
+  const SavedConfigListView({
+    super.key,
+    required this.viewmodel,
+    this.promptAssistance,
+    this.autocompleteEnabled = true,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -41,11 +49,14 @@ class SavedConfigListView extends StatelessWidget {
                   children: [
                     Expanded(
                         child: PromptConfigView(
-                            viewModel: PromptConfigViewModel(
-                      config: elem,
-                      isRoot: true,
-                      initiallyExpanded: false,
-                    ))),
+                      viewModel: PromptConfigViewModel(
+                        config: elem,
+                        isRoot: true,
+                        initiallyExpanded: false,
+                      ),
+                      promptAssistance: promptAssistance,
+                      autocompleteEnabled: autocompleteEnabled,
+                    )),
                     IconButton(
                         padding: const EdgeInsets.symmetric(vertical: 12.0),
                         onPressed: () => viewmodel.removeConfig(elem),

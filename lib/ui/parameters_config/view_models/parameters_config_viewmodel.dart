@@ -2,9 +2,9 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
+import 'package:nai_casrand/data/models/image_import_capabilities.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
-import 'package:nai_casrand/data/models/generation_size.dart';
-import 'package:nai_casrand/ui/core/utils/flushbar.dart';
+import 'package:nai_casrand/ui/core/widgets/prompt_mode_switch_button.dart';
 
 class ParametersConfigViewmodel extends ChangeNotifier {
   PayloadConfig get payloadConfig => GetIt.I();
@@ -14,6 +14,13 @@ class ParametersConfigViewmodel extends ChangeNotifier {
 
   setSteps(double value) {
     config.steps = value.toInt();
+    notifyListeners();
+  }
+
+  void setStepsFromText(String value) {
+    final parsedValue = int.tryParse(value);
+    if (parsedValue == null || parsedValue < 0 || parsedValue > 50) return;
+    config.steps = parsedValue;
     notifyListeners();
   }
 
@@ -29,11 +36,13 @@ class ParametersConfigViewmodel extends ChangeNotifier {
 
   setSampler(String value) {
     config.sampler = value;
+    config.clearImportedSamplerOverrides();
     notifyListeners();
   }
 
   setNoiseScheduler(String value) {
     config.noiseSchedule = value;
+    config.clearImportedSamplerOverrides();
     notifyListeners();
   }
 
@@ -53,64 +62,34 @@ class ParametersConfigViewmodel extends ChangeNotifier {
   }
 
   setNegativePrompt(String value) {
-    config.negativePrompt = value;
-    notifyListeners();
-  }
-
-  setRandomSeedEnabled(bool value) {
-    config.randomSeed = value;
-    notifyListeners();
-  }
-
-  setSeed(String value) {
-    final parseResult = int.tryParse(value);
-    if (parseResult == null) return;
-    config.seed = parseResult;
-    notifyListeners();
-  }
-
-  void removeSize(GenerationSize elem) {
-    if (config.sizes.length == 1) return;
-    final list = config.sizes.toList();
-    list.remove(elem);
-    config.sizes = list;
-    notifyListeners();
-  }
-
-  void addSize(GenerationSize elem) {
-    if (config.sizes.contains(elem)) return;
-    final list = config.sizes.toList();
-    list.add(elem);
-    config.sizes = list;
-    notifyListeners();
-  }
-
-  void addManualSize(String width, String height) {
-    var parsedWigth = int.tryParse(width);
-    var parsedHeight = int.tryParse(height);
-    if (parsedWigth == null || parsedHeight == null) return;
-    parsedWigth = (parsedWigth / 64).ceil() * 64;
-    parsedHeight = (parsedHeight / 64).ceil() * 64;
-    final size = GenerationSize(width: parsedWigth, height: parsedHeight);
-    if (config.sizes.contains(size)) return;
-    final list = config.sizes.toList();
-    list.add(size);
-    config.sizes = list;
+    payloadConfig.setNegativePromptFromString(value);
     notifyListeners();
   }
 
   void setModel(String value) {
     config.model = value;
+    config.clearImportedSamplerOverrides();
     notifyListeners();
   }
 
-  bool get isV4 => config.model.contains('-4-');
-
-  void setAutoPosition(bool? value) {
-    if (value == null) return;
-    config.autoPosition = value;
+  void setModelFromMetadata(BuildContext context, String value) {
+    payloadConfig.fixedProfile.paramConfig.model = value;
+    payloadConfig.promptMode = PromptMode.fixed;
     notifyListeners();
+    showFixedModeImportNotice(
+      context,
+      tr(
+        'pasted_parameter',
+        namedArgs: {'parameter_name': tr('generation_model')},
+      ),
+    );
   }
+
+  ImageImportCapabilities get capabilities =>
+      ImageImportCapabilities.forModel(config.model);
+  bool get isV4 => capabilities.isV4Family;
+  bool get isV5 => capabilities.isV5Family;
+  bool get isModern => isV4 || isV5;
 
   void setLegacyUc(bool? value) {
     if (value == null) return;
@@ -124,18 +103,13 @@ class ParametersConfigViewmodel extends ChangeNotifier {
     String? prompt,
     String? model,
   ) {
-    int loadedCount = config.loadJson(commentData);
-    if (prompt != null) {
-      payloadConfig.overridePrompt = prompt;
-      payloadConfig.useOverridePrompt = true;
-      loadedCount++;
-    }
-    if (model != null) {
-      payloadConfig.paramConfig.model = model;
-      loadedCount++;
-    }
+    final loadedCount = payloadConfig.importMetadataToFixedProfile(
+      commentData,
+      prompt: prompt,
+      model: model,
+    );
     notifyListeners();
-    showInfoBar(
+    showFixedModeImportNotice(
         context,
         tr(
           'loaded_parameters_count',
@@ -145,10 +119,10 @@ class ParametersConfigViewmodel extends ChangeNotifier {
 
   void loadSingleImageMetadata(
       BuildContext context, Map<String, dynamic> commentData, String key) {
-    final loadedCount = config.loadJson(commentData);
+    final loadedCount = payloadConfig.loadParamJson(commentData);
     if (loadedCount == 0) return;
     notifyListeners();
-    showInfoBar(
+    showFixedModeImportNotice(
         context,
         tr(
           'pasted_parameter',
@@ -158,10 +132,11 @@ class ParametersConfigViewmodel extends ChangeNotifier {
 
   void setOverridePrompt(BuildContext context, String? prompt) {
     if (prompt == null) return;
-    payloadConfig.overridePrompt = prompt;
-    payloadConfig.useOverridePrompt = true;
+    payloadConfig.fixedProfile.rootPromptConfig =
+        PayloadConfig.fixedPromptConfig(prompt);
+    payloadConfig.promptMode = PromptMode.fixed;
     notifyListeners();
-    showInfoBar(
+    showFixedModeImportNotice(
         context,
         tr(
           'pasted_parameter',

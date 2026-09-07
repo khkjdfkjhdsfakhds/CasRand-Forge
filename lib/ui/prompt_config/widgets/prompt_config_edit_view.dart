@@ -12,14 +12,25 @@ class PromptConfigEditView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final title = InkWell(
-      child: Text(viewModel.config.comment),
+      key: const Key('prompt-config-title-edit'),
       onTap: () => _showEditCommentDialog(context),
+      borderRadius: BorderRadius.circular(4),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: kMinInteractiveDimension),
+        child: Row(
+          children: [
+            Expanded(child: Text(viewModel.config.comment)),
+            const SizedBox(width: 8),
+            const Icon(Icons.edit_outlined, size: 20),
+          ],
+        ),
+      ),
     );
     return ListenableBuilder(
       listenable: viewModel,
       builder: (context, _) => AlertDialog(
         title: title,
-        content: _buildBody(context),
+        content: SingleChildScrollView(child: _buildBody(context)),
         actions: [
           TextButton(
             onPressed: () {
@@ -38,18 +49,21 @@ class PromptConfigEditView extends StatelessWidget {
   }
 
   Widget _buildBody(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        _buildToolTip(context),
-        _buildSelectionMethodTile(viewModel, context),
-        _buildShuffledTile(viewModel, context),
-        _buildNumTile(viewModel, context),
-        _buildProbTile(viewModel, context),
-        _buildRandomBrackets(viewModel, context),
-        _buildTypeTile(viewModel, context),
-      ],
+    return SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          _buildToolTip(context),
+          _buildSelectionMethodTile(viewModel, context),
+          _buildShuffledTile(viewModel, context),
+          _buildNumTile(viewModel, context),
+          _buildProbTile(viewModel, context),
+          _buildRandomBrackets(viewModel, context),
+          _buildUseAsFileNamePrefixTile(viewModel, context),
+          _buildTypeTile(viewModel, context),
+        ],
+      ),
     );
   }
 
@@ -124,6 +138,20 @@ class PromptConfigEditView extends StatelessWidget {
     );
   }
 
+  Widget _buildUseAsFileNamePrefixTile(
+      PromptConfigViewModel viewModel, BuildContext context) {
+    return CheckboxListTile(
+      key: const Key('prompt-config-use-as-file-name-prefix'),
+      title: Text(context.tr('use_as_file_name_prefix')),
+      value: viewModel.config.useAsFileNamePrefix,
+      onChanged: (value) {
+        if (value == null) return;
+        viewModel.setUseAsFileNamePrefix(value);
+      },
+      secondary: const Icon(Icons.drive_file_rename_outline),
+    );
+  }
+
   Widget _buildRandomBrackets(
       PromptConfigViewModel viewModel, BuildContext context) {
     return RangeListTile(
@@ -141,11 +169,14 @@ class PromptConfigEditView extends StatelessWidget {
   }
 
   Widget _buildNumTile(PromptConfigViewModel viewModel, BuildContext context) {
-    if (viewModel.config.selectionMethod != 'multiple_num') {
+    if (viewModel.config.selectionMethod != 'multiple_num' &&
+        viewModel.config.selectionMethod != 'single_sequential') {
       return const SizedBox.shrink();
     }
     return EditableListTile(
-        title: tr('selection_num'),
+        title: viewModel.config.selectionMethod == 'single_sequential'
+            ? tr('single_sequential_repeats_num')
+            : tr('selection_num'),
         leading: const Icon(Icons.question_mark),
         confirmOnSubmit: true,
         keyboardType: TextInputType.number,

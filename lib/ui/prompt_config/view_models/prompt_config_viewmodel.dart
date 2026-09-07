@@ -30,7 +30,7 @@ class PromptConfigViewModel extends ChangeNotifier {
   }
 
   void setNum(int value) {
-    config.num = value;
+    config.num = value < 1 ? 1 : value;
     notifyListeners();
   }
 
@@ -54,14 +54,21 @@ class PromptConfigViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  bool get useAsFileNamePrefix => config.useAsFileNamePrefix;
+
+  void setUseAsFileNamePrefix(bool value) {
+    config.useAsFileNamePrefix = value;
+    notifyListeners();
+  }
+
   void setRandomBrackets(int lower, int upper) {
     config.randomBracketsLower = lower;
     config.randomBracketsUpper = upper;
     notifyListeners();
   }
 
-  void setStrs(String value) {
-    config.strs = value.split('\n').where((str) => str.isNotEmpty).toList();
+  void setEntries(List<String> value) {
+    config.strs = List.of(value);
     notifyListeners();
   }
 

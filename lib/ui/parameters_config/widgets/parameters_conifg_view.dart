@@ -2,16 +2,14 @@ import 'dart:convert';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:nai_casrand/core/constants/defaults.dart';
 import 'package:nai_casrand/core/constants/parameters.dart';
 import 'package:nai_casrand/data/services/image_service.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
 import 'package:nai_casrand/ui/parameters_config/view_models/parameters_config_viewmodel.dart';
 import 'package:nai_casrand/ui/core/widgets/editable_list_tile.dart';
 import 'package:nai_casrand/ui/core/widgets/slider_list_tile.dart';
-import 'package:provider/provider.dart';
-import 'package:image/image.dart' as img;
 
 class ParametersConfigView extends StatelessWidget {
   final ParametersConfigViewmodel viewmodel;
@@ -25,19 +23,20 @@ class ParametersConfigView extends StatelessWidget {
       builder: (context, _) => Column(
         children: [
           _buildModelSelector(context),
-          if (viewmodel.isV4) _buildAutoPositionTile(context),
           if (viewmodel.isV4) _buildLegacyUcTile(context),
-          _buildSizeSelector(context),
           // Steps
           SliderListTile(
+              key: const Key('sampling-steps-control'),
               title: context.tr('sampling_steps') +
                   context.tr('colon') +
                   viewmodel.config.steps.toString(),
               sliderValue: viewmodel.config.steps.toDouble(),
               leading: const Icon(Icons.repeat),
+              trailing: const Icon(Icons.edit_outlined),
               min: 0,
-              max: 28,
-              divisions: 28,
+              max: 50,
+              divisions: 50,
+              onTitleTap: () => _showStepsInputDialog(context),
               onChanged: (value) => viewmodel.setSteps(value)),
           // CFG
           SliderListTile(
@@ -67,7 +66,7 @@ class ParametersConfigView extends StatelessWidget {
               leading: const Icon(Icons.search),
               title: context.tr('sampler'),
               currentValue: viewmodel.config.sampler,
-              options: viewmodel.isV4 ? samplersV4 : samplers,
+              options: viewmodel.isModern ? samplersV4 : samplers,
               onSelectComplete: (value) => viewmodel.setSampler(value)),
           SelectableListTile(
               leading: const Icon(Icons.search),
@@ -76,14 +75,14 @@ class ParametersConfigView extends StatelessWidget {
               options: viewmodel.isV4 ? noiseSchedulesV4 : noiseSchedules,
               onSelectComplete: (value) => viewmodel.setNoiseScheduler(value)),
           // SMEA
-          if (!viewmodel.isV4)
+          if (!viewmodel.isModern)
             _buildSwitchTile(
               context.tr('sm'),
               viewmodel.config.sm,
               (newValue) => viewmodel.setSm(newValue),
               const Icon(Icons.keyboard_double_arrow_right),
             ),
-          if (!viewmodel.isV4)
+          if (!viewmodel.isModern)
             _buildSwitchTile(
               context.tr('sm_dyn'),
               viewmodel.config.smDyn,
@@ -96,17 +95,6 @@ class ParametersConfigView extends StatelessWidget {
             viewmodel.config.varietyPlus,
             (newValue) => viewmodel.setVarietyPlus(newValue),
             const Icon(Icons.add),
-          ),
-          // Seed
-          _buildRandomSeedTile(context),
-          // UC
-          EditableListTile(
-            leading: const Icon(Icons.do_not_disturb),
-            title: context.tr('uc'),
-            currentValue: viewmodel.config.negativePrompt,
-            confirmOnSubmit: true,
-            onEditComplete: (value) => viewmodel.setNegativePrompt(value),
-            keyboardType: TextInputType.text,
           ),
         ],
       ),
@@ -125,38 +113,6 @@ class ParametersConfigView extends StatelessWidget {
     );
   }
 
-  Widget _buildSizeSelector(BuildContext context) {
-    return ListTile(
-      title: Text(context.tr('image_size')),
-      subtitle: Text(viewmodel.config.sizes
-          .map((elem) => '${elem.width} x ${elem.height}')
-          .join(' || ')),
-      leading: const Icon(Icons.photo_size_select_large),
-      onTap: () => _showSizeSelectionDialog(context),
-    );
-  }
-
-  Widget _buildRandomSeedTile(BuildContext context) {
-    return Column(
-      children: [
-        _buildSwitchTile(
-          context.tr('use_random_seed'),
-          viewmodel.config.randomSeed,
-          (newValue) => viewmodel.setRandomSeedEnabled(newValue),
-          const Icon(Icons.shuffle),
-        ),
-        if (!viewmodel.config.randomSeed)
-          Padding(
-              padding: const EdgeInsets.only(left: 20),
-              child: (EditableListTile(
-                  title: context.tr('random_seed'),
-                  currentValue: viewmodel.config.seed.toString(),
-                  confirmOnSubmit: true,
-                  onEditComplete: (value) => viewmodel.setSeed(value))))
-      ],
-    );
-  }
-
   Widget _buildSwitchTile(String title, bool currentValue,
       ValueChanged<bool> onChanged, Icon? icon) {
     return CheckboxListTile(
@@ -167,18 +123,14 @@ class ParametersConfigView extends StatelessWidget {
     );
   }
 
-  void _showSizeSelectionDialog(BuildContext context) {
-    showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-              title: Text(tr('edit') + tr('colon') + tr('image_size')),
-              content: SizeSelectionView(viewmodel: viewmodel),
-              actions: [
-                TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: Text(tr('confirm')))
-              ],
-            ));
+  Future<void> _showStepsInputDialog(BuildContext context) async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => _SamplingStepsInputDialog(
+        initialValue: viewmodel.config.steps,
+        onSubmit: viewmodel.setStepsFromText,
+      ),
+    );
   }
 
   Widget _buildModelSelector(BuildContext context) {
@@ -188,15 +140,6 @@ class ParametersConfigView extends StatelessWidget {
       currentValue: viewmodel.config.model,
       options: models,
       onSelectComplete: (value) => viewmodel.setModel(value),
-    );
-  }
-
-  Widget _buildAutoPositionTile(BuildContext context) {
-    return CheckboxListTile(
-      title: Text(tr('auto_position')),
-      secondary: const Icon(Icons.not_listed_location_outlined),
-      value: viewmodel.config.autoPosition,
-      onChanged: (value) => viewmodel.setAutoPosition(value),
     );
   }
 
@@ -213,9 +156,8 @@ class ParametersConfigView extends StatelessWidget {
     final picker = ImagePicker();
     final result = await picker.pickImage(source: ImageSource.gallery);
     if (result == null) return;
-    final image = img.decodeImage(await result.readAsBytes());
-    if (image == null) return;
-    final metadataString = await ImageService().extractMetadata(image);
+    final bytes = await result.readAsBytes();
+    final metadataString = await ImageService().extractMetadataFromBytes(bytes);
     if (!context.mounted) return;
     if (metadataString == null) {
       showErrorBar(context, tr('metadata_not_found'));
@@ -243,7 +185,7 @@ class ParametersConfigView extends StatelessWidget {
           ? ListTile(
               title: Text(tr('generation_model')),
               subtitle: Text(model),
-              onTap: () => viewmodel.setModel(model),
+              onTap: () => viewmodel.setModelFromMetadata(context, model),
             )
           : const SizedBox.shrink();
       final sizeTile = ListTile(
@@ -317,81 +259,71 @@ class ParametersConfigView extends StatelessWidget {
   }
 }
 
-class SizeSelectionView extends StatelessWidget {
-  final ParametersConfigViewmodel viewmodel;
+class _SamplingStepsInputDialog extends StatefulWidget {
+  final int initialValue;
+  final ValueChanged<String> onSubmit;
 
-  const SizeSelectionView({super.key, required this.viewmodel});
+  const _SamplingStepsInputDialog({
+    required this.initialValue,
+    required this.onSubmit,
+  });
+
+  @override
+  State<_SamplingStepsInputDialog> createState() =>
+      _SamplingStepsInputDialogState();
+}
+
+class _SamplingStepsInputDialogState extends State<_SamplingStepsInputDialog> {
+  late final TextEditingController controller;
+
+  @override
+  void initState() {
+    super.initState();
+    controller = TextEditingController(text: widget.initialValue.toString());
+    controller.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: controller.text.length,
+    );
+  }
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  void submit() {
+    widget.onSubmit(controller.text);
+    Navigator.of(context).pop();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final widthController = TextEditingController();
-    final heightController = TextEditingController();
-    return ChangeNotifierProvider.value(
-      value: viewmodel,
-      child: Consumer<ParametersConfigViewmodel>(
-          builder: (context, viewmodel, child) => Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 8),
-                    child: Text('Selected:'),
-                  ),
-                  Wrap(
-                    spacing: 4,
-                    runSpacing: 4,
-                    children: viewmodel.config.sizes
-                        .map((elem) => Chip(
-                              label: Text('${elem.width} x ${elem.height}'),
-                              onDeleted: () => viewmodel.removeSize(elem),
-                            ))
-                        .toList(),
-                  ),
-                  const Divider(),
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 8),
-                    child: Text('Defaults:'),
-                  ),
-                  Wrap(
-                    spacing: 4,
-                    runSpacing: 4,
-                    children: defaultSizes
-                        .map((elem) => OutlinedButton(
-                              onPressed: () => viewmodel.addSize(elem),
-                              child: Text('${elem.width} x ${elem.height}'),
-                            ))
-                        .toList(),
-                  ),
-                  const Divider(),
-                  const Text('Manual:'),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: widthController,
-                          keyboardType: const TextInputType.numberWithOptions(),
-                        ),
-                      ),
-                      const Padding(
-                        padding: EdgeInsets.only(left: 16, right: 16),
-                        child: Text('×'),
-                      ),
-                      Expanded(
-                          child: TextField(
-                        controller: heightController,
-                        keyboardType: const TextInputType.numberWithOptions(),
-                      )),
-                      const SizedBox(width: 16),
-                      IconButton(
-                          onPressed: () => viewmodel.addManualSize(
-                                widthController.text,
-                                heightController.text,
-                              ),
-                          icon: const Icon(Icons.add))
-                    ],
-                  )
-                ],
-              )),
+    return AlertDialog(
+      title: Text(
+        '${context.tr('edit')}${context.tr('colon')}'
+        '${context.tr('sampling_steps')}',
+      ),
+      content: TextField(
+        key: const Key('sampling-steps-input'),
+        controller: controller,
+        autofocus: true,
+        keyboardType: TextInputType.number,
+        textInputAction: TextInputAction.done,
+        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+        decoration: const InputDecoration(helperText: '0–50'),
+        onSubmitted: (_) => submit(),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(context.tr('cancel')),
+        ),
+        TextButton(
+          onPressed: submit,
+          child: Text(context.tr('confirm')),
+        ),
+      ],
     );
   }
 }
