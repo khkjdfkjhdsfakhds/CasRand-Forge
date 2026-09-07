@@ -7,7 +7,27 @@ permissions:
   contents: read
 
 jobs:
+  test-supported-desktop:
+    # Desktop filesystem/dialog tests require a supported desktop host.
+    runs-on: macos-15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.6
+          cache: true
+      - name: Resolve locked dependencies
+        run: flutter pub get --enforce-lockfile
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos
+      - name: Test
+        run: flutter test --concurrency=1 --enable-vmservice
+
   build-android:
+    needs: test-supported-desktop
     runs-on: ubuntu-latest
     env:
       ASSET_NAME: NAI-CasRand-Forge-v1.00-Android.apk
@@ -50,12 +70,6 @@ jobs:
           keyAlias=$ANDROID_KEY_ALIAS
           storeFile=release.keystore
           EOF
-
-      - name: Analyze
-        run: flutter analyze --no-fatal-infos
-
-      - name: Test
-        run: flutter test --concurrency=1 --enable-vmservice
 
       - name: Build release APK
         run: flutter build apk --release
