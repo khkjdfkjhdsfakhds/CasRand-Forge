@@ -20,8 +20,7 @@ class PromptConfigReorderView extends StatelessWidget {
                     key: ValueKey(index), title: Text(prompt.comment));
               },
               itemCount: viewModel.config.prompts.length,
-              onReorder: (oldIndex, newIndex) =>
-                  viewModel.reorder(oldIndex, newIndex));
+              onReorderItem: viewModel.reorderAdjusted);
         }));
   }
 }

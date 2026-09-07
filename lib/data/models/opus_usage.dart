@@ -11,8 +11,12 @@ class OpusUsage {
     required this.observedAt,
   });
 
+  /// Percentage reported by NovelAI for the remaining allowance.
+  ///
+  /// Opus can grant temporary boosts, so the value may legitimately exceed
+  /// 100%. Negative usage is still represented as zero for display.
   double get visiblePercent =>
-      isNegative ? 0 : percent.clamp(0, 100).toDouble();
+      isNegative ? 0 : percent.clamp(0, double.infinity).toDouble();
 
   double get refillPercentPerHour =>
       secondsPerPercent > 0 ? 3600 / secondsPerPercent : 0;
@@ -24,7 +28,7 @@ class OpusUsage {
     final elapsedSeconds = now.difference(observedAt).inMilliseconds / 1000;
     return OpusUsage(
       percent: (percent + elapsedSeconds / secondsPerPercent)
-          .clamp(0, 100)
+          .clamp(0, double.infinity)
           .toDouble(),
       isNegative: false,
       secondsPerPercent: secondsPerPercent,

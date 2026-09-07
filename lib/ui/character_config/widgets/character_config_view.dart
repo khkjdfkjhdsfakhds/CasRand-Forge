@@ -30,12 +30,10 @@ class CharacterConfigView extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: viewmodel,
-      builder: (context, _) => DecoratedBox(
-        decoration: BoxDecoration(
-          color: Theme.of(context)
-              .disabledColor
-              .withAlpha(viewmodel.config.enabled ? 0 : 30),
-        ),
+      builder: (context, _) => Material(
+        color: Theme.of(context)
+            .disabledColor
+            .withAlpha(viewmodel.config.enabled ? 0 : 30),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
@@ -65,11 +63,6 @@ class CharacterConfigView extends StatelessWidget {
                     subtitle: Text(_genderLabel(viewmodel.config.gender)),
                     onTap: () => _showGenderDialog(context),
                   ),
-                ),
-                Checkbox(
-                  key: const Key('character-enabled-checkbox'),
-                  value: viewmodel.config.enabled,
-                  onChanged: (value) => viewmodel.setEnabled(value),
                 ),
               ],
             ),
@@ -195,15 +188,15 @@ class _EditPositionDialog extends StatefulWidget {
 class _EditPositionDialogState extends State<_EditPositionDialog> {
   late final TextEditingController _x;
   late final TextEditingController _y;
-  late final bool _free;
+
+  bool get _free => widget.viewmodel.isV5 && !widget.viewmodel.autoPosition;
 
   String _fmt(double v) => v.toStringAsFixed(3);
 
   @override
   void initState() {
     super.initState();
-    _free = widget.viewmodel.isV5 && !widget.viewmodel.autoPosition;
-    final Point<double>? c = _free ? widget.viewmodel.config.freeCenter : null;
+    final Point<double>? c = widget.viewmodel.config.freeCenter;
     final Point<double> start = c ?? const Point<double>(0.5, 0.5);
     _x = TextEditingController(text: _fmt(start.x));
     _y = TextEditingController(text: _fmt(start.y));
@@ -228,62 +221,83 @@ class _EditPositionDialogState extends State<_EditPositionDialog> {
   @override
   Widget build(BuildContext context) {
     final vm = widget.viewmodel;
-    return AlertDialog(
-      title: Text(
-        '${tr('edit')}${tr('colon')}${tr('character_position')}',
-      ),
-      content: SizedBox(
-        width: 460,
-        child: _free
-            ? CharacterFreePositionCanvas(
-                viewmodel: vm,
-                characterIndex: widget.characterIndex,
-                referencePositions: widget.referencePositions,
-                xController: _x,
-                yController: _y,
-              )
-            : CharacterPositionView(viewmodel: vm),
-      ),
-      actions: [
-        if (_free) ...[
-          SizedBox(
-            width: 104,
-            child: TextField(
-              key: const Key('free-x-input'),
-              controller: _x,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(
-                labelText: 'X',
-                border: OutlineInputBorder(),
-                isDense: true,
+    return ListenableBuilder(
+      listenable: vm,
+      builder: (context, _) {
+        final free = _free;
+        return AlertDialog(
+          title: Text(
+            '${tr('edit')}${tr('colon')}${tr('character_position')}',
+          ),
+          content: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: 460,
+              maxHeight: MediaQuery.sizeOf(context).height * 0.7,
+            ),
+            child: SingleChildScrollView(
+              child: SizedBox(
+                width: 460,
+                child: free
+                    ? Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _AutoPositionCheckbox(viewmodel: vm),
+                          const Divider(),
+                          CharacterFreePositionCanvas(
+                            viewmodel: vm,
+                            characterIndex: widget.characterIndex,
+                            referencePositions: widget.referencePositions,
+                            xController: _x,
+                            yController: _y,
+                          ),
+                        ],
+                      )
+                    : CharacterPositionView(viewmodel: vm),
               ),
-              onChanged: (_) => _applyFromFields(),
             ),
           ),
-          const SizedBox(width: 8),
-          SizedBox(
-            width: 104,
-            child: TextField(
-              key: const Key('free-y-input'),
-              controller: _y,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(
-                labelText: 'Y',
-                border: OutlineInputBorder(),
-                isDense: true,
+          actions: [
+            if (free) ...[
+              SizedBox(
+                width: 104,
+                child: TextField(
+                  key: const Key('free-x-input'),
+                  controller: _x,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(
+                    labelText: 'X',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                  onChanged: (_) => _applyFromFields(),
+                ),
               ),
-              onChanged: (_) => _applyFromFields(),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 104,
+                child: TextField(
+                  key: const Key('free-y-input'),
+                  controller: _y,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(
+                    labelText: 'Y',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                  onChanged: (_) => _applyFromFields(),
+                ),
+              ),
+              const SizedBox(width: 8),
+            ],
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(tr('confirm')),
             ),
-          ),
-          const SizedBox(width: 8),
-        ],
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: Text(tr('confirm')),
-        ),
-      ],
+          ],
+        );
+      },
     );
   }
 }
@@ -359,17 +373,28 @@ class CharacterPositionView extends StatelessWidget {
                     ),
                     const SizedBox(height: 12),
                     const Divider(),
-                    CheckboxListTile(
-                      key: const Key('auto-position-checkbox'),
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(tr('auto_position')),
-                      secondary: const Icon(Icons.not_listed_location_outlined),
-                      value: viewmodel.autoPosition,
-                      onChanged: viewmodel.setAutoPosition,
-                    ),
+                    _AutoPositionCheckbox(viewmodel: viewmodel),
                   ],
                 );
               },
             ));
+  }
+}
+
+class _AutoPositionCheckbox extends StatelessWidget {
+  final CharacterConfigViewmodel viewmodel;
+
+  const _AutoPositionCheckbox({required this.viewmodel});
+
+  @override
+  Widget build(BuildContext context) {
+    return CheckboxListTile(
+      key: const Key('auto-position-checkbox'),
+      contentPadding: EdgeInsets.zero,
+      title: Text(tr('auto_position')),
+      secondary: const Icon(Icons.not_listed_location_outlined),
+      value: viewmodel.autoPosition,
+      onChanged: viewmodel.setAutoPosition,
+    );
   }
 }

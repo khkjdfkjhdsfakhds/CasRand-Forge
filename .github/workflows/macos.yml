@@ -10,7 +10,7 @@ jobs:
   build-macos:
     runs-on: macos-15
     env:
-      ASSET_NAME: NAI-CasRand-Forge-v0.9.8-macOS-universal.dmg
+      ASSET_NAME: NAI-CasRand-Forge-v0.9.10-macOS-universal.dmg
       APP_PATH: build/macos/Build/Products/Release/NAI CasRand Forge.app
 
     steps:
@@ -39,8 +39,8 @@ jobs:
       - name: Validate macOS app
         run: |
           test -d "$APP_PATH"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")" = "0.9.8"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Contents/Info.plist")" = "95"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")" = "0.9.10"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Contents/Info.plist")" = "117"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Contents/Info.plist")" = "io.github.khkjdfkjhdsfakhds.casrandforge.beta"
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
           MAIN_ARCHS="$(lipo -archs "$APP_PATH/Contents/MacOS/NAI CasRand Forge")"
@@ -58,7 +58,7 @@ jobs:
           ditto "$APP_PATH" "$STAGING/NAI CasRand Forge.app"
           ln -s /Applications "$STAGING/Applications"
           hdiutil create \
-            -volname "NAI CasRand Forge 0.9.8" \
+            -volname "NAI CasRand Forge 0.9.10" \
             -srcfolder "$STAGING" \
             -ov \
             -format UDZO \

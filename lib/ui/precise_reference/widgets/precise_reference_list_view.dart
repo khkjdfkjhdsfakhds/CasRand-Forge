@@ -17,7 +17,7 @@ class PreciseReferenceListView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: viewmodel,
+      listenable: Listenable.merge([viewmodel, viewmodel.payloadConfig]),
       builder: (context, child) {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,

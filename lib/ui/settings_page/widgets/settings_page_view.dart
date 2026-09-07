@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/core/constants/settings.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
+import 'package:nai_casrand/data/models/user_input_validation.dart';
 import 'package:nai_casrand/ui/settings_page/widgets/navigation_directory.dart';
 import 'package:nai_casrand/ui/settings_page/view_models/settings_page_viewmodel.dart';
 import 'package:nai_casrand/ui/core/widgets/editable_list_tile.dart';
@@ -45,6 +46,9 @@ class _SettingsPageViewState extends State<SettingsPageView> {
   @override
   void initState() {
     super.initState();
+    if (viewmodel.navigationDirectoryAnchor != null) {
+      viewmodel.navigationDirectoryExpanded = true;
+    }
     _scrollController = ScrollController(
       initialScrollOffset: viewmodel.navigationDirectoryScrollOffset,
     )..addListener(_rememberScrollOffset);
@@ -111,31 +115,59 @@ class _SettingsPageViewState extends State<SettingsPageView> {
       child: Consumer<SettingsPageViewmodel>(
         builder: (context, viewmodel, child) => Column(
           children: [
+            _sectionHeading(context, 'settings_group_account'),
             _buildApiProxySettingsTile(context),
+            _sectionHeading(context, 'settings_group_storage'),
             _buildEraseMetadataTile(context),
             if (viewmodel.supportsDesktopJpegStorage())
               _buildOutputSelectionTile(),
             if (viewmodel.supportsDesktopJpegStorage())
               _buildJpegStorageTiles(),
             _buildPrefixKeyTile(),
+            _sectionHeading(context, 'settings_group_prompt'),
             _buildRememberSequentialProgressTile(),
             _buildPromptModeConfirmationTile(),
             _buildPromptAutocompleteTile(),
             const Divider(),
-            NavigationDirectory(
-              configuration: viewmodel.settings.navigation,
-              destinationKeys: _navigationDestinationKeys,
-              onOpenDestination: _openNavigationDestination,
-              onEnabledChanged: (change) =>
-                  viewmodel.setNavigationDestinationEnabled(
-                change.destination,
-                change.enabled,
-              ),
-              onReorder: viewmodel.reorderNavigationDestination,
+            ExpansionTile(
+              key: const Key('navigation-settings-expansion'),
+              initiallyExpanded: viewmodel.navigationDirectoryExpanded,
+              onExpansionChanged: (expanded) =>
+                  viewmodel.navigationDirectoryExpanded = expanded,
+              leading: const Icon(Icons.view_sidebar_outlined),
+              title: Text(tr('navigation_directory'),
+                  key: const Key('navigation-directory-title')),
+              subtitle: Text(tr('navigation_directory_summary', namedArgs: {
+                'count': viewmodel.settings.navigation.destinations.length
+                    .toString(),
+                'total': viewmodel
+                    .settings.navigation.orderedDestinations.length
+                    .toString(),
+              })),
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: Text(tr('navigation_directory_hint')),
+                ),
+                NavigationDirectory(
+                  showHeader: false,
+                  configuration: viewmodel.settings.navigation,
+                  destinationKeys: _navigationDestinationKeys,
+                  onOpenDestination: _openNavigationDestination,
+                  onEnabledChanged: (change) =>
+                      viewmodel.setNavigationDestinationEnabled(
+                    change.destination,
+                    change.enabled,
+                  ),
+                  onReorder: viewmodel.reorderNavigationDestination,
+                ),
+              ],
             ),
             const Divider(),
+            _sectionHeading(context, 'settings_group_config'),
             _buildSavedConfigTile(context),
             _buildRestoreInitialSettingsTile(context),
+            _sectionHeading(context, 'settings_group_appearance'),
             _buildThemeModeTile(context),
             _buildLanguageTile(context),
           ],
@@ -156,7 +188,8 @@ class _SettingsPageViewState extends State<SettingsPageView> {
         const SizedBox(height: 20),
         FloatingActionButton(
           onPressed: () => viewmodel.saveJsonConfig(),
-          tooltip: tr('export_settings_to_file'),
+          tooltip: '${tr('export_settings_to_file')}\n'
+              '${tr('config_export_credentials_removed')}',
           heroTag: 'settings_export_fab',
           child: const Icon(Icons.save),
         ),
@@ -167,11 +200,23 @@ class _SettingsPageViewState extends State<SettingsPageView> {
       body: SingleChildScrollView(
         key: const Key('settings-scroll-view'),
         controller: _scrollController,
+        padding: const EdgeInsets.only(bottom: 100),
         child: content,
       ),
       floatingActionButton: buttons,
     );
   }
+
+  Widget _sectionHeading(BuildContext context, String key) => Align(
+        alignment: AlignmentDirectional.centerStart,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+          child: Text(tr(key),
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: Theme.of(context).colorScheme.primary,
+                  )),
+        ),
+      );
 
   Widget _buildApiProxySettingsTile(BuildContext context) {
     final tokenCount = viewmodel.settings.apiTokens.length;
@@ -245,6 +290,7 @@ class _SettingsPageViewState extends State<SettingsPageView> {
           key: const Key('metadata-erase-enabled'),
           secondary: const Icon(Icons.delete_sweep),
           title: Text(tr('metadata_erase_enabled')),
+          subtitle: Text(tr('metadata_erase_enabled_hint')),
           value: viewmodel.settings.metadataEraseEnabled,
           onChanged: (value) => viewmodel.setEraseMetadataEnabled(value))
     ];
@@ -385,43 +431,55 @@ class _SettingsPageViewState extends State<SettingsPageView> {
   }
 
   Widget _buildThemeModeTile(BuildContext context) {
-    return SelectableListTile(
-      title: tr('theme_mode'),
+    return ListTile(
+      title: Text(tr('theme_mode')),
       leading: const Icon(Icons.dark_mode_outlined),
-      currentValue: viewmodel.payloadConfig.settings.themeMode,
-      options: themeModeStrings,
-      onSelectComplete: (value) => viewmodel.setThemeMode(value, context),
+      subtitle: Text(tr('theme_mode_${viewmodel.settings.themeMode}')),
+      onTap: () => showDialog<void>(
+        context: context,
+        builder: (dialogContext) => SimpleDialog(
+          title: Text(tr('theme_mode')),
+          children: [
+            for (final value in themeModeStrings)
+              SimpleDialogOption(
+                onPressed: () {
+                  viewmodel.setThemeMode(value, context);
+                  Navigator.of(dialogContext).pop();
+                },
+                child: Text(tr('theme_mode_$value')),
+              ),
+          ],
+        ),
+      ),
     );
   }
 
+  String _localeName(Locale locale) => switch (locale.languageCode) {
+        'zh' => '简体中文',
+        'en' => 'English',
+        _ => locale.toLanguageTag(),
+      };
+
   Widget _buildLanguageTile(BuildContext context) {
     return ListTile(
-      title: const Text('Language'),
+      title: Text(tr('language')),
       leading: const Icon(Icons.translate),
-      subtitle: Text(context.locale.toLanguageTag()),
+      subtitle: Text(_localeName(context.locale)),
       onTap: () => _showLanguageSelectionDialog(context),
     );
   }
 
   void _showLanguageSelectionDialog(BuildContext context) {
     final locales = context.supportedLocales;
-    String getLocaleName(Locale locale) {
-      if (locale.countryCode == null) {
-        return locale.languageCode;
-      } else {
-        return '${locale.languageCode}-${locale.countryCode}';
-      }
-    }
-
     showDialog(
         context: context,
         builder: (context) => AlertDialog(
-                title: const Text('Select language...'),
+                title: Text(tr('select_language')),
                 content: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: locales
                         .map((l) => ListTile(
-                              title: Text(getLocaleName(l)),
+                              title: Text(_localeName(l)),
                               onTap: () {
                                 Navigator.of(context).pop();
                                 context.setLocale(l);
@@ -441,14 +499,19 @@ class _SettingsPageViewState extends State<SettingsPageView> {
     return ListTile(
       title: Text(tr('saved_config')),
       leading: const Icon(Icons.save_outlined),
-      onTap: () {
+      onTap: () async {
         viewmodel.saveCurrentConfig();
-        Navigator.push(
+        await Navigator.push(
             context,
             MaterialPageRoute(
-                builder: (context) => ConfigSelectionPageView(
-                      notificationCallback: () => viewmodel.notify(),
+                builder: (_) => ConfigSelectionPageView(
+                      notificationCallback: () {
+                        if (context.mounted) {
+                          viewmodel.refresh(context: context);
+                        }
+                      },
                     )));
+        if (context.mounted) viewmodel.refresh();
       },
     );
   }
@@ -520,6 +583,7 @@ class _ApiProxySettingsDialogState extends State<_ApiProxySettingsDialog> {
   bool _detecting = false;
   String? _detectionMessage;
   bool _detectionSucceeded = false;
+  UserInputError? _proxyValidationError;
 
   bool get _desktopDetection =>
       !kIsWeb &&
@@ -543,13 +607,21 @@ class _ApiProxySettingsDialogState extends State<_ApiProxySettingsDialog> {
     super.dispose();
   }
 
-  void _saveSettings() {
+  bool _saveSettings() {
+    final proxyResult = widget.viewmodel.setProxy(_proxyController.text);
+    if (!proxyResult.isValid) {
+      setState(() => _proxyValidationError = proxyResult.error);
+      return false;
+    }
+    _proxyValidationError = null;
+    _proxyController.text = proxyResult.value!;
     widget.viewmodel.setApiKey(_apiController.text);
-    widget.viewmodel.setProxy(_proxyController.text.trim());
+    return true;
   }
 
   Future<void> _openTokenManager() async {
-    _saveSettings();
+    // Parent fields stay a draft until Confirm. Changes explicitly made in
+    // the account manager are independent and must survive parent Cancel.
     await Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const TokenManagerPageView()),
     );
@@ -583,8 +655,22 @@ class _ApiProxySettingsDialogState extends State<_ApiProxySettingsDialog> {
   }
 
   void _submit() {
-    _saveSettings();
+    if (!_saveSettings()) return;
     Navigator.of(context).pop();
+  }
+
+  String _proxyValidationMessage(UserInputError error) {
+    switch (error) {
+      case UserInputError.invalidProxyHost:
+        return tr('proxy_invalid_host');
+      case UserInputError.invalidProxyPort:
+        return tr('proxy_invalid_port');
+      case UserInputError.invalidProxyAddress:
+      case UserInputError.invalidDimension:
+      case UserInputError.nonPositiveDimension:
+      case UserInputError.dimensionOutOfRange:
+        return tr('proxy_invalid_address');
+    }
   }
 
   @override
@@ -634,12 +720,10 @@ class _ApiProxySettingsDialogState extends State<_ApiProxySettingsDialog> {
                   leading: const Icon(Icons.key_outlined),
                   title: Text(tr('api_tokens_optional')),
                   subtitle: Text(
-                    tokens.isEmpty
-                        ? tr('api_tokens_optional_hint')
-                        : tr('api_tokens_optional_summary', namedArgs: {
+                    '${tokens.isEmpty ? tr('api_tokens_optional_hint') : tr('api_tokens_optional_summary', namedArgs: {
                             'count': tokens.length.toString(),
                             'enabled': enabledCount.toString(),
-                          }),
+                          })}\n${tr('api_tokens_independent_save_hint')}',
                   ),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: _openTokenManager,
@@ -668,6 +752,10 @@ class _ApiProxySettingsDialogState extends State<_ApiProxySettingsDialog> {
                           border: OutlineInputBorder(),
                         ),
                         onSubmitted: (_) => _submit(),
+                        onChanged: (_) {
+                          if (_proxyValidationError == null) return;
+                          setState(() => _proxyValidationError = null);
+                        },
                       ),
                     ),
                     if (_desktopDetection) ...[
@@ -691,6 +779,16 @@ class _ApiProxySettingsDialogState extends State<_ApiProxySettingsDialog> {
                     ],
                   ],
                 ),
+                if (_proxyValidationError != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    _proxyValidationMessage(_proxyValidationError!),
+                    key: const Key('proxy-validation-error'),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ],
                 if (_detectionMessage != null) ...[
                   const SizedBox(height: 8),
                   Text(

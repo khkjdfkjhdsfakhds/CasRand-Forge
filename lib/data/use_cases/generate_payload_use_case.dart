@@ -1,8 +1,9 @@
+import 'dart:math';
+
 import 'package:easy_localization/easy_localization.dart';
 import 'package:nai_casrand/core/constants/parameters.dart';
 import 'package:nai_casrand/data/models/character_config.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
-import 'package:nai_casrand/data/models/image_import_capabilities.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/precise_reference_config.dart';
@@ -10,6 +11,7 @@ import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/vibe_config.dart';
 import 'package:nai_casrand/data/models/vibe_config_v4.dart';
 import 'package:nai_casrand/data/use_cases/prepare_i2i_request_use_case.dart';
+import 'package:nai_casrand/data/use_cases/novelai_text_rendering.dart';
 
 class PromptCommentPair {
   String prompt;
@@ -45,6 +47,7 @@ class GeneratePayloadUseCase {
   final int? seedOverride;
   final String promptSuffix;
   final bool applyPlainI2iCompatibilityFields;
+  final Random? random;
 
   GeneratePayloadUseCase({
     required this.payloadConfig,
@@ -52,6 +55,7 @@ class GeneratePayloadUseCase {
     this.seedOverride,
     this.promptSuffix = '',
     this.applyPlainI2iCompatibilityFields = true,
+    this.random,
   });
 
   ParamConfig get paramConfig => payloadConfig.paramConfig;
@@ -67,32 +71,28 @@ class GeneratePayloadUseCase {
   String get fileNameKey => payloadConfig.settings.fileNamePrefixKey;
 
   PayloadGenerationResult call() {
-    final pattern = RegExp(
-      r'__([\p{L}0-9_\-（）().\u4e00-\u9fff\uff00-\uffef]+?)__',
-      unicode: true,
-    );
-
     // Get prompt
     final filterEntryComments = payloadConfig.promptMode != PromptMode.fixed;
-    final basePromptResult = rootPromptConfig
-        .getPrmpts(filterEntryComments: filterEntryComments)
-        .replaceVariables(pattern, savedConfigList);
+    final basePromptResult = rootPromptConfig.getPrmpts(
+        filterEntryComments: filterEntryComments,
+        savedConfigs: savedConfigList);
     final basePair = PromptCommentPair(
       prompt: basePromptResult.toPrompt(),
       comment: basePromptResult.toComment(),
     );
-    final effectiveBasePrompt = _appendPromptSuffix(
-      basePair.prompt,
-      promptSuffix,
+    var effectiveBasePrompt = _appendPromptSuffix(
+      _appendPromptSuffix(basePair.prompt, promptSuffix),
+      paramConfig.transparentBackground ? 'transparent background' : '',
     );
     final plan = i2iPlan;
     final paramPayload = plan == null
-        ? paramConfig.getPayload()
+        ? paramConfig.getPayload(random: random)
         : paramConfig.getPayload(
             overrideSize: GenerationSize(
               width: plan.width,
               height: plan.height,
             ),
+            random: random,
           );
     if (seedOverride != null) {
       paramPayload['seed'] = seedOverride;
@@ -101,15 +101,16 @@ class GeneratePayloadUseCase {
 
     // Get character prompt
     final List<CharacterPromptResult> characterPromptResultList = [];
-    for (final config in characterConfigList) {
-      if (!config.enabled) continue;
-      characterPromptResultList.add(config.getPrompt());
+    for (final config in payloadConfig.activeCharacterConfigs) {
+      characterPromptResultList
+          .add(config.getPrompt(savedConfigs: savedConfigList));
     }
 
     // Character prompts
     final characterPrompts = [];
     final v4CharPosCaptions = [];
     final v4CharNegCaptions = [];
+    final textCharacters = <TextRenderingCharacter>[];
     final anyFreePosition = characterPromptResultList.any(
       (result) => result.isFreePosition,
     );
@@ -122,8 +123,6 @@ class GeneratePayloadUseCase {
           ? 'x:${result.center.x.toStringAsFixed(3)}, '
               'y:${result.center.y.toStringAsFixed(3)}'
           : (result.gridLabel ?? 'X0');
-      result.prompt = result.prompt.replaceVariables(pattern, savedConfigList);
-      result.uc = result.uc.replaceVariables(pattern, savedConfigList);
       final characterPair = PromptCommentPair(
         prompt: result.prompt.toPrompt(),
         comment: result.prompt.toComment(),
@@ -132,6 +131,10 @@ class GeneratePayloadUseCase {
         prompt: result.uc.toPrompt(),
         comment: result.uc.toComment(),
       );
+      textCharacters.add(TextRenderingCharacter(
+        prompt: characterPair.prompt,
+        center: result.center,
+      ));
       payloadComment += '\n\nCharacter ${index + 1} at $posAsString:\n'
           '${characterPair.comment}\n'
           '${tr('uc')}:\n${characterNegativePair.comment}';
@@ -149,15 +152,22 @@ class GeneratePayloadUseCase {
         'centers': [posAsDouble],
       });
     }
-    final negativePromptResult = negativePromptConfig
-        .getPrmpts(filterEntryComments: filterEntryComments)
-        .replaceVariables(pattern, savedConfigList);
+    final negativePromptResult = negativePromptConfig.getPrmpts(
+        filterEntryComments: filterEntryComments,
+        savedConfigs: savedConfigList);
     final negativePair = PromptCommentPair(
       prompt: negativePromptResult.toPrompt(),
       comment: negativePromptResult.toComment(),
     );
     payloadComment += '\n\n${tr('uc')}:\n${negativePair.comment}';
     paramPayload['negative_prompt'] = negativePair.prompt;
+    if (paramConfig.model.contains('diffusion-5')) {
+      effectiveBasePrompt = NovelAiTextRendering.appendToBase(
+        effectiveBasePrompt,
+        textCharacters,
+        useCoords: !paramConfig.autoPosition || anyFreePosition,
+      );
+    }
     final v4Prompt = {
       'caption': {
         'base_caption': effectiveBasePrompt,
@@ -182,9 +192,8 @@ class GeneratePayloadUseCase {
             .where((config) => config.enabled)
             .toList(growable: false)
         : <PreciseReferenceConfig>[];
-    final imageCapabilities =
-        ImageImportCapabilities.forModel(paramConfig.model);
-    if (payloadConfig.vibeEnabled && imageCapabilities.usesLegacyVibe) {
+    final referenceUsage = payloadConfig.activeReferenceUsage;
+    if (referenceUsage.usesLegacyVibes) {
       // Vibe config for NAI3 models
       final imageB64List = [];
       final referenceStrengthList = [];
@@ -198,10 +207,7 @@ class GeneratePayloadUseCase {
       paramPayload['reference_strength_multiple'] = referenceStrengthList;
       paramPayload['reference_information_extracted_multiple'] =
           imformationExtractedList;
-    } else if (imageCapabilities.supports(
-          ImageImportAction.preciseReference,
-        ) &&
-        activePreciseReferenceList.isNotEmpty) {
+    } else if (referenceUsage.usesPreciseReferences) {
       paramPayload['director_reference_images'] = activePreciseReferenceList
           .map((config) => config.imageB64)
           .toList(growable: false);
@@ -225,7 +231,7 @@ class GeneratePayloadUseCase {
           activePreciseReferenceList
               .map((config) => 1.0 - config.fidelity)
               .toList(growable: false);
-    } else if (payloadConfig.vibeEnabled && imageCapabilities.isV4Family) {
+    } else if (referenceUsage.usesModernVibes) {
       // Vibe config for NAI4 models
       final imageB64List = [];
       final infoExtractedList = [];
@@ -383,6 +389,13 @@ class GeneratePayloadUseCase {
     if (normalizedSuffix.isEmpty) return prompt;
     if (normalizedSuffix.startsWith(',')) {
       normalizedSuffix = normalizedSuffix.substring(1).trimLeft();
+    }
+    if (normalizedSuffix.toLowerCase() == 'transparent background' &&
+        RegExp(
+          r'(^|,\s*)transparent background(?=\s*,|$)',
+          caseSensitive: false,
+        ).hasMatch(prompt)) {
+      return prompt;
     }
     if (prompt.trim().isEmpty) return normalizedSuffix;
 

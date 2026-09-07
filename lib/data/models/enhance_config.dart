@@ -1,7 +1,7 @@
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
-import 'package:image_size_getter/image_size_getter.dart';
+import 'package:nai_casrand/data/models/displayed_image_size.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
 
 /// Enhance magnitude presets (1-5), matching the official Enhance panel.
@@ -94,7 +94,7 @@ class EnhanceConfig with ChangeNotifier {
   }
 
   void setImage(Uint8List bytes) {
-    final size = ImageSizeGetter.getSize(MemoryInput(bytes));
+    final size = displayedImageSize(bytes);
     setPreparedImage(bytes, width: size.width, height: size.height);
   }
 

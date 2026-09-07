@@ -31,6 +31,7 @@ class EnhancePageView extends StatelessWidget {
     return ListenableBuilder(
       listenable: Listenable.merge([
         viewmodel,
+        viewmodel.config,
         generationViewmodel,
         if (handoff != null) handoff!,
       ]),
@@ -325,21 +326,42 @@ class EnhancePageView extends StatelessWidget {
   Future<void> _handleDrop(BuildContext context, PerformDropEvent event) async {
     if (event.session.items.isEmpty) return;
     final reader = event.session.items.first.dataReader;
-    if (reader == null) return;
+    if (reader == null) {
+      showErrorBar(
+        context,
+        tr('image_drop_data_unavailable'),
+      );
+      return;
+    }
     reader.getFile(imageFormat, (file) async {
-      final succeed = await viewmodel.loadImageBytes(await file.readAll());
-      if (!context.mounted) return;
-      if (succeed) {
-        if (viewmodel.takeLastImportActivatedFixedMode()) {
-          showFixedModeImportNotice(
-            context,
-            '${tr('i2i_import_image')}${tr('succeed')}',
-          );
+      try {
+        final succeed = await viewmodel.loadImageBytes(await file.readAll());
+        if (!context.mounted) return;
+        if (succeed) {
+          if (viewmodel.takeLastImportActivatedFixedMode()) {
+            showFixedModeImportNotice(
+              context,
+              '${tr('i2i_import_image')}${tr('succeed')}',
+            );
+          } else {
+            showInfoBar(context, '${tr('i2i_import_image')}${tr('succeed')}');
+          }
         } else {
-          showInfoBar(context, '${tr('i2i_import_image')}${tr('succeed')}');
+          showErrorBar(context, tr('image_drop_rejected'));
         }
-      } else {
-        showErrorBar(context, '${tr('i2i_import_image')}${tr('failed')}');
+      } catch (error) {
+        if (!context.mounted) return;
+        showErrorBar(
+          context,
+          tr('image_drop_failed', namedArgs: {'error': '$error'}),
+        );
+      }
+    }, onError: (error) {
+      if (context.mounted) {
+        showErrorBar(
+          context,
+          tr('image_drop_failed', namedArgs: {'error': '$error'}),
+        );
       }
     });
   }

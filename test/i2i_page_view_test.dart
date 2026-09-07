@@ -27,6 +27,9 @@ import 'package:nai_casrand/ui/generation_page/widgets/info_card.dart';
 import 'package:nai_casrand/ui/i2i_page/view_models/i2i_page_viewmodel.dart';
 import 'package:nai_casrand/ui/i2i_page/widgets/i2i_page_view.dart';
 import 'package:flutter_command/flutter_command.dart';
+import 'package:super_drag_and_drop/super_drag_and_drop.dart';
+
+import 'drop_test_fakes.dart';
 
 class _TestAssetLoader extends AssetLoader {
   final Map<String, dynamic> translations;
@@ -190,6 +193,26 @@ void main() {
     );
     expect(generate.onPressed, isNull);
     expect(find.text('Img2Img Parameters'), findsOneWidget);
+  });
+
+  testWidgets('I2I drop read failure is visible and preserves its source', (
+    tester,
+  ) async {
+    final source = solidPng(64, 64);
+    GetIt.I<PayloadConfig>().i2iConfig.setImage(source);
+    await tester.pumpWidget(
+      localizedApp(I2iPageView(viewmodel: I2iPageViewmodel())),
+    );
+    await tester.pumpAndSettle();
+
+    await tester
+        .widget<DropRegion>(find.byType(DropRegion).first)
+        .onPerformDrop(failingImageDropEvent());
+    await tester.pump();
+
+    expect(find.textContaining('Could not read the dropped image'),
+        findsOneWidget);
+    expect(GetIt.I<PayloadConfig>().i2iConfig.imageBytes, source);
   });
 
   testWidgets('Opus I2I inside the free window displays zero Anlas', (

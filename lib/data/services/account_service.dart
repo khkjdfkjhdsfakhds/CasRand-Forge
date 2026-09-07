@@ -10,12 +10,14 @@ class SubscriptionInfo {
   final int tier;
   final bool active;
   final OpusUsage? usage;
+  final DateTime? expiresAt;
 
   const SubscriptionInfo({
     required this.anlas,
     required this.tier,
     required this.active,
     this.usage,
+    this.expiresAt,
   });
 }
 
@@ -78,7 +80,7 @@ class AccountService {
     _inFlight[key] = future;
     try {
       final info = await future;
-      if (info != null) {
+      if (info != null && identical(_inFlight[key], future)) {
         _cache[key] = (fetchedAt: DateTime.now(), info: info);
       }
       return info;
@@ -136,11 +138,13 @@ class AccountService {
           );
         }
       }
+      final expiresAt = _parseExpiration(data);
       return SubscriptionInfo(
         anlas: anlas,
         tier: tier,
         active: active,
         usage: usage,
+        expiresAt: expiresAt,
       );
     } catch (_) {
       return null;
@@ -155,5 +159,57 @@ class AccountService {
       return (token == null || token == cachedToken) &&
           (proxy == null || proxy == cachedProxy);
     });
+    _inFlight.removeWhere((key, _) {
+      final separator = key.indexOf('\u0000');
+      final cachedProxy = separator < 0 ? '' : key.substring(0, separator);
+      final cachedToken = separator < 0 ? key : key.substring(separator + 1);
+      return (token == null || token == cachedToken) &&
+          (proxy == null || proxy == cachedProxy);
+    });
+    _apiService.invalidateRoutes(token: token, proxy: proxy);
+  }
+
+  /// NovelAI has returned the subscription end date under a few names over
+  /// time. Keep parsing deliberately limited to subscription-shaped maps so a
+  /// generated metadata timestamp is never mistaken for an expiry date.
+  static DateTime? _parseExpiration(Map<String, dynamic> data) {
+    const keys = [
+      'expiresAt',
+      'expirationDate',
+      'subscriptionExpiration',
+      'subscriptionExpirationDate',
+      'endDate',
+      'end_date',
+    ];
+
+    DateTime? parse(dynamic value) {
+      if (value is String) return DateTime.tryParse(value);
+      if (value is num) {
+        final raw = value.toDouble();
+        final milliseconds = raw.abs() >= 100000000000 ? raw : raw * 1000;
+        return DateTime.fromMillisecondsSinceEpoch(
+          milliseconds.round(),
+          isUtc: true,
+        );
+      }
+      return null;
+    }
+
+    DateTime? find(Map<dynamic, dynamic> map) {
+      for (final key in keys) {
+        final parsed = parse(map[key]);
+        if (parsed != null) return parsed;
+      }
+      for (final key in const ['subscription', 'plan']) {
+        final nested = map[key];
+        if (nested is Map) {
+          final parsed = find(nested);
+          if (parsed != null) return parsed;
+        }
+      }
+      return null;
+    }
+
+    return find(data);
   }
 }

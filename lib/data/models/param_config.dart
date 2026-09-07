@@ -26,6 +26,7 @@ class ParamConfig {
   bool? straightAlpha;
   int? tagHintQt;
   int? tagHintUcPreset;
+  bool transparentBackground;
 
   bool randomSeed;
   int? seed;
@@ -39,6 +40,7 @@ class ParamConfig {
   String negativePrompt;
 
   bool legacy;
+  bool legacyV3Extend;
   bool addOriginalImage;
 
   String model = defaultModel;
@@ -62,6 +64,7 @@ class ParamConfig {
     this.dynamicThresholding = false,
     this.controlNetStrength = 1.0,
     this.legacy = false,
+    this.legacyV3Extend = false,
     this.addOriginalImage = false,
     this.uncondScale = 1.0,
     this.cfgRescale = defaultCfgRescale,
@@ -72,6 +75,7 @@ class ParamConfig {
     this.straightAlpha,
     this.tagHintQt,
     this.tagHintUcPreset,
+    this.transparentBackground = false,
     this.negativePrompt = defaultUC,
     this.autoPosition = true,
     this.legacyUc = false,
@@ -94,6 +98,7 @@ class ParamConfig {
       'dynamic_thresholding': dynamicThresholding,
       'controlnet_strength': controlNetStrength,
       'legacy': legacy,
+      'legacy_v3_extend': legacyV3Extend,
       'add_original_image': addOriginalImage,
       'uncond_scale': uncondScale,
       'cfg_rescale': cfgRescale,
@@ -108,6 +113,7 @@ class ParamConfig {
       'straight_alpha': straightAlpha,
       'tag_hint_qt': tagHintQt,
       'tag_hint_uc_preset': tagHintUcPreset,
+      'transparent_background': transparentBackground,
       'auto_position': autoPosition,
       'legacy_uc': legacyUc,
     };
@@ -120,7 +126,10 @@ class ParamConfig {
   /// Different from toJson(), some fields in payload need to be calculated from other params.
   /// [overrideSize] replaces the random size pick (used by img2img/inpaint
   /// requests whose size is derived from the input image).
-  Map<String, dynamic> getPayload({GenerationSize? overrideSize}) {
+  Map<String, dynamic> getPayload({
+    GenerationSize? overrideSize,
+    Random? random,
+  }) {
     bool? effectiveDeliberateEulerAncestralBug = deliberateEulerAncestralBug;
     bool? effectivePreferBrownian = preferBrownian;
     final hasImportedSamplerOverrides =
@@ -161,7 +170,7 @@ class ParamConfig {
       "noise_schedule": noiseSchedule,
       "skip_cfg_above_sigma": skipCfgAboveSigma,
       "use_coords": true,
-      "seed": randomSeed ? Random().nextInt(1 << 32 - 1) : seed ?? 0,
+      "seed": randomSeed ? (random ?? Random()).nextInt(1 << 32) : seed ?? 0,
       "characterPrompts": [],
       "v4_prompt": {},
       "v4_negative_prompt": {},
@@ -173,7 +182,7 @@ class ParamConfig {
       "prefer_brownian": effectivePreferBrownian,
       "legacy_uc": legacyUc,
     };
-    payload['legacy_v3_extend'] = false;
+    payload['legacy_v3_extend'] = legacyV3Extend;
     payload.removeWhere((k, v) => v == null);
     if (model.contains('diffusion-4') || model.contains('diffusion-5')) {
       payload.remove('sm');
@@ -191,6 +200,9 @@ class ParamConfig {
       payload['tag_hint_qt'] = tagHintQt ?? 0;
       payload['tag_hint_uc_preset'] = tagHintUcPreset ?? 0;
       payload['straight_alpha'] = straightAlpha ?? true;
+      if (transparentBackground) {
+        payload['tag_hint_transparent_background'] = true;
+      }
     }
     return payload;
   }
@@ -218,6 +230,7 @@ class ParamConfig {
           ? (json['controlnet_strength'] as int).toDouble()
           : json['controlnet_strength'] ?? 1.0,
       legacy: json['legacy'] ?? false,
+      legacyV3Extend: json['legacy_v3_extend'] ?? false,
       addOriginalImage: json['add_original_image'] ?? false,
       uncondScale: json['uncond_scale'] is int
           ? (json['uncond_scale'] as int).toDouble()
@@ -234,6 +247,7 @@ class ParamConfig {
       straightAlpha: json['straight_alpha'] as bool?,
       tagHintQt: (json['tag_hint_qt'] as num?)?.toInt(),
       tagHintUcPreset: (json['tag_hint_uc_preset'] as num?)?.toInt(),
+      transparentBackground: json['transparent_background'] == true,
     );
   }
 
@@ -321,6 +335,10 @@ class ParamConfig {
       legacy = json['legacy'];
       loadCount++;
     }
+    if (json.containsKey('legacy_v3_extend')) {
+      legacyV3Extend = json['legacy_v3_extend'] == true;
+      loadCount++;
+    }
     if (json.containsKey('add_original_image')) {
       addOriginalImage = json['add_original_image'];
       loadCount++;
@@ -361,6 +379,10 @@ class ParamConfig {
     }
     if (json.containsKey('tag_hint_uc_preset')) {
       tagHintUcPreset = (json['tag_hint_uc_preset'] as num?)?.toInt();
+      loadCount++;
+    }
+    if (json.containsKey('tag_hint_transparent_background')) {
+      transparentBackground = json['tag_hint_transparent_background'] == true;
       loadCount++;
     }
     if (json.containsKey('negative_prompt')) {

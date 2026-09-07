@@ -60,5 +60,22 @@ void main() {
 
       expect(vm.getPositionsTexts(), 'x:0.244, y:0.541');
     });
+
+    test('AI choice clears an explicit free center', () {
+      final config = CharacterConfig.fromEmpty()
+        ..freeCenter = const Point<double>(0.244, 0.541);
+      final vm = CharacterConfigViewmodel(
+        config: config,
+        paramConfig: ParamConfig(
+          model: 'nai-diffusion-5-full',
+          autoPosition: false,
+        ),
+      );
+
+      vm.setAutoPosition(true);
+
+      expect(config.freeCenter, isNull);
+      expect(vm.autoPosition, isTrue);
+    });
   });
 }

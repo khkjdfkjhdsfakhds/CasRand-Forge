@@ -21,9 +21,17 @@ class TokenManagerViewmodel extends ChangeNotifier {
 
   /// Balance per token value; null = query failed, absent = not queried yet.
   final Map<String, int?> balances = {};
+
+  /// Latest subscription snapshot per token; null = the last query failed.
+  final Map<String, SubscriptionInfo?> subscriptions = {};
   final Set<String> _loadingTokens = {};
+  final Map<String, int> _refreshRevisions = {};
+  bool _disposed = false;
 
   bool isBalanceLoading(String token) => _loadingTokens.contains(token);
+  bool get isRefreshing => _loadingTokens.isNotEmpty;
+  bool hasSubscription(String token) => subscriptions.containsKey(token);
+  SubscriptionInfo? subscriptionFor(String token) => subscriptions[token];
 
   bool addToken(String label, String token) {
     final trimmedToken = token.trim();
@@ -46,7 +54,13 @@ class TokenManagerViewmodel extends ChangeNotifier {
   void removeTokenAt(int index) {
     if (index < 0 || index >= tokens.length) return;
     if (tokens[index].isPrimary) return;
+    final removedToken = tokens[index].token;
     tokens.removeAt(index);
+    balances.remove(removedToken);
+    subscriptions.remove(removedToken);
+    _loadingTokens.remove(removedToken);
+    _refreshRevisions.remove(removedToken);
+    _accountService.invalidate(token: removedToken);
     _persist();
   }
 
@@ -83,15 +97,26 @@ class TokenManagerViewmodel extends ChangeNotifier {
   }
 
   Future<void> refreshBalance(String token) async {
-    if (token.isEmpty || _loadingTokens.contains(token)) return;
+    if (token.isEmpty || _disposed) return;
+    final revision = (_refreshRevisions[token] ?? 0) + 1;
+    _refreshRevisions[token] = revision;
     _loadingTokens.add(token);
     notifyListeners();
-    final info = await _accountService.fetchSubscription(
-      token: token,
-      proxy: payloadConfig.settings.proxy,
-    );
+    SubscriptionInfo? info;
+    try {
+      info = await _accountService.fetchSubscription(
+        token: token,
+        proxy: payloadConfig.settings.proxy,
+        // A user-initiated refresh must bypass AccountService's short cache.
+        forceRefresh: true,
+      );
+    } catch (_) {
+      info = null;
+    }
+    if (_disposed || _refreshRevisions[token] != revision) return;
     _loadingTokens.remove(token);
     balances[token] = info?.anlas;
+    subscriptions[token] = info;
     final isPrimary = tokens.any(
       (entry) => entry.isPrimary && entry.token == token,
     );
@@ -117,5 +142,13 @@ class TokenManagerViewmodel extends ChangeNotifier {
     payloadConfig.settings.normalizeApiTokens();
     GetIt.I<ConfigService>().saveConfig(payloadConfig.toJson());
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _loadingTokens.clear();
+    _refreshRevisions.clear();
+    super.dispose();
   }
 }

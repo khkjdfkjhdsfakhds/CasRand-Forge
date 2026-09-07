@@ -4,24 +4,29 @@ import 'package:nai_casrand/ui/settings_page/view_models/token_manager_viewmodel
 
 /// Management page for multiple NovelAI API tokens (concurrent generation).
 class TokenManagerPageView extends StatefulWidget {
-  const TokenManagerPageView({super.key});
+  final TokenManagerViewmodel? viewmodel;
+
+  const TokenManagerPageView({super.key, this.viewmodel});
 
   @override
   State<TokenManagerPageView> createState() => _TokenManagerPageViewState();
 }
 
 class _TokenManagerPageViewState extends State<TokenManagerPageView> {
-  final TokenManagerViewmodel viewmodel = TokenManagerViewmodel();
+  late final TokenManagerViewmodel viewmodel;
+  late final bool _ownsViewmodel;
 
   @override
   void initState() {
     super.initState();
+    _ownsViewmodel = widget.viewmodel == null;
+    viewmodel = widget.viewmodel ?? TokenManagerViewmodel();
     viewmodel.refreshAllBalances();
   }
 
   @override
   void dispose() {
-    viewmodel.dispose();
+    if (_ownsViewmodel) viewmodel.dispose();
     super.dispose();
   }
 
@@ -31,10 +36,14 @@ class _TokenManagerPageViewState extends State<TokenManagerPageView> {
       appBar: AppBar(
         title: Text(tr('api_tokens_manage')),
         actions: [
-          IconButton(
-            tooltip: tr('anlas_balance_refresh'),
-            onPressed: viewmodel.refreshAllBalances,
-            icon: const Icon(Icons.refresh),
+          ListenableBuilder(
+            listenable: viewmodel,
+            builder: (context, _) => IconButton(
+              tooltip: tr('anlas_balance_refresh'),
+              onPressed:
+                  viewmodel.isRefreshing ? null : viewmodel.refreshAllBalances,
+              icon: const Icon(Icons.refresh),
+            ),
           ),
         ],
       ),
@@ -81,59 +90,74 @@ class _TokenManagerPageViewState extends State<TokenManagerPageView> {
                   onReorderItem: viewmodel.reorderToken,
                   itemBuilder: (context, index) {
                     final entry = tokens[index];
-                    return ListTile(
+                    return LayoutBuilder(
                       key: ValueKey(entry.token),
-                      leading: Icon(
-                        entry.enabled ? Icons.key : Icons.key_off_outlined,
-                      ),
-                      title: Row(
-                        children: [
-                          Flexible(child: Text(entry.label)),
-                          if (entry.isPrimary) ...[
-                            const SizedBox(width: 8),
-                            Chip(
-                              visualDensity: VisualDensity.compact,
-                              label: Text(tr('api_token_primary_badge')),
-                            ),
-                          ],
-                        ],
-                      ),
-                      subtitle: Text(
-                        '${entry.maskedToken} · ${_balanceText(entry.token)}',
-                      ),
-                      onTap: () => _showRenameDialog(context, index),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            tooltip: tr('anlas_balance_refresh'),
-                            onPressed: viewmodel.isBalanceLoading(entry.token)
-                                ? null
-                                : () => viewmodel.refreshBalance(entry.token),
-                            icon: const Icon(Icons.refresh),
-                          ),
-                          Switch(
-                            value: entry.enabled,
-                            onChanged: (value) =>
-                                viewmodel.setTokenEnabled(index, value),
-                          ),
-                          if (!entry.isPrimary)
-                            IconButton(
-                              tooltip: tr('delete'),
-                              onPressed: () => _confirmDelete(context, index),
-                              icon: const Icon(Icons.delete_outline),
-                            )
-                          else
-                            Tooltip(
-                              message: tr('api_token_primary_delete_hint'),
-                              child: const Padding(
-                                padding: EdgeInsets.all(12),
-                                child: Icon(Icons.lock_outline),
+                      builder: (context, constraints) {
+                        final compact = constraints.maxWidth < 480;
+                        final actions = _buildTokenActions(
+                          context,
+                          index,
+                          entry.token,
+                          entry.enabled,
+                          entry.isPrimary,
+                        );
+                        return ListTile(
+                          contentPadding: compact
+                              ? const EdgeInsets.symmetric(horizontal: 12)
+                              : null,
+                          leading: compact
+                              ? null
+                              : Icon(
+                                  entry.enabled
+                                      ? Icons.key
+                                      : Icons.key_off_outlined,
+                                ),
+                          title: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  entry.label,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
-                            ),
-                          const Icon(Icons.drag_handle),
-                        ],
-                      ),
+                              if (entry.isPrimary) ...[
+                                const SizedBox(width: 8),
+                                ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    maxWidth: compact ? 112 : 160,
+                                  ),
+                                  child: Chip(
+                                    visualDensity: VisualDensity.compact,
+                                    label: Text(
+                                      tr('api_token_primary_badge'),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '${entry.maskedToken} · ${_balanceText(entry.token)}',
+                              ),
+                              Text(_usageText(entry.token)),
+                              Text(_expirationText(entry.token)),
+                              if (compact)
+                                Align(
+                                  alignment: AlignmentDirectional.centerEnd,
+                                  child: actions,
+                                ),
+                            ],
+                          ),
+                          onTap: () => _showRenameDialog(context, index),
+                          trailing: compact ? null : actions,
+                        );
+                      },
                     );
                   },
                 ),
@@ -142,6 +166,46 @@ class _TokenManagerPageViewState extends State<TokenManagerPageView> {
           );
         },
       ),
+    );
+  }
+
+  Widget _buildTokenActions(
+    BuildContext context,
+    int index,
+    String token,
+    bool enabled,
+    bool isPrimary,
+  ) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          tooltip: tr('anlas_balance_refresh'),
+          onPressed: viewmodel.isBalanceLoading(token)
+              ? null
+              : () => viewmodel.refreshBalance(token),
+          icon: const Icon(Icons.refresh),
+        ),
+        Switch(
+          value: enabled,
+          onChanged: (value) => viewmodel.setTokenEnabled(index, value),
+        ),
+        if (!isPrimary)
+          IconButton(
+            tooltip: tr('delete'),
+            onPressed: () => _confirmDelete(context, index),
+            icon: const Icon(Icons.delete_outline),
+          )
+        else
+          Tooltip(
+            message: tr('api_token_primary_delete_hint'),
+            child: const Padding(
+              padding: EdgeInsets.all(12),
+              child: Icon(Icons.lock_outline),
+            ),
+          ),
+        const Icon(Icons.drag_handle),
+      ],
     );
   }
 
@@ -157,10 +221,43 @@ class _TokenManagerPageViewState extends State<TokenManagerPageView> {
     return tr('anlas_balance', namedArgs: {'balance': balance.toString()});
   }
 
+  String _usageText(String token) {
+    if (viewmodel.isBalanceLoading(token)) {
+      return tr('api_token_subscription_loading');
+    }
+    if (!viewmodel.hasSubscription(token)) {
+      return tr('api_token_usage_unknown');
+    }
+    final usage = viewmodel.subscriptionFor(token)?.usage;
+    if (usage == null) return tr('api_token_usage_unknown');
+    final percent = usage.visiblePercent;
+    final formatted = percent == percent.roundToDouble()
+        ? percent.toStringAsFixed(0)
+        : percent.toStringAsFixed(1);
+    return tr('api_token_usage_limit', namedArgs: {'percent': formatted});
+  }
+
+  String _expirationText(String token) {
+    if (viewmodel.isBalanceLoading(token) ||
+        !viewmodel.hasSubscription(token)) {
+      return tr('api_token_expiration_unknown');
+    }
+    final expiresAt = viewmodel.subscriptionFor(token)?.expiresAt;
+    if (expiresAt == null) return tr('api_token_expiration_unknown');
+    final local = expiresAt.toLocal();
+    final date = '${local.year.toString().padLeft(4, '0')}-'
+        '${local.month.toString().padLeft(2, '0')}-'
+        '${local.day.toString().padLeft(2, '0')} '
+        '${local.hour.toString().padLeft(2, '0')}:'
+        '${local.minute.toString().padLeft(2, '0')}';
+    return tr('api_token_expiration', namedArgs: {'date': date});
+  }
+
   void _showAddTokenDialog(BuildContext context) {
     final labelController = TextEditingController();
     final tokenController = TextEditingController();
     var obscure = true;
+    String? tokenError;
     showDialog<void>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
@@ -180,8 +277,14 @@ class _TokenManagerPageViewState extends State<TokenManagerPageView> {
                 key: const Key('token-manager-add-token'),
                 controller: tokenController,
                 obscureText: obscure,
+                onChanged: (_) {
+                  if (tokenError != null) {
+                    setDialogState(() => tokenError = null);
+                  }
+                },
                 decoration: InputDecoration(
                   labelText: tr('api_token_value'),
+                  errorText: tokenError,
                   suffixIcon: IconButton(
                     icon: Icon(
                       obscure ? Icons.visibility_off : Icons.visibility,
@@ -200,11 +303,19 @@ class _TokenManagerPageViewState extends State<TokenManagerPageView> {
             TextButton(
               key: const Key('token-manager-add-confirm'),
               onPressed: () {
-                viewmodel.addToken(
+                final added = viewmodel.addToken(
                   labelController.text,
                   tokenController.text,
                 );
-                Navigator.of(dialogContext).pop();
+                if (added) {
+                  Navigator.of(dialogContext).pop();
+                } else {
+                  setDialogState(() => tokenError = tr(
+                        tokenController.text.trim().isEmpty
+                            ? 'api_token_empty_error'
+                            : 'api_token_duplicate',
+                      ));
+                }
               },
               child: Text(tr('confirm')),
             ),

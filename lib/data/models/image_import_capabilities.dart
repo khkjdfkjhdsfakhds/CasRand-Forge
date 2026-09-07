@@ -5,6 +5,30 @@ enum ImageImportAction {
   preciseReference,
 }
 
+class GenerationReferenceUsage {
+  final bool usesLegacyVibes;
+  final bool usesModernVibes;
+  final bool usesPreciseReferences;
+  final int vibeCount;
+  final int preciseReferenceCount;
+
+  const GenerationReferenceUsage({
+    required this.usesLegacyVibes,
+    required this.usesModernVibes,
+    required this.usesPreciseReferences,
+    required this.vibeCount,
+    required this.preciseReferenceCount,
+  });
+
+  static const none = GenerationReferenceUsage(
+    usesLegacyVibes: false,
+    usesModernVibes: false,
+    usesPreciseReferences: false,
+    vibeCount: 0,
+    preciseReferenceCount: 0,
+  );
+}
+
 /// The image-import actions supported by one NovelAI generation model.
 ///
 /// UI surfaces and request preparation should use this authority instead of
@@ -40,4 +64,45 @@ class ImageImportCapabilities {
 
   bool get usesLegacyVibe =>
       supports(ImageImportAction.vibeTransfer) && !isV4Family;
+
+  GenerationReferenceUsage resolveReferenceUsage({
+    required bool vibeEnabled,
+    required bool preciseReferenceEnabled,
+    required int legacyVibeCount,
+    required int modernVibeCount,
+    required int preciseReferenceCount,
+  }) {
+    if (usesLegacyVibe && vibeEnabled && legacyVibeCount > 0) {
+      return GenerationReferenceUsage(
+        usesLegacyVibes: true,
+        usesModernVibes: false,
+        usesPreciseReferences: false,
+        vibeCount: legacyVibeCount,
+        preciseReferenceCount: 0,
+      );
+    }
+    if (supports(ImageImportAction.preciseReference) &&
+        preciseReferenceEnabled &&
+        preciseReferenceCount > 0) {
+      return GenerationReferenceUsage(
+        usesLegacyVibes: false,
+        usesModernVibes: false,
+        usesPreciseReferences: true,
+        vibeCount: 0,
+        preciseReferenceCount: preciseReferenceCount,
+      );
+    }
+    if (supports(ImageImportAction.vibeTransfer) &&
+        vibeEnabled &&
+        modernVibeCount > 0) {
+      return GenerationReferenceUsage(
+        usesLegacyVibes: false,
+        usesModernVibes: true,
+        usesPreciseReferences: false,
+        vibeCount: modernVibeCount,
+        preciseReferenceCount: 0,
+      );
+    }
+    return GenerationReferenceUsage.none;
+  }
 }

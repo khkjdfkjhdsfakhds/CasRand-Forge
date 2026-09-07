@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
+import 'package:nai_casrand/data/models/character_config.dart';
 import 'package:nai_casrand/data/models/image_handoff_coordinator.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
@@ -13,8 +14,11 @@ import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/precise_reference_config.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
+import 'package:nai_casrand/data/use_cases/generate_payload_use_case.dart';
 import 'package:nai_casrand/ui/navigation/view_models/metadata_drop_area_viewmodel.dart';
 import 'package:nai_casrand/ui/navigation/widgets/image_import_dialog.dart';
+import 'package:nai_casrand/ui/prompt_tab/view_models/prompt_tab_viewmodel.dart';
+import 'package:nai_casrand/ui/prompt_tab/widgets/prompt_tab_view.dart';
 
 class _TestAssetLoader extends AssetLoader {
   final Map<String, dynamic> translations;
@@ -95,6 +99,41 @@ void main() {
     expect(candidate.metadata, {'steps': 'invalid', 'seed': 42});
     expect(candidate.prompt, 'usable prompt');
     expect(candidate.metadataError, isA<FormatException>());
+  });
+
+  test('current V5 Curated metadata and missing reference images are detected',
+      () async {
+    final candidate = await ImageImportCandidate.fromImageBytes(
+      bytes: _testPng(),
+      fileName: 'v5-curated.png',
+      extractMetadata: (_) async => json.encode({
+        'Source': 'NovelAI Diffusion V5 DB276663',
+        'Description': 'prompt',
+        'Comment': json.encode({
+          'steps': 23,
+          'seed': 42,
+          'reference_strength_multiple': [0.6],
+        }),
+      }),
+    );
+
+    expect(candidate.model, 'nai-diffusion-5-curated');
+    expect(candidate.hasUnrecoverableGenerationInputs, isTrue);
+  });
+
+  test('Image2Image strength and noise mark the source image as unrecoverable',
+      () async {
+    final candidate = await ImageImportCandidate.fromImageBytes(
+      bytes: _testPng(),
+      fileName: 'i2i.png',
+      extractMetadata: (_) async => json.encode({
+        'Source': 'NovelAI Diffusion V5 DB276663',
+        'Description': 'prompt',
+        'Comment': json.encode({'strength': 0.5, 'noise': 0.1}),
+      }),
+    );
+
+    expect(candidate.hasUnrecoverableGenerationInputs, isTrue);
   });
 
   test('V3 chooser action uses the legacy Vibe resource list', () async {
@@ -429,6 +468,7 @@ void main() {
                         'seed': 999,
                         'width': 1024,
                         'height': 1024,
+                        'reference_strength_multiple': [0.6],
                       },
                     ),
                     viewmodel: viewmodel,
@@ -453,8 +493,15 @@ void main() {
       find.byKey(const Key('image-import-fixed-mode-warning')),
       findsOneWidget,
     );
+    expect(
+      find.byKey(const Key('image-import-unrecoverable-input-warning')),
+      findsOneWidget,
+    );
     expect(find.byKey(const Key('metadata-import-prompt')), findsOneWidget);
-    expect(find.byKey(const Key('metadata-import-characters')), findsNothing);
+    expect(
+      find.byKey(const Key('metadata-import-characters')),
+      findsOneWidget,
+    );
     expect(find.byKey(const Key('metadata-import-append')), findsOneWidget);
     expect(find.byKey(const Key('metadata-import-clean')), findsOneWidget);
 
@@ -475,6 +522,275 @@ void main() {
     expect(payload.fixedProfile.paramConfig.steps, 30);
     expect(payload.fixedProfile.paramConfig.model, 'nai-diffusion-4-5-full');
     expect(payload.fixedProfile.paramConfig.seed, 111);
+  });
+
+  testWidgets('metadata import clears stale characters and fixes the seed', (
+    tester,
+  ) async {
+    final payload = _payloadForModel('nai-diffusion-5-full');
+    payload.fixedProfile.characterConfigList = [
+      CharacterConfig(
+        positions: const [],
+        positivePromptConfig:
+            PayloadConfig.fixedPromptConfig('stale character'),
+        negativePromptConfig:
+            PayloadConfig.fixedPromptConfig('stale character negative'),
+        gender: CharacterConfig.genderUnset,
+        enabled: true,
+      ),
+    ];
+    payload.fixedProfile.paramConfig
+      ..randomSeed = true
+      ..seed = 7;
+    final viewmodel = MetadataDropAreaViewmodel(payloadConfig: payload);
+
+    await tester.pumpWidget(
+      EasyLocalization(
+        supportedLocales: const [Locale('en')],
+        path: 'test',
+        assetLoader: _TestAssetLoader(translations),
+        fallbackLocale: const Locale('en'),
+        startLocale: const Locale('en'),
+        saveLocale: false,
+        child: Builder(
+          builder: (context) => MaterialApp(
+            localizationsDelegates: context.localizationDelegates,
+            supportedLocales: context.supportedLocales,
+            locale: context.locale,
+            home: Scaffold(
+              body: Builder(
+                builder: (context) => TextButton(
+                  onPressed: () => showImageImportDialog(
+                    context,
+                    candidate: ImageImportCandidate(
+                      bytes: _testPng(),
+                      fileName: 'no-characters.png',
+                      prompt: 'solo subject',
+                      model: 'nai-diffusion-5-full',
+                      metadata: const {
+                        'seed': 246813579,
+                        'v4_prompt': {
+                          'caption': {
+                            'base_caption': 'solo subject',
+                            'char_captions': <Object>[],
+                          },
+                          'use_coords': false,
+                        },
+                        'v4_negative_prompt': {
+                          'caption': {
+                            'base_caption': 'lowres',
+                            'char_captions': <Object>[],
+                          },
+                        },
+                      },
+                    ),
+                    viewmodel: viewmodel,
+                  ),
+                  child: const Text('Open Empty Characters'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open Empty Characters'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('metadata-import-characters')),
+      findsOneWidget,
+    );
+    final confirm = find.byKey(const Key('metadata-import-confirm'));
+    await tester.ensureVisible(confirm);
+    await tester.tap(confirm);
+    await tester.pumpAndSettle();
+
+    expect(payload.fixedProfile.characterConfigList, isEmpty);
+    expect(payload.fixedProfile.paramConfig.randomSeed, isFalse);
+    expect(payload.fixedProfile.paramConfig.seed, 246813579);
+  });
+
+  testWidgets(
+      'metadata import immediately removes stale character cards from prompt UI',
+      (tester) async {
+    final payload = _payloadForModel('nai-diffusion-5-full')
+      ..promptMode = PromptMode.fixed;
+    payload.fixedProfile.characterConfigList = [
+      CharacterConfig(
+        positions: const [],
+        positivePromptConfig:
+            PayloadConfig.fixedPromptConfig('stale character'),
+        negativePromptConfig:
+            PayloadConfig.fixedPromptConfig('stale character negative'),
+        gender: CharacterConfig.genderUnset,
+        enabled: true,
+      ),
+    ];
+    final importViewmodel = MetadataDropAreaViewmodel(payloadConfig: payload);
+    final promptViewmodel = PromptTabViewmodel(payloadConfig: payload);
+
+    await tester.pumpWidget(
+      EasyLocalization(
+        supportedLocales: const [Locale('en')],
+        path: 'test',
+        assetLoader: _TestAssetLoader(translations),
+        fallbackLocale: const Locale('en'),
+        startLocale: const Locale('en'),
+        saveLocale: false,
+        child: Builder(
+          builder: (context) => MaterialApp(
+            localizationsDelegates: context.localizationDelegates,
+            supportedLocales: context.supportedLocales,
+            locale: context.locale,
+            home: Stack(
+              children: [
+                PromptTabView(viewmodel: promptViewmodel),
+                Align(
+                  alignment: Alignment.topRight,
+                  child: Builder(
+                    builder: (context) => TextButton(
+                      onPressed: () => showImageImportDialog(
+                        context,
+                        candidate: ImageImportCandidate(
+                          bytes: _testPng(),
+                          fileName: 'actual-empty-character-shape.jpg',
+                          prompt: 'base prompt',
+                          model: 'nai-diffusion-5-curated',
+                          metadata: const {
+                            'seed': 1,
+                            'skip_cfg_above_sigma': null,
+                            'v4_prompt': {
+                              'caption': {
+                                'base_caption': 'base prompt',
+                                'char_captions': <Object>[],
+                              },
+                            },
+                            'v4_negative_prompt': {
+                              'caption': {
+                                'base_caption': 'negative prompt',
+                                'char_captions': <Object>[],
+                              },
+                            },
+                          },
+                        ),
+                        viewmodel: importViewmodel,
+                      ),
+                      child: const Text('Import Empty Characters'),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('fixed-character-section-0')), findsOneWidget);
+
+    await tester.tap(find.text('Import Empty Characters'));
+    await tester.pumpAndSettle();
+    final confirm = find.byKey(const Key('metadata-import-confirm'));
+    await tester.ensureVisible(confirm);
+    await tester.tap(confirm);
+    await tester.pumpAndSettle();
+
+    expect(payload.fixedProfile.characterConfigList, isEmpty);
+    expect(find.byKey(const Key('fixed-character-section-0')), findsNothing);
+  });
+
+  testWidgets(
+      'metadata dialog import and visible prompt edit regenerate current text',
+      (tester) async {
+    final payload = _payloadForModel('nai-diffusion-5-full')
+      ..promptMode = PromptMode.fixed;
+    final importViewmodel = MetadataDropAreaViewmodel(payloadConfig: payload);
+    final promptViewmodel = PromptTabViewmodel(payloadConfig: payload);
+
+    await tester.pumpWidget(
+      EasyLocalization(
+        supportedLocales: const [Locale('en')],
+        path: 'test',
+        assetLoader: _TestAssetLoader(translations),
+        fallbackLocale: const Locale('en'),
+        startLocale: const Locale('en'),
+        saveLocale: false,
+        child: Builder(
+          builder: (context) => MaterialApp(
+            localizationsDelegates: context.localizationDelegates,
+            supportedLocales: context.supportedLocales,
+            locale: context.locale,
+            home: Stack(
+              children: [
+                PromptTabView(viewmodel: promptViewmodel),
+                Align(
+                  alignment: Alignment.topRight,
+                  child: Builder(
+                    builder: (context) => TextButton(
+                      onPressed: () => showImageImportDialog(
+                        context,
+                        candidate: ImageImportCandidate(
+                          bytes: _testPng(),
+                          fileName: 'automatic-text.png',
+                          prompt: 'sign "OLD", teXt: OLD',
+                          model: 'nai-diffusion-5-curated',
+                          metadata: const {
+                            'seed': 1,
+                            'skip_cfg_above_sigma': null,
+                            'v4_prompt': {
+                              'caption': {
+                                'base_caption': 'sign "OLD", teXt: OLD',
+                                'char_captions': <Object>[],
+                              },
+                            },
+                            'v4_negative_prompt': {
+                              'caption': {
+                                'base_caption': 'negative prompt',
+                                'char_captions': <Object>[],
+                              },
+                            },
+                          },
+                        ),
+                        viewmodel: importViewmodel,
+                      ),
+                      child: const Text('Import Automatic Text'),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Import Automatic Text'));
+    await tester.pumpAndSettle();
+    final confirm = find.byKey(const Key('metadata-import-confirm'));
+    await tester.ensureVisible(confirm);
+    await tester.tap(confirm);
+    await tester.pumpAndSettle();
+
+    final field = find.byKey(const Key('fixed-positive-prompt'));
+    expect(tester.widget<TextField>(field).controller!.text, 'sign "OLD"');
+    await tester.enterText(field, 'sign "NEW"');
+    FocusManager.instance.primaryFocus?.unfocus();
+    await tester.pumpAndSettle();
+    final generated = GeneratePayloadUseCase(payloadConfig: payload)().payload;
+    expect(generated['input'], 'sign "NEW", teXt: NEW');
+    expect(generated['parameters']['v4_prompt']['caption']['base_caption'],
+        generated['input']);
+    await tester.tap(find.text('Import Automatic Text'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(confirm);
+    await tester.tap(confirm);
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(field).controller!.text, 'sign "OLD"');
+    expect(GeneratePayloadUseCase(payloadConfig: payload)().payload['input'],
+        'sign "OLD", teXt: OLD');
   });
 
   testWidgets('chooser remains scrollable on a narrow phone surface', (
@@ -702,6 +1018,8 @@ void main() {
     for (final key in const [
       'image_import_title',
       'image_import_fixed_mode_warning',
+      'image_import_unrecoverable_input_warning',
+      'image_import_unknown_model_warning',
       'image_import_metadata_confirm',
     ]) {
       expect(translations[key], isA<String>());

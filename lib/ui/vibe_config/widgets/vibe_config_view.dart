@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:nai_casrand/ui/core/widgets/slider_list_tile.dart';
 import 'package:nai_casrand/ui/vibe_config/view_models/vibe_config_viewmodel.dart';
@@ -54,8 +55,8 @@ class VibeConfigView extends StatelessWidget {
                       ),
                       const SizedBox(height: 8),
                       // Reference Strength
-                      Text(
-                          'Strength: ${viewmodel.referenceStrength.toStringAsFixed(2)}'),
+                      Text('${tr('vibe_reference_strength')}: '
+                          '${viewmodel.referenceStrength.toStringAsFixed(2)}'),
                       Row(
                         children: [
                           Expanded(
@@ -73,7 +74,7 @@ class VibeConfigView extends StatelessWidget {
                           ),
                           IconButton(
                             icon: const Icon(Icons.edit_note), // Changed icon
-                            tooltip: "Edit Strength Value",
+                            tooltip: tr('edit_value'),
                             onPressed: () => _showEditReferenceStrengthDialog(
                                 context, viewmodel),
                           ),
@@ -81,8 +82,8 @@ class VibeConfigView extends StatelessWidget {
                       ),
                       const SizedBox(height: 4),
                       // Info extracted
-                      Text(
-                          'Information extracted: ${viewmodel.infoExtracted.toStringAsFixed(2)}'),
+                      Text('${tr('vibe_information_extracted')}: '
+                          '${viewmodel.infoExtracted.toStringAsFixed(2)}'),
                       Row(children: [
                         Expanded(
                           child: Slider(
@@ -97,7 +98,7 @@ class VibeConfigView extends StatelessWidget {
                         ),
                         IconButton(
                           icon: const Icon(Icons.edit_note), // Changed icon
-                          tooltip: "Edit Information Extracted",
+                          tooltip: tr('edit_value'),
                           onPressed: () =>
                               _showEditInfoExtractedDialog(context, viewmodel),
                         )
@@ -108,7 +109,7 @@ class VibeConfigView extends StatelessWidget {
                       null) // Show delete button only if callback is provided
                     IconButton(
                       icon: Icon(Icons.delete_outline, color: Colors.red[700]),
-                      tooltip: "Delete Vibe Config",
+                      tooltip: tr('vibe_delete'),
                       onPressed: onDelete,
                     ),
                 ],
@@ -122,7 +123,7 @@ class VibeConfigView extends StatelessWidget {
       BuildContext context, VibeConfigViewmodel vm) {
     showSliderValueInputDialog(
       context: context,
-      title: 'Strength',
+      title: tr('vibe_reference_strength'),
       value: vm.referenceStrength,
       min: 0,
       max: 1,
@@ -136,7 +137,7 @@ class VibeConfigView extends StatelessWidget {
       BuildContext context, VibeConfigViewmodel vm) {
     showSliderValueInputDialog(
       context: context,
-      title: 'Information extracted',
+      title: tr('vibe_information_extracted'),
       value: vm.infoExtracted,
       min: 0,
       max: 1,

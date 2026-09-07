@@ -6,20 +6,25 @@ import 'package:nai_casrand/data/models/api_request.dart';
 import 'package:nai_casrand/data/services/api_service.dart';
 import 'package:uuid/uuid.dart';
 
-class VibeEncodingException implements Exception {
-  final String message;
-  final int? statusCode;
+class VibeEncodingException extends NovelAiApiException {
+  /// Late bytes are an encoding, not a generated-image ZIP. Keep their typed
+  /// continuation separate from the generic image-response continuation.
+  final Future<String>? lateEncoding;
 
-  const VibeEncodingException(this.message, {this.statusCode});
-
-  @override
-  String toString() => message;
+  const VibeEncodingException(
+    super.message, {
+    super.statusCode,
+    super.isTransient,
+    super.isOutcomeUnknown,
+    super.retryAfter,
+    this.lateEncoding,
+  });
 }
 
 /// Calls NovelAI's official server-side V4/V4.5 Vibe extraction endpoint.
 class EncodeVibeUseCase {
   static const officialEndpoint = 'https://image.novelai.net/ai/encode-vibe';
-  static const timeout = Duration(seconds: 120);
+  static const timeout = ApiService.defaultRequestTimeout;
 
   final ApiService _apiService;
   final Uuid _uuid;
@@ -35,6 +40,7 @@ class EncodeVibeUseCase {
     required String token,
     required String proxy,
     String endpoint = officialEndpoint,
+    bool Function()? shouldSend,
   }) async {
     if (imageBytes.isEmpty) {
       throw const VibeEncodingException('Vibe reference image is empty.');
@@ -51,39 +57,42 @@ class EncodeVibeUseCase {
     final correlationId = _uuid.v4().replaceAll('-', '').substring(0, 6);
     late final ApiResponse response;
     try {
-      response = await _apiService
-          .fetchData(
-            ApiRequest(
-              endpoint: endpoint,
-              proxy: proxy,
-              headers: {
-                'authorization': 'Bearer $token',
-                'content-type': 'application/json',
-                'referer': 'https://novelai.net',
-                'x-correlation-id': correlationId,
-                'x-initiated-at': DateTime.now().toUtc().toIso8601String(),
-              },
-              payload: {
-                'image': base64Encode(imageBytes),
-                'information_extracted': informationExtracted,
-                'mask': null,
-                'model': model,
-              },
-            ),
-          )
-          .timeout(timeout);
-    } on TimeoutException {
-      throw const VibeEncodingException(
-        'Vibe information extraction timed out. Please retry.',
+      response = await _apiService.fetchData(
+        ApiRequest(
+          endpoint: endpoint,
+          proxy: proxy,
+          shouldSend: shouldSend,
+          headers: {
+            'authorization': 'Bearer $token',
+            'content-type': 'application/json',
+            'referer': 'https://novelai.net',
+            'x-correlation-id': correlationId,
+            'x-initiated-at': DateTime.now().toUtc().toIso8601String(),
+          },
+          payload: {
+            'image': base64Encode(imageBytes),
+            'information_extracted': informationExtracted,
+            'mask': null,
+            'model': model,
+          },
+        ),
       );
+    } on RequestNotSentException {
+      rethrow;
+    } on NovelAiApiException catch (error) {
+      throw _encodingError(error);
     }
+    return _decodeResponse(response);
+  }
 
-    final statusCode = int.tryParse(response.status) ?? 0;
-    if (statusCode < 200 || statusCode >= 300) {
-      throw VibeEncodingException(
-        _errorMessage(response.data, statusCode),
-        statusCode: statusCode,
+  static String _decodeResponse(ApiResponse response) {
+    try {
+      ApiService.requireSuccessfulData(
+        response,
+        operation: 'extract Vibe information',
       );
+    } on NovelAiApiException catch (error) {
+      throw _encodingError(error);
     }
     if (response.data.isEmpty) {
       throw const VibeEncodingException(
@@ -101,18 +110,18 @@ class EncodeVibeUseCase {
     return uri.replace(pathSegments: segments).toString();
   }
 
-  static String _errorMessage(Uint8List bytes, int statusCode) {
-    var serverMessage = '';
-    try {
-      final decoded = jsonDecode(utf8.decode(bytes));
-      if (decoded is Map) {
-        serverMessage = decoded['message']?.toString() ?? '';
-      }
-    } catch (_) {
-      // The image API may return non-JSON proxy/server errors.
+  static VibeEncodingException _encodingError(NovelAiApiException error) {
+    final lateEncoding = error.lateResponse?.then(_decodeResponse);
+    if (lateEncoding != null) {
+      unawaited(lateEncoding.then<void>((_) {}, onError: (Object _) {}));
     }
-    final suffix = serverMessage.isEmpty ? '' : ': $serverMessage';
-    return 'NovelAI could not extract Vibe information '
-        '(HTTP $statusCode)$suffix';
+    return VibeEncodingException(
+      error.message,
+      statusCode: error.statusCode,
+      isTransient: error.isTransient,
+      isOutcomeUnknown: error.isOutcomeUnknown,
+      retryAfter: error.retryAfter,
+      lateEncoding: lateEncoding,
+    );
   }
 }

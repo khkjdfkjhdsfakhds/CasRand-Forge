@@ -61,6 +61,12 @@ class ParametersConfigViewmodel extends ChangeNotifier {
     notifyListeners();
   }
 
+  setTransparentBackground(bool? value) {
+    if (value == null) return;
+    config.transparentBackground = value;
+    notifyListeners();
+  }
+
   setNegativePrompt(String value) {
     payloadConfig.setNegativePromptFromString(value);
     notifyListeners();

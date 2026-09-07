@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:ui' show Offset;
 
 import 'package:flutter/foundation.dart';
-import 'package:image_size_getter/image_size_getter.dart';
+import 'package:nai_casrand/data/models/displayed_image_size.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/use_cases/autocrop_planner.dart'
     show CropRect, defaultContextPx, normalizeContextPx;
@@ -123,7 +123,7 @@ class I2IConfig with ChangeNotifier {
   }
 
   void setImage(Uint8List bytes) {
-    final size = ImageSizeGetter.getSize(MemoryInput(bytes));
+    final size = displayedImageSize(bytes);
     setPreparedImage(bytes, width: size.width, height: size.height);
   }
 

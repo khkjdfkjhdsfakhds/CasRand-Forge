@@ -192,6 +192,29 @@ void main() {
       sourceToModel['NovelAI Diffusion V4.5 C02D4F98'],
       'nai-diffusion-4-5-curated',
     );
+    expect(
+      sourceToModel['NovelAI Diffusion V4.5 B5A2A797'],
+      'nai-diffusion-4-5-curated',
+    );
+  });
+
+  test('current and legacy V5 metadata hashes map to the correct variants', () {
+    expect(
+      sourceToModel['NovelAI Diffusion V5 0ADF9AB7'],
+      'nai-diffusion-5-full',
+    );
+    expect(
+      sourceToModel['NovelAI Diffusion V5 657484A5'],
+      'nai-diffusion-5-full',
+    );
+    expect(
+      sourceToModel['NovelAI Diffusion V5 DB276663'],
+      'nai-diffusion-5-curated',
+    );
+    expect(
+      modelFromSource('NovelAI Diffusion V5 FUTUREHASH'),
+      'nai-diffusion-5-curated',
+    );
   });
 
   test('V5 payload uses tag-hint / straight-alpha instead of legacy flags', () {
@@ -256,5 +279,49 @@ void main() {
     expect(restored.getPayload()['straight_alpha'], isFalse);
     expect(restored.getPayload()['tag_hint_qt'], 2);
     expect(restored.getPayload()['tag_hint_uc_preset'], 1);
+  });
+
+  test('V5 transparent background defaults off and is omitted when disabled',
+      () {
+    final config = ParamConfig(model: 'nai-diffusion-5-full');
+
+    final payload = config.getPayload();
+
+    expect(config.transparentBackground, isFalse);
+    expect(payload.containsKey('tag_hint_transparent_background'), isFalse);
+  });
+
+  test('enabling transparent background sends the V5 tag hint', () {
+    final config = ParamConfig(
+      model: 'nai-diffusion-5-full',
+      transparentBackground: true,
+    );
+
+    final payload = config.getPayload();
+
+    expect(payload['tag_hint_transparent_background'], isTrue);
+  });
+
+  test('transparent background flag survives config save and restore', () {
+    final source = ParamConfig(
+      model: 'nai-diffusion-5-full',
+      transparentBackground: true,
+    );
+
+    final restored = ParamConfig.fromJson(source.toJson());
+
+    expect(restored.transparentBackground, isTrue);
+    expect(restored.getPayload()['tag_hint_transparent_background'], isTrue);
+  });
+
+  test('transparent background is ignored for legacy models', () {
+    final config = ParamConfig(
+      model: 'nai-diffusion-4-5-full',
+      transparentBackground: true,
+    );
+
+    final payload = config.getPayload();
+
+    expect(payload.containsKey('tag_hint_transparent_background'), isFalse);
   });
 }

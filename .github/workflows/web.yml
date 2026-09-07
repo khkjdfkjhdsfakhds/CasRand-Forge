@@ -2,7 +2,7 @@ name: Build and Deploy Web Release
 
 on:
   push:
-    branches: [ "main" ] # 当 main 分支有 push 时触发
+    branches: [ "forge-main" ]
   workflow_dispatch: # 允许手动触发 workflow
 
 permissions:
@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 检出代码 (main 分支) # 显式注释，更清晰
+      - name: 检出源码
         uses: actions/checkout@v4
 
       - name: 设置 Flutter 环境
@@ -27,7 +27,7 @@ jobs:
 
       - name: 创建 secrets.json 文件
         run: |
-          echo "${{ secrets.SECRETS_JSON_CONTENT }} | base64 -d" > secrets.json
+          printf '%s' "${{ secrets.SECRETS_JSON_CONTENT }}" | base64 --decode > secrets.json
 
       - name: 构建 Flutter Web Release
         run: flutter build web --release --dart-define-from-file=secrets.json
@@ -58,5 +58,6 @@ jobs:
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git commit -a -m "deploy"
+          git add --all
+          git diff --cached --quiet || git commit -m "deploy"
           git push

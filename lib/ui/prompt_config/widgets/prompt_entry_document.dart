@@ -368,31 +368,23 @@ class _PromptDocumentFormatter extends TextInputFormatter {
         normalizedValue,
         replacement,
       );
-      final safeCommittedValue = PromptWeightSyntax.normalizeEdit(
-        oldValue,
-        committedValue,
-      );
       controller.remapBoundaries(
         oldValue,
-        safeCommittedValue,
+        committedValue,
         insertedNewlinesAreBoundaries: false,
       );
-      return safeCommittedValue;
+      return committedValue;
     }
 
     _expectingImeConfirmation = false;
     final internalLineBreak = HardwareKeyboard.instance.isShiftPressed &&
         replacement.insertedText == '\n';
-    final safeValue = PromptWeightSyntax.normalizeEdit(
-      oldValue,
-      normalizedValue,
-    );
     controller.remapBoundaries(
       oldValue,
-      safeValue,
+      normalizedValue,
       insertedNewlinesAreBoundaries: !internalLineBreak,
     );
-    return safeValue;
+    return normalizedValue;
   }
 
   TextEditingValue _committedImeValue(

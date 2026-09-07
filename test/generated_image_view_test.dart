@@ -3,7 +3,9 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/services/generated_image_storage.dart';
+import 'package:nai_casrand/data/services/image_service.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/generated_image_view.dart';
 
 void main() {
@@ -69,6 +71,23 @@ void main() {
     );
   });
 
+  test('metadata fallback and failure have explicit user-facing labels', () {
+    expect(
+      generatedImageMetadataStatusKey(
+        mode: ImageMetadataEmbeddingMode.pngInternationalText,
+        failure: null,
+      ),
+      'generated_image_metadata_fallback',
+    );
+    expect(
+      generatedImageMetadataStatusKey(
+        mode: ImageMetadataEmbeddingMode.stealth,
+        failure: StateError('metadata failed'),
+      ),
+      'generated_image_metadata_failed',
+    );
+  });
+
   test('transfer data reads the original file without re-encoding', () async {
     final tempDirectory = await Directory.systemTemp.createTemp(
       'nai-casrand-generated-image-transfer-',
@@ -112,5 +131,44 @@ void main() {
     expect(calls, hasLength(1));
     expect(calls.single.$1, 'open');
     expect(calls.single.$2, ['-R', '/output/current.jpg']);
+  });
+
+  testWidgets('failed storage keeps the preview and exposes retry',
+      (tester) async {
+    final bytes = Uint8List.fromList([1, 2, 3]);
+    final failure = StateError('disk full');
+    final submission = GeneratedImageStorageSubmission.start(
+      previewBytes: bytes,
+      publish: () => Future<GeneratedImageFile?>.error(failure),
+    );
+    await expectLater(submission.completed, throwsA(same(failure)));
+    var retries = 0;
+    final content = InfoCardContent(
+      title: 'paid result',
+      info: '',
+      additionalInfo: const {},
+      imageArtifact: submission.artifact,
+      retryImageStorage: () async => retries++,
+    );
+
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SizedBox(
+          width: 320,
+          height: 320,
+          child: GeneratedImageView(
+            content: content,
+            nativeDragEnabled: false,
+            child: const ColoredBox(color: Colors.black),
+          ),
+        ),
+      ),
+    ));
+
+    expect(content.imageBytes, same(bytes));
+    expect(find.byKey(const Key('retry-generated-image-storage')), findsOne);
+    await tester.tap(find.byKey(const Key('retry-generated-image-storage')));
+    await tester.pump();
+    expect(retries, 1);
   });
 }

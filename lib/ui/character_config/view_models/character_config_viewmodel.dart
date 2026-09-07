@@ -79,6 +79,10 @@ class CharacterConfigViewmodel extends ChangeNotifier {
 
   void setAutoPosition(bool? value) {
     if (value == null) return;
+    if (value) {
+      // AI choice means that no explicit V5 point should remain active.
+      config.freeCenter = null;
+    }
     if (onAutoPositionChanged != null) {
       onAutoPositionChanged!(value);
     } else {

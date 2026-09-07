@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:adaptive_theme/adaptive_theme.dart';
@@ -72,6 +73,26 @@ class _FakeConfigService extends ConfigService {
     );
     if (makeCurrent) currentUuid = uuid;
     return uuid;
+  }
+}
+
+class _FlakyConfigService extends _FakeConfigService {
+  int failuresRemaining;
+  int saveAttempts = 0;
+
+  _FlakyConfigService(
+    super.defaultConfig, {
+    required this.failuresRemaining,
+  });
+
+  @override
+  Future<void> saveConfig(Map<String, dynamic> jsonData) async {
+    saveAttempts++;
+    if (failuresRemaining > 0) {
+      failuresRemaining--;
+      throw StateError('simulated settings write failure');
+    }
+    await super.saveConfig(jsonData);
   }
 }
 
@@ -251,6 +272,143 @@ void main() {
     expect(savedSettings?['output_folder'], '/tmp/casrand-output');
   });
 
+  test('metadata settings persist immediately after changing them', () async {
+    final viewmodel = SettingsPageViewmodel();
+
+    viewmodel.setEraseMetadataEnabled(true);
+    viewmodel.setCustomMetadataEnabled(true);
+    viewmodel.setCustomMetadataContent('{"Description":"custom"}');
+    await Future<void>.delayed(Duration.zero);
+
+    final savedSettings = configService.savedConfigs[configService.currentUuid]
+        ?['settings'] as Map<String, dynamic>?;
+    expect(savedSettings?['metadata_erase_enabled'], isTrue);
+    expect(savedSettings?['custom_metadata_enabled'], isTrue);
+    expect(
+      savedSettings?['custom_metadata_content'],
+      '{"Description":"custom"}',
+    );
+
+    viewmodel.setEraseMetadataEnabled(false);
+    await Future<void>.delayed(Duration.zero);
+    expect(
+      configService.savedConfigs[configService.currentUuid]?['settings']
+          ['metadata_erase_enabled'],
+      isFalse,
+    );
+  });
+
+  test('metadata settings retry a failed persistence write', () async {
+    await GetIt.instance.unregister<ConfigService>();
+    final flakyConfigService = _FlakyConfigService(
+      defaultConfigJson(),
+      failuresRemaining: 1,
+    );
+    GetIt.instance.registerSingleton<ConfigService>(flakyConfigService);
+    final viewmodel = SettingsPageViewmodel();
+
+    viewmodel.setEraseMetadataEnabled(false);
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(flakyConfigService.saveAttempts, 2);
+    expect(
+      flakyConfigService.savedConfigs[flakyConfigService.currentUuid]
+          ?['settings']?['metadata_erase_enabled'],
+      isFalse,
+    );
+  });
+
+  test('confirmed API, proxy, and filename settings persist immediately',
+      () async {
+    final viewmodel = SettingsPageViewmodel();
+
+    viewmodel.setApiKey('pst-updated');
+    expect(viewmodel.setProxy('localhost:7890').isValid, isTrue);
+    viewmodel.setFileNamePrefixKey('finished');
+    await Future<void>.delayed(Duration.zero);
+
+    final savedSettings = configService.savedConfigs[configService.currentUuid]
+        ?['settings'] as Map<String, dynamic>?;
+    expect(savedSettings?['api_key'], 'pst-updated');
+    expect(savedSettings?['proxy'], 'localhost:7890');
+    expect(savedSettings?['file_name_prefix_key'], 'finished');
+    expect(
+      (savedSettings?['api_tokens'] as List<dynamic>).single['token'],
+      'pst-updated',
+    );
+  });
+
+  testWidgets('invalid settings import leaves live and durable state unchanged',
+      (tester) async {
+    final viewmodel = SettingsPageViewmodel(
+      pickSettingsFile: () async => SelectedSettingsFile(
+        utf8.encode(json.encode({
+          'prompt_config': <String, dynamic>{},
+          'settings': <dynamic>[],
+        })),
+      ),
+    );
+    final before = json.encode(viewmodel.payloadConfig.toJson());
+    await tester.pumpWidget(localizedSettingsPage(viewmodel: viewmodel));
+    await tester.pumpAndSettle();
+
+    await viewmodel
+        .loadJsonConfig(tester.element(find.byType(SettingsPageView)));
+    await tester.pump();
+
+    expect(json.encode(viewmodel.payloadConfig.toJson()), before);
+    expect(
+      configService.savedConfigs[configService.currentUuid],
+      {'marker': 'must stay unchanged'},
+    );
+    expect(find.byType(SnackBar), findsOneWidget);
+  });
+
+  testWidgets('theme confirmation is durable without leaving settings',
+      (tester) async {
+    final viewmodel = SettingsPageViewmodel();
+    await tester.pumpWidget(localizedSettingsPage(viewmodel: viewmodel));
+    await tester.pumpAndSettle();
+
+    viewmodel.setThemeMode(
+      'light',
+      tester.element(find.byType(SettingsPageView)),
+    );
+    await tester.pump();
+
+    expect(
+      configService.savedConfigs[configService.currentUuid]?['settings']
+          ?['theme_mode'],
+      'light',
+    );
+  });
+
+  testWidgets('valid settings import is durable before success is reported',
+      (tester) async {
+    final imported = defaultConfigJson();
+    (imported['settings'] as Map<String, dynamic>)['theme_mode'] = 'light';
+    final viewmodel = SettingsPageViewmodel(
+      pickSettingsFile: () async => SelectedSettingsFile(
+        utf8.encode(json.encode(imported)),
+      ),
+    );
+    await tester.pumpWidget(localizedSettingsPage(viewmodel: viewmodel));
+    await tester.pumpAndSettle();
+
+    await viewmodel
+        .loadJsonConfig(tester.element(find.byType(SettingsPageView)));
+    await tester.pump();
+
+    expect(viewmodel.settings.themeMode, 'light');
+    expect(
+      configService.savedConfigs[configService.currentUuid]?['settings']
+          ?['theme_mode'],
+      'light',
+    );
+    expect(find.byIcon(Icons.info_outline), findsOneWidget);
+  });
+
   test('cancelled or unwritable output directory keeps storage disabled',
       () async {
     final viewmodel = SettingsPageViewmodel(
@@ -298,6 +456,32 @@ void main() {
       ..retainOriginalPng = false;
     await cancelled.setRetainOriginalPng(true);
     expect(cancelled.settings.retainOriginalPng, isFalse);
+  });
+
+  test('latest retain-PNG toggle wins while directory picking is pending',
+      () async {
+    final picker = Completer<String?>();
+    final viewmodel = SettingsPageViewmodel(
+      pickDirectory: () => picker.future,
+      validateDirectory: (_) async => true,
+    );
+    viewmodel.settings
+      ..jpegStorageEnabled = true
+      ..outputFolderPath = ''
+      ..retainOriginalPng = false;
+
+    final enabling = viewmodel.setRetainOriginalPng(true);
+    await Future<void>.delayed(Duration.zero);
+    final disabling = viewmodel.setRetainOriginalPng(false);
+    picker.complete('/tmp/casrand-output');
+    await Future.wait([enabling, disabling]);
+
+    expect(viewmodel.settings.retainOriginalPng, isFalse);
+    expect(
+      configService.savedConfigs[configService.currentUuid]?['settings']
+          ?['retain_original_png'],
+      isFalse,
+    );
   });
 
   testWidgets('JPEG storage controls are hidden on Android', (tester) async {
@@ -370,6 +554,8 @@ void main() {
 
       expect(find.text('API & Proxy Settings'), findsNWidgets(2));
       expect(find.byKey(const Key('proxy-detect-button')), findsOneWidget);
+      await tester.ensureVisible(find.byKey(const Key('proxy-detect-button')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('proxy-detect-button')));
       await tester.pumpAndSettle();
 
@@ -387,6 +573,41 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(GetIt.I<PayloadConfig>().settings.proxy, '127.0.0.1:7890');
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('proxy settings accept hostnames and keep invalid input visible',
+      (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    try {
+      await tester.pumpWidget(localizedSettingsPage());
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('api-proxy-settings-tile')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('proxy-settings-input')),
+        '256.1.1.1:70000',
+      );
+      await tester.tap(find.text('Confirm'));
+      await tester.pump();
+
+      expect(find.byKey(const Key('proxy-validation-error')), findsOneWidget);
+      expect(GetIt.I<PayloadConfig>().settings.proxy, isEmpty);
+
+      await tester.enterText(
+        find.byKey(const Key('proxy-settings-input')),
+        ' localhost:7890 ',
+      );
+      await tester.tap(find.text('Confirm'));
+      await tester.pumpAndSettle();
+
+      expect(GetIt.I<PayloadConfig>().settings.proxy, 'localhost:7890');
+      expect(find.byKey(const Key('proxy-settings-input')), findsNothing);
     } finally {
       debugDefaultTargetPlatformOverride = null;
     }
@@ -449,6 +670,11 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(1200, 1400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(localizedSettingsPage());
+    await tester.pumpAndSettle();
+
+    await tester
+        .ensureVisible(find.byKey(const Key('navigation-settings-expansion')));
+    await tester.tap(find.byKey(const Key('navigation-settings-expansion')));
     await tester.pumpAndSettle();
 
     expect(find.text('Feature navigation settings'), findsOneWidget);
@@ -515,6 +741,11 @@ void main() {
     await tester.pumpWidget(localizedSettingsPage());
     await tester.pumpAndSettle();
 
+    await tester
+        .ensureVisible(find.byKey(const Key('navigation-settings-expansion')));
+    await tester.tap(find.byKey(const Key('navigation-settings-expansion')));
+    await tester.pumpAndSettle();
+
     final open = find.byKey(
       const ValueKey('navigation-directory-open-imageToImage'),
     );
@@ -549,6 +780,11 @@ void main() {
     final viewmodel = SettingsPageViewmodel();
 
     await tester.pumpWidget(localizedSettingsPage(viewmodel: viewmodel));
+    await tester.pumpAndSettle();
+
+    await tester
+        .ensureVisible(find.byKey(const Key('navigation-settings-expansion')));
+    await tester.tap(find.byKey(const Key('navigation-settings-expansion')));
     await tester.pumpAndSettle();
 
     final director = find.byKey(

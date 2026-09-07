@@ -4,11 +4,6 @@ sealed class NestedPrompt {
   String toPrompt();
   String toComment();
 
-  NestedPrompt replaceVariables(
-    Pattern pattern,
-    List<PromptConfig> configList,
-  );
-
   /// DFS search that returns prompt with specified key.
   String? findPromptWithKey(String key);
 }
@@ -36,28 +31,6 @@ class NestedPromptString extends NestedPrompt {
   String? findPromptWithKey(String key) {
     if (title == key) return content;
     return null;
-  }
-
-  @override
-  NestedPrompt replaceVariables(
-    Pattern pattern,
-    List<PromptConfig> configList,
-  ) {
-    // 执行实际替换逻辑
-    final replaced = content.replaceAllMapped(
-        pattern, (m) => _getReplacement(m[1]!, configList));
-    return NestedPromptString(title: title, content: replaced);
-  }
-
-  String _getReplacement(String key, List<PromptConfig> configList) {
-    try {
-      return configList
-          .firstWhere((e) => e.comment == key)
-          .getPrmpts()
-          .toPrompt();
-    } catch (_) {
-      return '__${key}__'; // 保持未替换状态
-    }
   }
 }
 
@@ -104,19 +77,29 @@ class NestedPromptList extends NestedPrompt {
     var lines = str.split('\n');
     return lines.map((line) => '$indentation$line').join('\n');
   }
+}
 
-  @override
-  NestedPrompt replaceVariables(
-    Pattern pattern,
-    List<PromptConfig> configList,
-  ) {
-    // 递归处理子节点
-    return NestedPromptList(
-        title: title,
-        children: children
-            .map((c) => c.replaceVariables(pattern, configList))
-            .toList());
-  }
+class _SequentialProgress {
+  int index = 0;
+  int repeatIndex = 0;
+}
+
+class _ReferenceOccurrence {
+  _ReferenceOccurrence(this.template);
+  final PromptConfig template;
+  final progress = Expando<_SequentialProgress>();
+}
+
+class _EntryReferences {
+  _EntryReferences(this.source);
+  final String source;
+  final occurrences = <int, _ReferenceOccurrence>{};
+}
+
+class _TextEntry {
+  const _TextEntry(this.index, this.text);
+  final int index;
+  final String text;
 }
 
 class PromptConfig {
@@ -134,12 +117,56 @@ class PromptConfig {
   bool enabled;
   bool useAsFileNamePrefix;
 
-  int _sequentialIdx = 0;
-  int _sequentialRepeatIdx = 0;
+  _SequentialProgress _sequential = _SequentialProgress();
+  final _entryReferences = <int, _EntryReferences>{};
+
+  static final _referencePattern = RegExp(
+    r'__([\p{L}0-9_\-（）().\u4e00-\u9fff\uff00-\uffef]+?)__',
+    unicode: true,
+  );
+
+  static PromptConfig? _findReference(String key, List<PromptConfig> saved) {
+    for (final template in saved) {
+      if (template.comment == key) return template;
+    }
+    return null;
+  }
+
+  String _resolveReferences(_TextEntry entry, List<PromptConfig> saved) {
+    // Identity is the owning node + original entry slot + occurrence ordinal,
+    // before random brackets or output shuffling. Editing a source entry
+    // resets only that entry; moving an unchanged node retains its progress.
+    final state = _entryReferences.putIfAbsent(
+      entry.index,
+      () => _EntryReferences(strs[entry.index]),
+    );
+    var ordinal = 0;
+    return entry.text.replaceAllMapped(_referencePattern, (match) {
+      final position = ordinal++;
+      final template = _findReference(match[1]!, saved);
+      if (template == null) {
+        state.occurrences.remove(position);
+        return match[0]!;
+      }
+      var occurrence = state.occurrences[position];
+      if (occurrence == null || !identical(occurrence.template, template)) {
+        occurrence = _ReferenceOccurrence(template);
+        state.occurrences[position] = occurrence;
+      }
+      // Deliberately one pass: text inserted by a template is not expanded.
+      try {
+        return template._getPrmpts(progress: occurrence.progress).toPrompt();
+      } catch (_) {
+        // Preserve the legacy unresolved-placeholder behavior for malformed
+        // saved templates; reference independence is not a new error policy.
+        return match[0]!;
+      }
+    });
+  }
 
   PromptConfig({
     this.selectionMethod = 'all',
-    this.shuffled = true,
+    this.shuffled = false,
     this.prob = 0.0,
     this.num = 1,
     this.randomBracketsUpper = 0,
@@ -220,85 +247,73 @@ class PromptConfig {
     return result;
   }
 
-  int calculateCombinations() {
-    if (!enabled) return 1;
-    if (type == 'str') {
-      final n = usableEntryCount;
-      if (n <= 1) return max(1, n);
-      switch (selectionMethod) {
-        case 'single':
-          return n;
-        case 'single_sequential':
-          return n;
-        case 'all':
-          return 1;
-        case 'multiple_num':
-          final k = min(num, n);
-          return _combinations(n, k);
-        case 'multiple_prob':
-          if (n >= 30) return 1000000000;
-          return 1 << n;
-        default:
-          return n;
-      }
-    } else if (type == 'config') {
-      final activeChildren = prompts.where((p) => p.enabled).toList();
-      if (activeChildren.isEmpty) return 1;
-      switch (selectionMethod) {
-        case 'single':
-          var total = 0;
-          for (final child in activeChildren) {
-            total += child.calculateCombinations();
-          }
-          return max(1, total);
-        case 'single_sequential':
-          var total = 0;
-          for (final child in activeChildren) {
-            total += child.calculateCombinations();
-          }
-          return max(1, total);
-        case 'multiple_num':
-          final k = min(num, activeChildren.length);
-          if (k <= 0) return 1;
-          final dp = List<int>.filled(k + 1, 0);
-          dp[0] = 1;
-          for (final child in activeChildren) {
-            final c = child.calculateCombinations();
-            for (var j = k; j >= 1; j--) {
-              dp[j] += dp[j - 1] * c;
-            }
-          }
-          return max(1, dp[k]);
-        case 'multiple_prob':
-          var product = 1;
-          for (final child in activeChildren) {
-            product *= (1 + child.calculateCombinations());
-          }
-          return product;
-        case 'all':
-        default:
-          var product = 1;
-          for (final child in activeChildren) {
-            final childComb = child.calculateCombinations();
-            if (childComb > 0) {
-              product *= childComb;
-            }
-          }
-          return max(1, product);
-      }
+  /// A full deterministic state cycle, not a count of distinct strings.
+  /// Reading this never evaluates prompts or touches selection progress.
+  int calculateCombinations() =>
+      taskCountForCycle(calculateCombinationCycle()) ??
+      (throw RangeError('Prompt cycle exceeds the task counter range'));
+
+  /// The scheduler also needs to represent the next task number. Check the
+  /// round trip and increment so native overflow and JS rounding both fail
+  /// explicitly rather than creating a truncated or unlimited (zero) batch.
+  static int? taskCountForCycle(BigInt cycle) {
+    final count = int.tryParse(cycle.toString());
+    if (count == null ||
+        count <= 0 ||
+        BigInt.from(count) != cycle ||
+        BigInt.from(count + 1) != cycle + BigInt.one) {
+      return null;
     }
-    return 1;
+    return count;
   }
 
-  static int _combinations(int n, int k) {
-    if (k <= 0 || k >= n) return 1;
-    final effectiveK = min(k, n - k);
-    var result = 1;
-    for (var i = 1; i <= effectiveK; i++) {
-      result = (result * (n - i + 1)) ~/ i;
+  BigInt calculateCombinationCycle({
+    bool filterEntryComments = true,
+    List<PromptConfig>? savedConfigs,
+  }) {
+    if (!enabled || (type != 'config' && type != 'str')) return BigInt.one;
+    final cycles = type == 'config'
+        ? prompts.where((p) => p.enabled).map((p) =>
+            p.calculateCombinationCycle(
+                filterEntryComments: filterEntryComments,
+                savedConfigs: savedConfigs))
+        : (filterEntryComments ? usableEntries : strs)
+            .map((text) => combineCycles(
+                  savedConfigs == null
+                      ? <BigInt>[]
+                      : _referencePattern.allMatches(text).map((match) =>
+                          _findReference(match[1]!, savedConfigs)
+                              ?.calculateCombinationCycle() ??
+                          BigInt.one),
+                ));
+    // Mapped iterable length does not evaluate child periods. Random branches
+    // can stop here without walking their otherwise unused nested cycles.
+    final count = cycles.length;
+    if (count == 0) return BigInt.one;
+    switch (selectionMethod) {
+      case 'single':
+        return count == 1 ? cycles.single : BigInt.one;
+      case 'multiple_num':
+        return num >= count ? combineCycles(cycles) : BigInt.one;
+      case 'multiple_prob':
+        return prob >= 1 ? combineCycles(cycles) : BigInt.one;
+      case 'single_sequential':
+        final repeat = BigInt.from(max(1, num));
+        // Each child is called r times per parent rotation. Its paused state
+        // returns after P/gcd(P,r) rotations, not after P output strings.
+        return BigInt.from(count) *
+            repeat *
+            combineCycles(
+              cycles.map((period) => period ~/ period.gcd(repeat)),
+            );
     }
-    return max(1, result);
+    return combineCycles(cycles);
   }
+
+  static BigInt combineCycles(Iterable<BigInt> cycles) => cycles.fold(
+        BigInt.one,
+        (a, b) => (a ~/ a.gcd(b)) * b,
+      );
 
   static bool isCommentLine(String line) => line.trimLeft().startsWith('#');
 
@@ -339,11 +354,35 @@ class PromptConfig {
     return bracketString[0] + s + bracketString[1];
   }
 
-  NestedPrompt getPrmpts({bool filterEntryComments = true}) {
+  NestedPrompt getPrmpts({
+    bool filterEntryComments = true,
+    List<PromptConfig>? savedConfigs,
+  }) =>
+      _getPrmpts(
+        filterEntryComments: filterEntryComments,
+        savedConfigs: savedConfigs,
+      );
+
+  NestedPrompt _getPrmpts({
+    bool filterEntryComments = true,
+    List<PromptConfig>? savedConfigs,
+    Expando<_SequentialProgress>? progress,
+  }) {
+    if (!enabled) return NestedPromptString(title: comment, content: '');
+    final sequential = progress == null
+        ? _sequential
+        : (progress[this] ??= _SequentialProgress());
     List<dynamic> chosenPrompts = [];
     List<dynamic> promptsToChoose = [];
     if (type == 'str') {
-      promptsToChoose = List.from(filterEntryComments ? usableEntries : strs);
+      promptsToChoose = [
+        for (final (index, entry) in strs.indexed)
+          if ((filterEntryComments ? promptTextForEntry(entry) : entry)
+              case final String text)
+            _TextEntry(index, text),
+      ];
+      _entryReferences.removeWhere((index, state) =>
+          index >= strs.length || state.source != strs[index]);
     } else if (type == 'config') {
       promptsToChoose = List.from(prompts.where((p) => p.enabled));
     }
@@ -370,15 +409,15 @@ class PromptConfig {
         break;
       case 'single_sequential':
         if (promptsToChoose.isEmpty) break;
-        if (_sequentialIdx >= promptsToChoose.length) {
-          _sequentialIdx = 0;
-          _sequentialRepeatIdx = 0;
+        if (sequential.index >= promptsToChoose.length) {
+          sequential.index = 0;
+          sequential.repeatIndex = 0;
         }
-        chosenPrompts = [promptsToChoose[_sequentialIdx]];
-        _sequentialRepeatIdx++;
-        if (_sequentialRepeatIdx >= max(1, num)) {
-          _sequentialIdx = (_sequentialIdx + 1) % promptsToChoose.length;
-          _sequentialRepeatIdx = 0;
+        chosenPrompts = [promptsToChoose[sequential.index]];
+        sequential.repeatIndex++;
+        if (sequential.repeatIndex >= max(1, num)) {
+          sequential.index = (sequential.index + 1) % promptsToChoose.length;
+          sequential.repeatIndex = 0;
         }
         break;
       default:
@@ -392,14 +431,22 @@ class PromptConfig {
     if (type == 'str') {
       return NestedPromptString(
         title: comment,
-        content: chosenPrompts.map((p) => addRandomBrackets(p)).join(', '),
+        content: chosenPrompts.map((p) {
+          final entry = p as _TextEntry;
+          final text = savedConfigs == null
+              ? entry.text
+              : _resolveReferences(entry, savedConfigs);
+          return addRandomBrackets(text);
+        }).join(', '),
       );
     } else if (type == 'config') {
       return NestedPromptList(
           title: comment,
           children: chosenPrompts
-              .map((p) => (p as PromptConfig)
-                  .getPrmpts(filterEntryComments: filterEntryComments))
+              .map((p) => (p as PromptConfig)._getPrmpts(
+                  filterEntryComments: filterEntryComments,
+                  savedConfigs: savedConfigs,
+                  progress: progress))
               .toList());
     } else {
       throw UnimplementedError();
@@ -407,8 +454,8 @@ class PromptConfig {
   }
 
   void resetSequentialState() {
-    _sequentialIdx = 0;
-    _sequentialRepeatIdx = 0;
+    _sequential = _SequentialProgress();
+    _entryReferences.clear();
     for (final prompt in prompts) {
       prompt.resetSequentialState();
     }

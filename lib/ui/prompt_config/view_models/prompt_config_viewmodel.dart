@@ -138,7 +138,7 @@ class PromptConfigViewModel extends ChangeNotifier {
           config.prompts.add(newConfig); // 如果位置无效，添加到末尾
         }
         if (!context.mounted) return;
-        showErrorBar(context,
+        showInfoBar(context,
             '${context.tr('info_import_from_clipboard')}${context.tr('succeed')}');
       } catch (e) {
         if (!context.mounted) return;
@@ -171,6 +171,12 @@ class PromptConfigViewModel extends ChangeNotifier {
       newIndex -= 1;
     }
     var item = config.prompts.removeAt(oldIndex);
+    config.prompts.insert(newIndex, item);
+    notifyListeners();
+  }
+
+  void reorderAdjusted(int oldIndex, int newIndex) {
+    final item = config.prompts.removeAt(oldIndex);
     config.prompts.insert(newIndex, item);
     notifyListeners();
   }

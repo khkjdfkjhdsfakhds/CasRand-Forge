@@ -19,7 +19,10 @@ class ParametersConfigView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final content = ListenableBuilder(
-      listenable: viewmodel,
+      listenable: Listenable.merge([
+        viewmodel,
+        viewmodel.payloadConfig,
+      ]),
       builder: (context, _) => Column(
         children: [
           _buildModelSelector(context),
@@ -96,6 +99,15 @@ class ParametersConfigView extends StatelessWidget {
             (newValue) => viewmodel.setVarietyPlus(newValue),
             const Icon(Icons.add),
           ),
+          // Transparent background is a V5-only tag hint on the official
+          // frontend; hide it for legacy models.
+          if (viewmodel.isV5)
+            _buildSwitchTile(
+              context.tr('transparent_background'),
+              viewmodel.config.transparentBackground,
+              (newValue) => viewmodel.setTransparentBackground(newValue),
+              const Icon(Icons.layers_clear),
+            ),
         ],
       ),
     );
@@ -145,7 +157,7 @@ class ParametersConfigView extends StatelessWidget {
 
   Widget _buildLegacyUcTile(BuildContext context) {
     return CheckboxListTile(
-      title: const Text('Legacy Prompt Conditioning Mode'),
+      title: Text(tr('legacy_prompt_conditioning_mode')),
       secondary: const Icon(Icons.do_not_disturb),
       value: viewmodel.config.legacyUc,
       onChanged: (value) => viewmodel.setLegacyUc(value),
@@ -153,22 +165,23 @@ class ParametersConfigView extends StatelessWidget {
   }
 
   Future _showImportMetadataDialog(BuildContext context) async {
-    final picker = ImagePicker();
-    final result = await picker.pickImage(source: ImageSource.gallery);
-    if (result == null) return;
-    final bytes = await result.readAsBytes();
-    final metadataString = await ImageService().extractMetadataFromBytes(bytes);
-    if (!context.mounted) return;
-    if (metadataString == null) {
-      showErrorBar(context, tr('metadata_not_found'));
-      return;
-    }
     try {
+      final picker = ImagePicker();
+      final result = await picker.pickImage(source: ImageSource.gallery);
+      if (result == null) return;
+      final bytes = await result.readAsBytes();
+      final metadataString =
+          await ImageService().extractMetadataFromBytes(bytes);
+      if (!context.mounted) return;
+      if (metadataString == null) {
+        showErrorBar(context, tr('metadata_not_found'));
+        return;
+      }
       final jsonData = json.decode(metadataString) as Map<String, dynamic>;
       final commentData =
           json.decode(jsonData['Comment']) as Map<String, dynamic>;
       final source = jsonData['Source'] ?? '';
-      final String? model = sourceToModel[source];
+      final String? model = modelFromSource(source);
       final String? prompt = jsonData['Description'];
       final toolTip = Padding(
         padding: const EdgeInsets.only(left: 8.0),

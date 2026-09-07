@@ -10,6 +10,21 @@ import 'package:nai_casrand/data/models/generation_performance_diagnostics.dart'
 import 'package:nai_casrand/data/services/account_service.dart';
 import 'package:nai_casrand/data/services/api_service.dart';
 
+class _CloseTrackingClient extends http.BaseClient {
+  bool closed = false;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    return http.StreamedResponse(const Stream.empty(), 200);
+  }
+
+  @override
+  void close() {
+    closed = true;
+    super.close();
+  }
+}
+
 void main() {
   test('keeps the established three-minute generation timeout', () {
     expect(ApiService.defaultRequestTimeout, const Duration(minutes: 3));
@@ -523,7 +538,8 @@ void main() {
     service.close();
   });
 
-  test('transport disconnect is transient and discards the failed client',
+  test(
+      'transport disconnect has an unknown outcome and retires the failed route',
       () async {
     var createdClients = 0;
     final service = ApiService(
@@ -551,13 +567,15 @@ void main() {
       service.fetchData(request),
       throwsA(
         isA<NovelAiApiException>()
-            .having((error) => error.isTransient, 'isTransient', isTrue)
+            .having((error) => error.isTransient, 'isTransient', isFalse)
+            .having(
+                (error) => error.isOutcomeUnknown, 'isOutcomeUnknown', isTrue)
             .having(
               (error) => error.toString(),
               'message',
               allOf(
                 contains('connection closed'),
-                contains('next automatic attempt'),
+                contains('result is unknown'),
               ),
             ),
       ),
@@ -582,7 +600,7 @@ void main() {
     );
   });
 
-  test('server timeout JSON becomes a readable transient API error', () {
+  test('server timeout JSON becomes a readable unknown-outcome API error', () {
     final data = Uint8List.fromList(utf8.encode(jsonEncode({
       'statusCode': 500,
       'message': 'read tcp 10.5.237.177:3000->10.4.246.151:56276: i/o timeout',
@@ -596,7 +614,9 @@ void main() {
       throwsA(
         isA<NovelAiApiException>()
             .having((error) => error.statusCode, 'statusCode', 500)
-            .having((error) => error.isTransient, 'isTransient', isTrue)
+            .having((error) => error.isTransient, 'isTransient', isFalse)
+            .having(
+                (error) => error.isOutcomeUnknown, 'unknown outcome', isTrue)
             .having(
               (error) => error.toString(),
               'message',
@@ -672,6 +692,68 @@ void main() {
     service.close();
   });
 
+  test('invalidating a token or proxy closes only matching pooled clients',
+      () async {
+    final clients = <_CloseTrackingClient>[];
+    final service = ApiService(clientFactory: (_) {
+      final client = _CloseTrackingClient();
+      clients.add(client);
+      return client;
+    });
+    Future<void> fetch(String token, String proxy) => service.fetchData(
+          ApiRequest(
+            endpoint: 'https://example.test/generate',
+            proxy: proxy,
+            headers: {'authorization': 'Bearer $token'},
+            payload: const {},
+          ),
+        );
+
+    await fetch('a', 'proxy-a:1');
+    await fetch('b', 'proxy-a:1');
+    await fetch('a', 'proxy-b:2');
+
+    service.invalidateRoutes(token: 'a');
+    expect(clients.map((client) => client.closed), [true, false, true]);
+    expect(service.pooledClientCount, 1);
+
+    service.invalidateRoutes(proxy: 'proxy-a:1');
+    expect(clients.map((client) => client.closed), everyElement(isTrue));
+    expect(service.pooledClientCount, 0);
+  });
+
+  test(
+      'invalidating a token or proxy also evicts matching image-cache sessions',
+      () async {
+    final service = ApiService(
+      clientFactory: (_) =>
+          MockClient((_) async => http.Response.bytes([1], 200)),
+    );
+    final image = base64Encode([1, 2, 3]);
+    Future<void> fetch(String token, String proxy) => service.fetchData(
+          ApiRequest(
+            endpoint: 'https://image.novelai.net/ai/generate-image',
+            proxy: proxy,
+            headers: {'authorization': 'Bearer $token'},
+            payload: {
+              'parameters': {'image': image},
+            },
+          ),
+        );
+
+    await fetch('a', 'proxy-a:1');
+    await fetch('b', 'proxy-a:1');
+    await fetch('a', 'proxy-b:2');
+    expect(service.pooledImageCacheSessionCount, 3);
+
+    service.invalidateRoutes(token: 'a');
+    expect(service.pooledImageCacheSessionCount, 1);
+
+    service.invalidateRoutes(proxy: 'proxy-a:1');
+    expect(service.pooledImageCacheSessionCount, 0);
+    service.close();
+  });
+
   test('subscription cache avoids repeat network calls and force refreshes',
       () async {
     var requests = 0;
@@ -682,6 +764,7 @@ void main() {
           jsonEncode({
             'tier': 3,
             'active': true,
+            'expiresAt': '2026-09-01T12:34:56Z',
             'usage': {
               'percent': 73,
               'isNegative': false,
@@ -716,8 +799,52 @@ void main() {
     expect(first?.usage?.percent, 73);
     expect(first?.usage?.isNegative, isFalse);
     expect(first?.usage?.secondsPerPercent, 6048);
+    expect(first?.expiresAt, DateTime.parse('2026-09-01T12:34:56Z'));
     expect(cached?.anlas, 101);
     expect(refreshed?.anlas, 102);
+    expect(requests, 2);
+    api.close();
+  });
+
+  test('invalidating an in-flight account request prevents stale recaching',
+      () async {
+    var requests = 0;
+    final firstResponse = Completer<http.Response>();
+    final api = ApiService(
+      clientFactory: (_) => MockClient((_) async {
+        requests++;
+        if (requests == 1) return firstResponse.future;
+        return http.Response(
+          jsonEncode({
+            'tier': 3,
+            'active': true,
+            'trainingStepsLeft': 202,
+          }),
+          200,
+        );
+      }),
+    );
+    final accounts = AccountService(apiService: api);
+
+    final stale = accounts.fetchSubscription(token: 'pst-test', proxy: '');
+    while (requests == 0) {
+      await Future<void>.delayed(Duration.zero);
+    }
+    accounts.invalidate(token: 'pst-test');
+    firstResponse.complete(http.Response(
+      jsonEncode({
+        'tier': 3,
+        'active': true,
+        'trainingStepsLeft': 101,
+      }),
+      200,
+    ));
+    expect((await stale)?.anlas, 101);
+
+    final refreshed =
+        await accounts.fetchSubscription(token: 'pst-test', proxy: '');
+
+    expect(refreshed?.anlas, 202);
     expect(requests, 2);
     api.close();
   });

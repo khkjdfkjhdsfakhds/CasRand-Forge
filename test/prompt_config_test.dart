@@ -171,7 +171,8 @@ void main() {
     );
   });
 
-  test('useAsFileNamePrefix serializes and collects prefix comments in order', () {
+  test('useAsFileNamePrefix serializes and collects prefix comments in order',
+      () {
     final artistConfig = PromptConfig(
       comment: '画师',
       useAsFileNamePrefix: true,
@@ -207,22 +208,23 @@ void main() {
     expect(restored.prompts[2].useAsFileNamePrefix, isFalse);
   });
 
-  test('calculateCombinations correctly computes total permutations across configs and characters', () {
+  test('calculateCombinations counts sequential entries but not random choices',
+      () {
     final artistConfig = PromptConfig(
       selectionMethod: 'single',
-      strs: ['anmi', 'tite kubo', 'hokusai'], // 3
+      strs: ['anmi', 'tite kubo', 'hokusai'], // 1: random is not exhaustive
       prompts: [],
     );
     final costumeConfig = PromptConfig(
       selectionMethod: 'single_sequential',
       num: 2,
-      strs: ['uniform', 'kimono'], // 2 (num is repeat count, not a multiplier)
+      strs: ['uniform', 'kimono'], // 4: two entries repeated twice
       prompts: [],
     );
     final tagConfig = PromptConfig(
       selectionMethod: 'multiple_num',
       num: 2,
-      strs: ['hat', 'glasses', 'scarf', 'gloves'], // C(4, 2) = 6
+      strs: ['hat', 'glasses', 'scarf', 'gloves'], // 1: actual random subset
       prompts: [],
     );
     final root = PromptConfig(
@@ -232,12 +234,12 @@ void main() {
       prompts: [artistConfig, costumeConfig, tagConfig],
     );
 
-    // 3 * 2 * 6 = 36
-    expect(root.calculateCombinations(), 36);
+    // Random branches are neutral; the repeated sequence takes four calls.
+    expect(root.calculateCombinations(), 4);
 
     final charPrompt = PromptConfig(
       selectionMethod: 'single',
-      strs: ['smile', 'frown'], // 2
+      strs: ['smile', 'frown'], // 1: random is not exhaustive
       prompts: [],
     );
     final payloadConfig = PayloadConfig(
@@ -260,16 +262,21 @@ void main() {
       useCharacterPromptWithOverride: false,
     );
 
-    // 36 * 2 = 72
-    expect(payloadConfig.totalCombinations, 72);
+    // The enabled random character branch adds no deterministic period.
+    expect(payloadConfig.totalCombinations, 4);
   });
 
   test('calculateCombinations on config nodes with multiple_num', () {
-    final c1 = PromptConfig(selectionMethod: 'single', strs: ['a', 'b'], prompts: []); // 2
-    final c2 = PromptConfig(selectionMethod: 'single', strs: ['c', 'd', 'e'], prompts: []); // 3
-    final c3 = PromptConfig(selectionMethod: 'single', strs: ['f', 'g', 'h', 'i'], prompts: []); // 4
+    final c1 = PromptConfig(
+        selectionMethod: 'single', strs: ['a', 'b'], prompts: []); // 1
+    final c2 = PromptConfig(
+        selectionMethod: 'single', strs: ['c', 'd', 'e'], prompts: []); // 1
+    final c3 = PromptConfig(
+        selectionMethod: 'single',
+        strs: ['f', 'g', 'h', 'i'],
+        prompts: []); // 1
 
-    // Choosing 2 of the 3 configs: (2*3) + (2*4) + (3*4) = 6 + 8 + 12 = 26
+    // A random proper subset does not guarantee traversal.
     final folder = PromptConfig(
       type: 'config',
       selectionMethod: 'multiple_num',
@@ -277,6 +284,36 @@ void main() {
       strs: [],
       prompts: [c1, c2, c3],
     );
-    expect(folder.calculateCombinations(), 26);
+    expect(folder.calculateCombinations(), 1);
+  });
+
+  test('nested random single does not sum child combinations', () {
+    final randomFolder = PromptConfig(
+      type: 'config',
+      selectionMethod: 'single',
+      strs: [],
+      prompts: [
+        PromptConfig(
+          selectionMethod: 'single_sequential',
+          strs: ['a1', 'a2'],
+          prompts: [],
+        ),
+        PromptConfig(
+          selectionMethod: 'single_sequential',
+          strs: ['b1', 'b2', 'b3'],
+          prompts: [],
+        ),
+      ],
+    );
+
+    expect(randomFolder.calculateCombinations(), 1);
+
+    final sequentialFolder = PromptConfig(
+      type: 'config',
+      selectionMethod: 'single_sequential',
+      strs: [],
+      prompts: randomFolder.prompts,
+    );
+    expect(sequentialFolder.calculateCombinations(), 12);
   });
 }

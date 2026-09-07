@@ -194,6 +194,17 @@ void main() {
 
     await tester.tap(find.text('String Values: 1 items'));
     await tester.pumpAndSettle();
+    final editor = find.byKey(const Key('prompt-entry-editor'));
+    await tester.enterText(editor, '0.6::ame929::');
+    await tester.pump();
+    expect(tester.widget<TextField>(editor).controller!.text, '0.6::ame929::');
+    expect(config.strs, ['1.2::legacy2 ::', '# saved note']);
+    await tester.tap(find.text('Confirm'));
+    await tester.pumpAndSettle();
+    expect(config.strs, ['0.6::ame929 ::']);
+
+    await tester.tap(find.text('String Values: 1 items'));
+    await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const Key('prompt-entry-editor')),
       'first\nsecond\n# saved note',

@@ -1,6 +1,8 @@
 import 'dart:math';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
+import 'package:nai_casrand/core/constants/defaults.dart';
+import 'package:nai_casrand/data/models/api_token_config.dart';
 import 'package:nai_casrand/data/models/character_config.dart';
 import 'package:nai_casrand/data/models/director_tool_config.dart';
 import 'package:nai_casrand/data/models/enhance_config.dart';
@@ -18,6 +20,7 @@ import 'package:nai_casrand/data/models/vibe_config_v4.dart';
 import 'package:nai_casrand/data/use_cases/autocrop_planner.dart'
     show defaultContextPx;
 import 'package:nai_casrand/data/use_cases/i2i_request_size.dart';
+import 'package:nai_casrand/data/use_cases/novelai_text_rendering.dart';
 
 class PayloadResult {
   final String comment;
@@ -53,7 +56,7 @@ const Map<int, double> doubleMapping = {
   5: 0.9,
 };
 
-class PayloadConfig {
+class PayloadConfig extends ChangeNotifier {
   GenerationProfile randomProfile;
   GenerationProfile fixedProfile;
   PromptMode promptMode;
@@ -139,19 +142,51 @@ class PayloadConfig {
   bool get hasVibeResources =>
       vibeConfigList.isNotEmpty || vibeConfigListV4.isNotEmpty;
 
-  int get totalCombinations {
-    if (promptMode == PromptMode.fixed) return 1;
-    var total = rootPromptConfig.calculateCombinations();
-    for (final char in characterConfigList) {
-      if (char.enabled) {
-        final charComb = char.positivePromptConfig.calculateCombinations();
-        if (charComb > 0) {
-          total *= charComb;
-        }
-      }
-    }
-    return max(1, total);
+  GenerationReferenceUsage get activeReferenceUsage {
+    final capabilities = ImageImportCapabilities.forModel(paramConfig.model);
+    return capabilities.resolveReferenceUsage(
+      vibeEnabled: vibeEnabled,
+      preciseReferenceEnabled: preciseReferenceEnabled,
+      legacyVibeCount: vibeConfigList.length,
+      modernVibeCount: vibeConfigListV4.length,
+      preciseReferenceCount: preciseReferenceConfigList
+          .where((reference) => reference.enabled)
+          .length,
+    );
   }
+
+  /// V3 does not consume character captions. Counting and generation share
+  /// this participation boundary so switching models does not consume hidden
+  /// character progress.
+  Iterable<CharacterConfig> get activeCharacterConfigs =>
+      paramConfig.model.startsWith('nai-diffusion-4-') ||
+              paramConfig.model.startsWith('nai-diffusion-5-')
+          ? characterConfigList.where((char) => char.enabled)
+          : const <CharacterConfig>[];
+
+  BigInt get totalCombinationCycle {
+    final filterEntryComments = promptMode != PromptMode.fixed;
+    BigInt cycle(PromptConfig config, {bool filter = true}) =>
+        config.calculateCombinationCycle(
+          filterEntryComments: filter,
+          savedConfigs: savedPromptConfigList,
+        );
+    return PromptConfig.combineCycles([
+      cycle(rootPromptConfig, filter: filterEntryComments),
+      cycle(negativePromptConfig, filter: filterEntryComments),
+      for (final char in activeCharacterConfigs) ...[
+        cycle(char.positivePromptConfig),
+        cycle(char.negativePromptConfig),
+      ],
+    ]);
+  }
+
+  int? get totalCombinationTaskCount =>
+      PromptConfig.taskCountForCycle(totalCombinationCycle);
+
+  int get totalCombinations =>
+      totalCombinationTaskCount ??
+      (throw RangeError('Prompt cycle exceeds the task counter range'));
 
   List<String> collectPrefixComments() {
     if (promptMode == PromptMode.fixed) return const [];
@@ -355,6 +390,34 @@ class PayloadConfig {
     };
   }
 
+  /// Configuration intended for sharing. Authentication remains local.
+  Map<String, dynamic> toShareableJson() {
+    final json = toJson();
+    final settingsJson = Map<String, dynamic>.from(
+      json['settings'] as Map<String, dynamic>? ?? const {},
+    )
+      ..remove('api_key')
+      ..remove('api_tokens');
+    json['settings'] = settingsJson;
+    return json;
+  }
+
+  /// Loads a credential-free shared configuration without replacing this
+  /// device's primary or additional NovelAI tokens.
+  void loadShareableJson(Map<String, dynamic> jsonData) {
+    final primary = settings.apiKey;
+    final tokens = settings.apiTokens
+        .map((entry) => ApiTokenConfig.fromJson(entry.toJson()))
+        .toList(growable: false);
+    final parallel = settings.parallelApiEnabled;
+    loadJson(jsonData);
+    settings.updatePrimaryApiKey(primary);
+    settings.apiTokens
+      ..clear()
+      ..addAll(tokens);
+    settings.parallelApiEnabled = parallel;
+  }
+
   factory PayloadConfig.fromJson(Map<String, dynamic> jsonData) {
     final jsonCharacterList = jsonData.containsKey('character_config')
         ? jsonData['character_config'] as List<dynamic>
@@ -492,6 +555,7 @@ class PayloadConfig {
       fixedProfile.paramConfig.negativePrompt = negative;
     }
     promptMode = PromptMode.fixed;
+    notifyListeners();
     return loadedCount;
   }
 
@@ -527,22 +591,51 @@ class PayloadConfig {
     String? prompt,
     String? model,
   }) {
-    var loadedCount = loadParamJson(metadata);
+    final importedModel =
+        model?.isNotEmpty == true ? model! : fixedProfile.paramConfig.model;
+    fixedProfile.paramConfig = _metadataDefaultsForModel(importedModel);
+    var loadedCount = fixedProfile.paramConfig.loadJson(
+      _metadataSettingsJson(metadata, model: model),
+    );
+    final seedJson = _metadataSeedJson(metadata);
+    loadedCount += fixedProfile.paramConfig.loadJson(seedJson);
+    final negative = _metadataNegativePrompt(metadata);
+    if (negative != null) {
+      fixedProfile.negativePromptConfig = fixedPromptConfig(
+        negative,
+        negative: true,
+      );
+      fixedProfile.paramConfig.negativePrompt = negative;
+      loadedCount++;
+    } else {
+      fixedProfile.negativePromptConfig = fixedPromptConfig(
+        fixedProfile.paramConfig.negativePrompt,
+        negative: true,
+      );
+    }
     final positive = prompt ?? _metadataBasePrompt(metadata);
     if (positive != null) {
-      fixedProfile.rootPromptConfig = fixedPromptConfig(positive);
+      fixedProfile.rootPromptConfig = fixedPromptConfig(
+        _normalizeImportedTextPrompt(
+          positive,
+          metadata,
+          targetModel: fixedProfile.paramConfig.model,
+        ),
+      );
       loadedCount++;
+    } else {
+      fixedProfile.rootPromptConfig = fixedPromptConfig('');
     }
-    final characters = _metadataCharacters(metadata);
+    final characters = _metadataCharacters(metadata, model: model);
     if (characters != null) {
       fixedProfile.characterConfigList = characters;
-      loadedCount += characters.length;
+      loadedCount += max(1, characters.length);
+    } else {
+      fixedProfile.characterConfigList = [];
     }
-    if (model != null && model.isNotEmpty) {
-      fixedProfile.paramConfig.model = model;
-      loadedCount++;
-    }
+    _disableTransientGenerationInputs();
     promptMode = PromptMode.fixed;
+    notifyListeners();
     return loadedCount;
   }
 
@@ -551,17 +644,22 @@ class PayloadConfig {
     String? prompt,
     String? model,
   }) {
-    final characters = _metadataCharacters(metadata);
     final settingsJson = _metadataSettingsJson(metadata, model: model);
     final settingsProbe =
         ParamConfig.fromJson(fixedProfile.paramConfig.toJson());
     final settingsCount = settingsProbe.loadJson(settingsJson);
     return MetadataImportAvailability(
-      prompt: (prompt ?? _metadataBasePrompt(metadata)) != null,
-      undesiredContent: _metadataNegativePrompt(metadata) != null,
-      characters: characters != null && characters.isNotEmpty,
+      // A missing prompt in an otherwise valid generation record must be able
+      // to clear stale fixed text instead of silently keeping it.
+      prompt: metadata.isNotEmpty,
+      // Missing categories in a valid generation record mean "use the model
+      // default", not "keep unrelated values from the current profile".
+      undesiredContent: metadata.isNotEmpty,
+      // Empty or absent character metadata means there were no characters;
+      // importing that category must clear stale characters in the profile.
+      characters: metadata.isNotEmpty,
       settings: settingsCount > 0,
-      seed: metadata['seed'] is num || metadata['random_seed'] is bool,
+      seed: metadata.isNotEmpty,
     );
   }
 
@@ -573,18 +671,6 @@ class PayloadConfig {
   }) {
     final working = fixedProfile.copy();
     var loadedCount = 0;
-
-    if (options.prompt) {
-      final imported = prompt ?? _metadataBasePrompt(metadata);
-      if (imported != null) {
-        final next = _prepareImportedPrompt(imported, options.cleanImports);
-        final value = options.append
-            ? _appendPromptText(_plainPrompt(working.rootPromptConfig), next)
-            : next;
-        working.rootPromptConfig = fixedPromptConfig(value);
-        loadedCount++;
-      }
-    }
 
     if (options.undesiredContent) {
       final imported = _metadataNegativePrompt(metadata);
@@ -602,12 +688,21 @@ class PayloadConfig {
         );
         working.paramConfig.negativePrompt = value;
         loadedCount++;
+      } else if (!options.append) {
+        final modelDefaults =
+            _metadataDefaultsForModel(model ?? working.paramConfig.model);
+        working.negativePromptConfig = fixedPromptConfig(
+          modelDefaults.negativePrompt,
+          negative: true,
+        );
+        working.paramConfig.negativePrompt = modelDefaults.negativePrompt;
+        loadedCount++;
       }
     }
 
     if (options.characters) {
-      final imported = _metadataCharacters(metadata);
-      if (imported != null && imported.isNotEmpty) {
+      final imported = _metadataCharacters(metadata, model: model);
+      if (imported != null) {
         if (options.cleanImports) {
           for (final character in imported) {
             character.positivePromptConfig = fixedPromptConfig(
@@ -634,30 +729,101 @@ class PayloadConfig {
         if (v4Prompt is Map && v4Prompt['use_coords'] is bool) {
           working.paramConfig.autoPosition = !(v4Prompt['use_coords'] as bool);
         }
-        loadedCount += imported.length;
+        // Count the category itself when the source explicitly contains an
+        // empty character list; otherwise a characters-only clear would be
+        // mistaken for a no-op and the dialog would reject the import.
+        loadedCount += max(1, imported.length);
+      } else if (!options.append) {
+        working.characterConfigList = [];
+        loadedCount++;
       }
     }
 
     if (options.settings) {
+      final currentSeed = working.paramConfig.seed;
+      final currentRandomSeed = working.paramConfig.randomSeed;
+      final currentNegativePrompt = working.paramConfig.negativePrompt;
+      final importedModel =
+          model?.isNotEmpty == true ? model! : working.paramConfig.model;
+      working.paramConfig = _metadataDefaultsForModel(
+        importedModel,
+        seed: currentSeed,
+        randomSeed: currentRandomSeed,
+        negativePrompt: currentNegativePrompt,
+      );
       loadedCount += working.paramConfig.loadJson(
         _metadataSettingsJson(metadata, model: model),
       );
     }
 
     if (options.seed) {
-      final seedJson = <String, dynamic>{};
-      if (metadata['seed'] is num) {
-        seedJson['seed'] = metadata['seed'];
-      } else if (metadata['random_seed'] is bool) {
-        seedJson['random_seed'] = metadata['random_seed'];
+      loadedCount += working.paramConfig.loadJson(_metadataSeedJson(metadata));
+    }
+
+    // Resolve the selected model first. Removing an automatic block would
+    // lose conditioning if the user kept a model without automatic text.
+    if (options.prompt) {
+      final imported = prompt ?? _metadataBasePrompt(metadata);
+      if (imported != null) {
+        final normalized = _normalizeImportedTextPrompt(
+          imported,
+          metadata,
+          targetModel: working.paramConfig.model,
+          includeCharacters: options.characters,
+        );
+        final next = _prepareImportedPrompt(normalized, options.cleanImports);
+        final value = options.append
+            ? _appendPromptText(_plainPrompt(working.rootPromptConfig), next)
+            : next;
+        working.rootPromptConfig = fixedPromptConfig(value);
+        loadedCount++;
+      } else if (!options.append) {
+        working.rootPromptConfig = fixedPromptConfig('');
+        loadedCount++;
       }
-      loadedCount += working.paramConfig.loadJson(seedJson);
     }
 
     if (loadedCount == 0) return 0;
     fixedProfile = working;
+    if (options.settings) _disableTransientGenerationInputs();
     promptMode = PromptMode.fixed;
+    notifyListeners();
     return loadedCount;
+  }
+
+  void _disableTransientGenerationInputs() {
+    clearI2iResourceState();
+    clearVibeResourceState();
+    clearPreciseReferenceResourceState();
+  }
+
+  static ParamConfig _metadataDefaultsForModel(
+    String model, {
+    bool randomSeed = true,
+    int? seed = 0,
+    String? negativePrompt,
+  }) {
+    var scale = 5.0;
+    if (model == 'nai-diffusion-5-full' || model == 'nai-diffusion-5-curated') {
+      scale = 7.0;
+    } else if (model == 'nai-diffusion-4-full' ||
+        model == 'nai-diffusion-4-curated-preview') {
+      scale = 5.5;
+    } else if (model == 'nai-diffusion-furry-3') {
+      scale = 6.2;
+    }
+    return ParamConfig(
+      model: model,
+      scale: scale,
+      sampler: 'k_euler_ancestral',
+      steps: 23,
+      noiseSchedule: 'karras',
+      sm: false,
+      smDyn: false,
+      randomSeed: randomSeed,
+      seed: seed,
+      negativePrompt: negativePrompt ?? defaultUC,
+    );
   }
 
   void switchPromptMode() {
@@ -722,11 +888,13 @@ class PayloadConfig {
     'n_samples',
     'ucPreset',
     'qualityToggle',
+    'quality_boost',
     'sm',
     'sm_dyn',
     'dynamic_thresholding',
     'controlnet_strength',
     'legacy',
+    'legacy_v3_extend',
     'add_original_image',
     'uncond_scale',
     'cfg_rescale',
@@ -740,6 +908,16 @@ class PayloadConfig {
     'variety_plus',
     'legacy_uc',
     'auto_position',
+    'use_coords',
+  };
+
+  static const Set<String> _nullableMetadataSettingKeys = {
+    'deliberate_euler_ancestral_bug',
+    'prefer_brownian',
+    'straight_alpha',
+    'tag_hint_qt',
+    'tag_hint_uc_preset',
+    'tag_hint_transparent_background',
   };
 
   static Map<String, dynamic> _metadataSettingsJson(
@@ -748,7 +926,12 @@ class PayloadConfig {
   }) {
     final result = <String, dynamic>{};
     for (final key in _metadataSettingKeys) {
+      if (!metadata.containsKey(key)) continue;
       final value = metadata[key];
+      if (value == null && _nullableMetadataSettingKeys.contains(key)) {
+        result[key] = null;
+        continue;
+      }
       if (key == 'sizes' && value is List) {
         final sizes = value
             .whereType<Map>()
@@ -767,8 +950,41 @@ class PayloadConfig {
       }
       if (_isValidMetadataSetting(key, value)) result[key] = value;
     }
+    if (metadata.containsKey('quality_boost') &&
+        metadata['quality_boost'] is bool) {
+      result['qualityToggle'] = metadata['quality_boost'];
+      result.remove('quality_boost');
+    }
+    // NovelAI stores Variety+ as the computed sigma threshold in generated
+    // image metadata. A missing/null threshold means the switch was off. Keep
+    // accepting the app's own explicit boolean for compatibility JSON.
+    result['variety_plus'] = metadata.containsKey('skip_cfg_above_sigma')
+        ? metadata['skip_cfg_above_sigma'] is num
+        : metadata['variety_plus'] == true;
+    final v4Prompt = metadata['v4_prompt'];
+    if (v4Prompt is Map && v4Prompt['use_coords'] is bool) {
+      result['auto_position'] = !(v4Prompt['use_coords'] as bool);
+    }
+    final v4NegativePrompt = metadata['v4_negative_prompt'];
+    if (!result.containsKey('legacy_uc') &&
+        v4NegativePrompt is Map &&
+        v4NegativePrompt['legacy_uc'] is bool) {
+      result['legacy_uc'] = v4NegativePrompt['legacy_uc'];
+    }
     if (model != null && model.isNotEmpty) result['model'] = model;
     return result;
+  }
+
+  static Map<String, dynamic> _metadataSeedJson(
+    Map<String, dynamic> metadata,
+  ) {
+    if (metadata['seed'] is num) return {'seed': metadata['seed']};
+    if (metadata['random_seed'] is bool) {
+      return {'random_seed': metadata['random_seed']};
+    }
+    // Generated images always represent one concrete seed. If it is absent,
+    // do not inherit an unrelated fixed seed from the current profile.
+    return const {'random_seed': true};
   }
 
   static bool _isValidMetadataSetting(String key, Object? value) {
@@ -794,6 +1010,59 @@ class PayloadConfig {
     return value is bool;
   }
 
+  static String _normalizeImportedTextPrompt(
+    String value,
+    Map<String, dynamic> metadata, {
+    required String targetModel,
+    bool includeCharacters = true,
+  }) {
+    if (!targetModel.contains('diffusion-5')) return value;
+    final v4 = metadata['v4_prompt'];
+    final caption = v4 is Map ? v4['caption'] : null;
+    final rawCharacters = caption is Map ? caption['char_captions'] : null;
+    final sourceCharacters = rawCharacters is List
+        ? rawCharacters
+        : metadata['characterPrompts'] is List
+            ? metadata['characterPrompts'] as List
+            : const [];
+    final characters = <TextRenderingCharacter>[];
+    for (final raw in sourceCharacters) {
+      if (raw is! Map) continue;
+      final prompt = raw['char_caption'] ?? raw['prompt'];
+      if (prompt is! String) continue;
+      final centers = raw['centers'];
+      final point =
+          centers is List && centers.isNotEmpty ? centers.first : raw['center'];
+      final x = point is Map ? point['x'] : null;
+      final y = point is Map ? point['y'] : null;
+      characters.add(TextRenderingCharacter(
+        prompt: prompt,
+        center:
+            Point(x is num ? x.toDouble() : .5, y is num ? y.toDouble() : .5),
+      ));
+    }
+    final useCoords = v4 is Map && v4['use_coords'] == true;
+    final normalized = NovelAiTextRendering.removeAutomaticBlock(
+      value,
+      characters,
+      useCoords: useCoords,
+    );
+    if (normalized == value) return value;
+    // A prompt-only selection must not silently discard dialogue whose only
+    // source is an excluded character. Still verify against the full source
+    // first, so a manual block cannot be misclassified by a partial selection.
+    if (!includeCharacters &&
+        NovelAiTextRendering.removeAutomaticBlock(
+              value,
+              const [],
+              useCoords: useCoords,
+            ) !=
+            normalized) {
+      return value;
+    }
+    return normalized;
+  }
+
   static String _prepareImportedPrompt(String value, bool cleanImports) {
     if (!cleanImports) return value;
     return value
@@ -810,7 +1079,10 @@ class PayloadConfig {
     return '$left, $right';
   }
 
-  static List<CharacterConfig>? _metadataCharacters(Map<String, dynamic> json) {
+  static List<CharacterConfig>? _metadataCharacters(
+    Map<String, dynamic> json, {
+    String? model,
+  }) {
     final v4Prompt = json['v4_prompt'];
     final v4Negative = json['v4_negative_prompt'];
     List<dynamic>? positives;
@@ -833,7 +1105,7 @@ class PayloadConfig {
     // legacy grid cell so the point lands back on the free canvas. V4 also
     // carries use_coords:true but with quantized grid centers, so it must keep
     // using the legacy grid position.
-    final v5 = _isV5Metadata(json);
+    final v5 = _isV5Metadata(json, model: model);
     final useCoords = v5 && v4Prompt is Map && v4Prompt['use_coords'] == true;
     final result = <CharacterConfig>[];
     for (final (index, raw) in positives.indexed) {
@@ -888,7 +1160,8 @@ class PayloadConfig {
     return Point<int>(nearest(raw['x']), nearest(raw['y']));
   }
 
-  static bool _isV5Metadata(Map<String, dynamic> json) {
+  static bool _isV5Metadata(Map<String, dynamic> json, {String? model}) {
+    if (model?.contains('diffusion-5') == true) return true;
     final name = json['model_name'];
     if (name is String && name.contains('V5')) return true;
     if (json['model_hash'] == '0ADF9AB7') return true;

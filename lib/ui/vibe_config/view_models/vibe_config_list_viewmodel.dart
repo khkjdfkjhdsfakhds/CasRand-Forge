@@ -1,4 +1,5 @@
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:easy_localization/easy_localization.dart';
 import 'package:get_it/get_it.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
@@ -6,6 +7,7 @@ import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 
 import '../../../core/constants/image_formats.dart';
 import '../../../data/models/vibe_config.dart';
+import '../../core/utils/flushbar.dart';
 
 class VibeConfigListViewmodel extends ChangeNotifier {
   PayloadConfig get payloadConfig => GetIt.I<PayloadConfig>();
@@ -36,16 +38,40 @@ class VibeConfigListViewmodel extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> handleVibeDropEvent(PerformDropEvent event) async {
+  Future<void> handleVibeDropEvent(
+    BuildContext context,
+    PerformDropEvent event,
+  ) async {
+    if (event.session.items.isEmpty) return;
     final item = event.session.items.first;
-    final reader = item.dataReader!;
+    final reader = item.dataReader;
+    if (reader == null) {
+      showErrorBar(context, tr('vibe_import_failed', namedArgs: {'error': ''}));
+      return;
+    }
     reader.getFile(imageFormat, (file) async {
-      final data = await file.readAll();
-      payloadConfig.addVibeImage(
-        data,
-        file.fileName ?? 'Unnamed Vibe',
-      );
-      notifyListeners();
+      try {
+        final data = await file.readAll();
+        payloadConfig.addVibeImage(
+          data,
+          file.fileName ?? 'Unnamed Vibe',
+        );
+        notifyListeners();
+      } catch (error) {
+        if (context.mounted) {
+          showErrorBar(
+            context,
+            tr('vibe_import_failed', namedArgs: {'error': '$error'}),
+          );
+        }
+      }
+    }, onError: (error) {
+      if (context.mounted) {
+        showErrorBar(
+          context,
+          tr('vibe_import_failed', namedArgs: {'error': '$error'}),
+        );
+      }
     });
   }
 

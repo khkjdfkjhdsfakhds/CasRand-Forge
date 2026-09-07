@@ -30,6 +30,7 @@ class DirectorPageView extends StatelessWidget {
     return ListenableBuilder(
       listenable: Listenable.merge([
         viewmodel,
+        viewmodel.config,
         generationViewmodel,
         if (handoff != null) handoff!,
       ]),
@@ -311,14 +312,35 @@ class DirectorPageView extends StatelessWidget {
   Future<void> _handleDrop(BuildContext context, PerformDropEvent event) async {
     if (event.session.items.isEmpty) return;
     final reader = event.session.items.first.dataReader;
-    if (reader == null) return;
+    if (reader == null) {
+      showErrorBar(
+        context,
+        tr('image_drop_data_unavailable'),
+      );
+      return;
+    }
     reader.getFile(imageFormat, (file) async {
-      final succeed = viewmodel.loadImageBytes(await file.readAll());
-      if (!context.mounted) return;
-      if (succeed) {
-        showInfoBar(context, '${tr('i2i_import_image')}${tr('succeed')}');
-      } else {
-        showErrorBar(context, '${tr('i2i_import_image')}${tr('failed')}');
+      try {
+        final succeed = viewmodel.loadImageBytes(await file.readAll());
+        if (!context.mounted) return;
+        if (succeed) {
+          showInfoBar(context, '${tr('i2i_import_image')}${tr('succeed')}');
+        } else {
+          showErrorBar(context, tr('image_drop_rejected'));
+        }
+      } catch (error) {
+        if (!context.mounted) return;
+        showErrorBar(
+          context,
+          tr('image_drop_failed', namedArgs: {'error': '$error'}),
+        );
+      }
+    }, onError: (error) {
+      if (context.mounted) {
+        showErrorBar(
+          context,
+          tr('image_drop_failed', namedArgs: {'error': '$error'}),
+        );
       }
     });
   }

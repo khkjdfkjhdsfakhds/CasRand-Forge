@@ -5,7 +5,8 @@ import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 
 class I2iTabViewmodel extends ChangeNotifier {
-  ParamConfig get paramConfig => GetIt.I<PayloadConfig>().paramConfig;
+  PayloadConfig get payloadConfig => GetIt.I<PayloadConfig>();
+  ParamConfig get paramConfig => payloadConfig.paramConfig;
   ImageImportCapabilities get capabilities =>
       ImageImportCapabilities.forModel(paramConfig.model);
   bool get isV4 => capabilities.isV4Family;

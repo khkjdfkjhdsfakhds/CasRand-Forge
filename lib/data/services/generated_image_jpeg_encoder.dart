@@ -128,7 +128,7 @@ Future<Map<String, Object?>> _encodePngInBackground(Uint8List pngBytes) async {
       );
     }
 
-    final metadataJson = await _extractCompactMetadata(image);
+    final metadataJson = await _extractCompactMetadata(image, pngBytes);
     final hasTransparency = _hasVisibleTransparency(image);
     if (hasTransparency) {
       return _rawResult(
@@ -180,7 +180,12 @@ Future<Map<String, Object?>> _encodePngInBackground(Uint8List pngBytes) async {
       quality: GeneratedImageJpegEncodingResult.jpegQuality,
       chroma: img.JpegChroma.yuv444,
     );
-    final jpegBytes = Uint8List.fromList(jpeg);
+    final jpegBytes = metadataJson == null
+        ? Uint8List.fromList(jpeg)
+        : _addCompatibilityMetadata(
+            Uint8List.fromList(jpeg),
+            jsonDecode(metadataJson),
+          );
 
     final reopened = img.decodeJpg(jpegBytes);
     if (reopened == null ||
@@ -200,9 +205,9 @@ Future<Map<String, Object?>> _encodePngInBackground(Uint8List pngBytes) async {
       final reopenedExif = img.decodeJpgExif(jpegBytes);
       if (reopenedExif?.exifIfd.userComment !=
               _exifAsciiUserComment(metadataJson) ||
-          reopenedExif?.imageIfd.imageDescription !=
+          (reopenedExif?.imageIfd.imageDescription ?? '') !=
               _descriptionFromMetadata(metadataJson) ||
-          reopenedExif?.imageIfd.software !=
+          (reopenedExif?.imageIfd.software ?? '') !=
               _softwareFromMetadata(metadataJson)) {
         return _rawResult(
           status: GeneratedImageJpegEncodingStatus.verificationFailed,
@@ -270,12 +275,38 @@ bool _hasVisibleTransparency(img.Image image) {
   return false;
 }
 
-Future<String?> _extractCompactMetadata(img.Image image) async {
-  final raw = await ImageService().extractMetadata(image);
-  if (raw == null || raw.trim().isEmpty) return null;
-  final decoded = jsonDecode(raw);
-  if (decoded is! Map<String, dynamic>) return null;
-  return _compactAsciiJson(decoded);
+Future<String?> _extractCompactMetadata(
+  img.Image image,
+  Uint8List pngBytes,
+) async {
+  String? stealthMetadata;
+  try {
+    stealthMetadata = await ImageService().extractMetadata(image);
+  } catch (_) {
+    // A damaged optional stealth channel must not hide valid PNG text data.
+  }
+
+  final candidates = <String?>[
+    stealthMetadata,
+    extractNovelAiMetadataFromPngText(pngBytes),
+  ];
+  for (final metadata in candidates) {
+    if (metadata == null || metadata.trim().isEmpty) continue;
+    final decoded = _parseNovelAiMetadataCandidate(metadata);
+    if (decoded != null) return _compactAsciiJson(decoded);
+  }
+  return null;
+}
+
+Map<String, dynamic>? _parseNovelAiMetadataCandidate(String metadata) {
+  try {
+    final decoded = jsonDecode(metadata);
+    if (decoded is! Map<String, dynamic>) return null;
+    return isNovelAiGenerationMetadata(decoded) ? decoded : null;
+  } catch (_) {
+    // Try the other metadata carrier before treating metadata as absent.
+    return null;
+  }
 }
 
 String? _stringField(Object? value) => value is String ? value : null;
@@ -328,4 +359,271 @@ String _escapeNonAscii(String value) {
     }
   }
   return output.toString();
+}
+
+/// Adds the metadata mirrors used by generic image readers. The complete
+/// NovelAI bundle remains in EXIF UserComment; XMP/IPTC only carry searchable
+/// descriptive fields so no reader has to reconstruct the generation JSON.
+Uint8List _addCompatibilityMetadata(
+  Uint8List jpeg,
+  Object? decodedMetadata,
+) {
+  if (decodedMetadata is! Map) return jpeg;
+  final title = _stringField(decodedMetadata['Title']) ?? '';
+  final description = _stringField(decodedMetadata['Description']) ?? '';
+  final software = _stringField(decodedMetadata['Software']) ?? 'NovelAI';
+  final source = _stringField(decodedMetadata['Source']) ?? software;
+  final comment = _stringField(decodedMetadata['Comment']) ?? '';
+  final negativePrompt = _negativePrompt(comment);
+  final compatibilityFields = _fitXmpFields({
+    'title': _truncateForCompatibility(title),
+    'description': _truncateForCompatibility(description),
+    'software': _truncateForCompatibility(software),
+    'source': _truncateForCompatibility(source),
+    'negativePrompt': _truncateForCompatibility(negativePrompt),
+  });
+  final iptcFields = _fitIptcFields({
+    'title': _truncateForCompatibility(title),
+    'description': _truncateForCompatibility(description),
+    'source': _truncateForCompatibility(source),
+    'negativePrompt': _truncateForCompatibility(negativePrompt),
+  });
+  final xmp = _xmpPacket(
+    title: compatibilityFields['title']!,
+    description: compatibilityFields['description']!,
+    software: compatibilityFields['software']!,
+    source: compatibilityFields['source']!,
+    negativePrompt: compatibilityFields['negativePrompt']!,
+  );
+  final iptc = _iptcResource(
+    title: iptcFields['title']!,
+    description: iptcFields['description']!,
+    source: iptcFields['source']!,
+    negativePrompt: iptcFields['negativePrompt']!,
+  );
+  return _insertJpegSegments(jpeg, [
+    _jpegAppSegment(0xe1, <int>[
+      ...utf8.encode('http://ns.adobe.com/xap/1.0/\u0000'),
+      ...utf8.encode(xmp),
+    ]),
+    _jpegAppSegment(0xed, iptc),
+  ]);
+}
+
+String _truncateForCompatibility(String value) {
+  const maxBytes = 12000;
+  return _truncateUtf8(value, maxBytes);
+}
+
+String _truncateUtf8(String value, int maxBytes) {
+  final bytes = utf8.encode(value);
+  if (bytes.length <= maxBytes) return value;
+  var end = maxBytes;
+  while (end > 0) {
+    try {
+      return utf8.decode(bytes.sublist(0, end), allowMalformed: false);
+    } on FormatException {
+      end--;
+    }
+  }
+  return '';
+}
+
+Map<String, String> _fitXmpFields(Map<String, String> fields) {
+  var fitted = Map<String, String>.from(fields);
+  const xmpIdentifier = 'http://ns.adobe.com/xap/1.0/\u0000';
+  const maxAppPayloadBytes = 0xffff - 2;
+  for (var attempt = 0; attempt < 32; attempt++) {
+    final packet = _xmpPacket(
+      title: fitted['title']!,
+      description: fitted['description']!,
+      software: fitted['software']!,
+      source: fitted['source']!,
+      negativePrompt: fitted['negativePrompt']!,
+    );
+    final packetBytes =
+        utf8.encode(xmpIdentifier).length + utf8.encode(packet).length;
+    if (packetBytes <= maxAppPayloadBytes) return fitted;
+
+    final previous = fitted;
+    fitted = {
+      for (final entry in previous.entries)
+        entry.key: _truncateUtf8(
+            entry.value, (utf8.encode(entry.value).length * 3) ~/ 4)
+    };
+    if (fitted.entries.every((entry) => entry.value == previous[entry.key])) {
+      break;
+    }
+  }
+
+  // The fixed XMP packet is comfortably below the segment limit; this
+  // fallback makes that guarantee explicit if the fields were pathological.
+  return {
+    for (final entry in fitted.entries) entry.key: '',
+  };
+}
+
+Map<String, String> _fitIptcFields(Map<String, String> fields) {
+  var fitted = Map<String, String>.from(fields);
+  const maxAppPayloadBytes = 0xffff - 2;
+  for (var attempt = 0; attempt < 32; attempt++) {
+    final payload = _iptcResource(
+      title: fitted['title']!,
+      description: fitted['description']!,
+      source: fitted['source']!,
+      negativePrompt: fitted['negativePrompt']!,
+    );
+    if (payload.length <= maxAppPayloadBytes) return fitted;
+
+    final previous = fitted;
+    fitted = {
+      for (final entry in previous.entries)
+        entry.key: _truncateUtf8(
+            entry.value, (utf8.encode(entry.value).length * 3) ~/ 4)
+    };
+    if (fitted.entries.every((entry) => entry.value == previous[entry.key])) {
+      break;
+    }
+  }
+  return {
+    for (final entry in fitted.entries) entry.key: '',
+  };
+}
+
+String _negativePrompt(String comment) {
+  try {
+    final value = jsonDecode(comment);
+    if (value is! Map) return '';
+    final direct = value['negative_prompt'];
+    if (direct is String) return direct;
+    for (final key in const ['v4_negative_prompt', 'negative_prompt']) {
+      final nested = value[key];
+      if (nested is Map) {
+        final caption = nested['caption'];
+        if (caption is Map && caption['base_caption'] is String) {
+          return caption['base_caption'] as String;
+        }
+      }
+    }
+  } catch (_) {
+    // Metadata remains valid even when the optional negative prompt is absent.
+  }
+  return '';
+}
+
+String _xmlEscape(String value) {
+  final output = StringBuffer();
+  for (final codePoint in value.runes) {
+    // XML 1.0 excludes most C0 controls. The authoritative JSON remains
+    // untouched; only the best-effort XMP mirror drops invalid XML scalars.
+    final valid = codePoint == 0x9 ||
+        codePoint == 0xa ||
+        codePoint == 0xd ||
+        (codePoint >= 0x20 && codePoint <= 0xd7ff) ||
+        (codePoint >= 0xe000 && codePoint <= 0xfffd) ||
+        (codePoint >= 0x10000 && codePoint <= 0x10ffff);
+    if (!valid) continue;
+    switch (codePoint) {
+      case 0x26:
+        output.write('&amp;');
+      case 0x3c:
+        output.write('&lt;');
+      case 0x3e:
+        output.write('&gt;');
+      case 0x22:
+        output.write('&quot;');
+      case 0x27:
+        output.write('&apos;');
+      default:
+        output.writeCharCode(codePoint);
+    }
+  }
+  return output.toString();
+}
+
+String _xmpPacket({
+  required String title,
+  required String description,
+  required String software,
+  required String source,
+  required String negativePrompt,
+}) {
+  final safeTitle = _xmlEscape(title);
+  final safeDescription = _xmlEscape(description);
+  final safeSoftware = _xmlEscape(software);
+  final safeSource = _xmlEscape(source);
+  final safeNegative = _xmlEscape(negativePrompt);
+  return '''<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/" rdf:about="">
+<dc:title><rdf:Alt><rdf:li xml:lang="x-default">$safeTitle</rdf:li></rdf:Alt></dc:title>
+<dc:description><rdf:Alt><rdf:li xml:lang="x-default">$safeDescription</rdf:li></rdf:Alt></dc:description>
+<xmp:CreatorTool>$safeSoftware</xmp:CreatorTool>
+<photoshop:Source>$safeSource</photoshop:Source>
+<photoshop:Instructions>$safeNegative</photoshop:Instructions>
+</rdf:Description>
+</rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>''';
+}
+
+List<int> _iptcResource({
+  required String title,
+  required String description,
+  required String source,
+  required String negativePrompt,
+}) {
+  final datasets = <int>[];
+  void add(int dataset, String value) {
+    final bytes = utf8.encode(value);
+    if (bytes.isEmpty || bytes.length > 0x7fff) return;
+    datasets
+      ..add(0x1c)
+      ..add(2)
+      ..add(dataset)
+      ..add((bytes.length >> 8) & 0xff)
+      ..add(bytes.length & 0xff)
+      ..addAll(bytes);
+  }
+
+  // IPTC record 1:90 declares UTF-8; record 2 mirrors common caption fields.
+  datasets.addAll([0x1c, 1, 90, 0, 3, 0x1b, 0x25, 0x47]);
+  add(5, title);
+  add(115, source);
+  add(120, description);
+  add(40, negativePrompt);
+
+  final resource = <int>[0x38, 0x42, 0x49, 0x4d, 0x04, 0x04, 0, 0];
+  resource
+    ..add((datasets.length >> 24) & 0xff)
+    ..add((datasets.length >> 16) & 0xff)
+    ..add((datasets.length >> 8) & 0xff)
+    ..add(datasets.length & 0xff)
+    ..addAll(datasets);
+  if (datasets.length.isOdd) resource.add(0);
+  return <int>[...utf8.encode('Photoshop 3.0\u0000'), ...resource];
+}
+
+List<int> _jpegAppSegment(int marker, List<int> payload) {
+  final length = payload.length + 2;
+  if (length > 0xffff) {
+    throw StateError('JPEG metadata segment exceeds the JPEG limit.');
+  }
+  return <int>[
+    0xff,
+    marker,
+    (length >> 8) & 0xff,
+    length & 0xff,
+    ...payload,
+  ];
+}
+
+Uint8List _insertJpegSegments(Uint8List jpeg, List<List<int>> segments) {
+  final bytes = <int>[0xff, 0xd8];
+  for (final segment in segments) {
+    bytes.addAll(segment);
+  }
+  bytes.addAll(jpeg.skip(2));
+  return Uint8List.fromList(bytes);
 }

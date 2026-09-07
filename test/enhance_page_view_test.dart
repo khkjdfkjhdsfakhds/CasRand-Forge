@@ -21,6 +21,9 @@ import 'package:nai_casrand/ui/generation_page/widgets/info_card.dart';
 import 'package:nai_casrand/ui/enhance_page/view_models/enhance_page_viewmodel.dart';
 import 'package:nai_casrand/ui/enhance_page/widgets/enhance_page_view.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
+import 'package:super_drag_and_drop/super_drag_and_drop.dart';
+
+import 'drop_test_fakes.dart';
 
 class _TestAssetLoader extends AssetLoader {
   final Map<String, dynamic> translations;
@@ -132,6 +135,26 @@ void main() {
 
     expect(config.strength, 0.4);
     expect(config.noise, 0.0);
+  });
+
+  testWidgets('Enhance drop read failure is visible and preserves its source', (
+    tester,
+  ) async {
+    final source = solidPng(64, 64);
+    GetIt.I<PayloadConfig>().enhanceConfig.setImage(source);
+    await tester.pumpWidget(
+      localizedApp(EnhancePageView(viewmodel: EnhancePageViewmodel())),
+    );
+    await tester.pumpAndSettle();
+
+    await tester
+        .widget<DropRegion>(find.byType(DropRegion).first)
+        .onPerformDrop(failingImageDropEvent());
+    await tester.pump();
+
+    expect(find.textContaining('Could not read the dropped image'),
+        findsOneWidget);
+    expect(GetIt.I<PayloadConfig>().enhanceConfig.imageBytes, source);
   });
 
   testWidgets('without a source image workspace and controls stay visible', (

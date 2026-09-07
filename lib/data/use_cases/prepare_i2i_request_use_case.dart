@@ -41,6 +41,68 @@ class _EncodedInpaintMasks {
   const _EncodedInpaintMasks({required this.request, required this.blend});
 }
 
+/// Immutable input for the CPU-heavy inpaint request preparation isolate.
+class _InpaintPrepareInput {
+  final Uint8List imageBytes;
+  final Uint8List? maskBytes;
+  final int imageWidth;
+  final int imageHeight;
+  final int targetWidth;
+  final int targetHeight;
+  final double strength;
+  final double noise;
+  final bool addOriginalImage;
+  final bool autocropEnabled;
+  final int contextPx;
+  final CropRect? manualFocusFrame;
+
+  const _InpaintPrepareInput({
+    required this.imageBytes,
+    required this.maskBytes,
+    required this.imageWidth,
+    required this.imageHeight,
+    required this.targetWidth,
+    required this.targetHeight,
+    required this.strength,
+    required this.noise,
+    required this.addOriginalImage,
+    required this.autocropEnabled,
+    required this.contextPx,
+    required this.manualFocusFrame,
+  });
+}
+
+/// Runs the existing inpaint builder with an immutable config snapshot.
+///
+/// Keeping the builder itself in one place avoids a second implementation of
+/// the request geometry while ensuring decoding, mask scanning, cropping,
+/// resizing, and PNG encoding happen outside the UI isolate.
+I2iRequestBatch _prepareInpaintBatchInBackground(_InpaintPrepareInput input) {
+  final snapshot = I2IConfig(
+    strength: input.strength,
+    noise: input.noise,
+    addOriginalImage: input.addOriginalImage,
+    autocropEnabled: input.autocropEnabled,
+    contextPx: input.contextPx,
+  );
+  snapshot.setPreparedImage(
+    input.imageBytes,
+    width: input.imageWidth,
+    height: input.imageHeight,
+  );
+  if (input.maskBytes != null || input.manualFocusFrame != null) {
+    snapshot.setMask(
+      input.maskBytes,
+      const [],
+      focusFrame: input.manualFocusFrame,
+    );
+  }
+  return PrepareI2iRequestUseCase(config: snapshot)._buildInpaintBatch(
+    input.targetWidth,
+    input.targetHeight,
+  );
+}
+
 I2iRequestPlan _preparePlainI2iPlan(_PlainI2iPrepareInput input) {
   if (!input.normalizeToTarget) {
     return I2iRequestPlan(
@@ -374,6 +436,37 @@ class PrepareI2iRequestUseCase {
     _decodedMaskRevision = -1;
   }
 
+  Future<I2iRequestBatch> _prepareInpaintBatch({
+    required int targetWidth,
+    required int targetHeight,
+  }) {
+    final imageBytes = config.imageBytes;
+    if (imageBytes == null) {
+      throw StateError('Cannot prepare inpainting without a source image.');
+    }
+    final maskBytes = config.maskBytes;
+    return compute(
+      _prepareInpaintBatchInBackground,
+      _InpaintPrepareInput(
+        // Copy mutable buffers before handing them to the worker. The config
+        // can be edited while the isolate is preparing the request.
+        imageBytes: Uint8List.fromList(imageBytes),
+        maskBytes: maskBytes == null ? null : Uint8List.fromList(maskBytes),
+        imageWidth: config.width,
+        imageHeight: config.height,
+        targetWidth: targetWidth,
+        targetHeight: targetHeight,
+        strength: config.strength,
+        noise: config.noise,
+        addOriginalImage: config.addOriginalImage,
+        autocropEnabled: config.autocropEnabled,
+        contextPx: config.contextPx,
+        manualFocusFrame: config.manualFocusFrame,
+      ),
+      debugLabel: 'prepare-inpaint-batch',
+    );
+  }
+
   /// Plans only the visible focus frames. It decodes the mask on a background
   /// isolate and skips base-image cropping/PNG encoding, so the page can show
   /// Autocrop immediately without blocking slider interaction.
@@ -429,7 +522,10 @@ class PrepareI2iRequestUseCase {
           summary: plan.summary,
         );
       } else {
-        batch = _buildInpaintBatch(targetWidth, targetHeight);
+        batch = await _prepareInpaintBatch(
+          targetWidth: targetWidth,
+          targetHeight: targetHeight,
+        );
       }
       if (identityHashCode(config) != configId ||
           config.planRevision != revision) {
@@ -449,6 +545,22 @@ class PrepareI2iRequestUseCase {
       return _withCurrentParameters(batch);
     }
     return null;
+  }
+
+  /// Synchronous seam for tests that need to exercise generation command
+  /// ordering without running a real worker isolate under FakeAsync.
+  @visibleForTesting
+  I2iRequestBatch? planInpaintBatchInCurrentIsolate({
+    required int targetWidth,
+    required int targetHeight,
+  }) {
+    if (!config.hasImage) return null;
+    if (!config.hasInpaintSelection) {
+      throw StateError('This test seam is only valid for inpaint inputs.');
+    }
+    return _withCurrentParameters(
+      _buildInpaintBatch(targetWidth, targetHeight),
+    );
   }
 
   I2iRequestBatch _withCurrentParameters(I2iRequestBatch batch) {
@@ -497,7 +609,12 @@ class PrepareI2iRequestUseCase {
       }
 
       final plan = config.hasInpaintSelection
-          ? _buildInpaintBatch(targetWidth, targetHeight).plans.first
+          ? (await _prepareInpaintBatch(
+              targetWidth: targetWidth,
+              targetHeight: targetHeight,
+            ))
+              .plans
+              .first
           : await preparePlainImg2ImgBytesInBackground(
               imageBytes: config.imageBytes!,
               sourceWidth: config.width,
@@ -852,7 +969,20 @@ class PrepareI2iRequestUseCase {
       responseBytes: responseBytes,
       plan: plan,
     );
-    return finishComposite(canvas: canvas, responseBytes: responseBytes);
+    final metadataSources = <Uint8List>[];
+    if (plan.composite != null && compositeBaseImageB64 != null) {
+      try {
+        metadataSources.add(base64Decode(compositeBaseImageB64));
+      } catch (_) {
+        // The canvas was already decoded above; an invalid optional metadata
+        // source must not prevent the composed image from being returned.
+      }
+    }
+    return finishComposite(
+      canvas: canvas,
+      responseBytes: responseBytes,
+      metadataSources: metadataSources,
+    );
   }
 
   /// Rebuilds a Focus request source from the current composite canvas. This
@@ -1108,22 +1238,29 @@ class PrepareI2iRequestUseCase {
   Future<Uint8List> finishComposite({
     required img.Image canvas,
     required Uint8List responseBytes,
+    Iterable<Uint8List> metadataSources = const [],
   }) async {
     var output = canvas;
     if (output.numChannels != 4) {
       output = output.convert(numChannels: 4);
     }
     var pngBytes = img.encodePng(output);
-    try {
-      final response = img.decodePng(responseBytes);
-      final metadataString = response == null
-          ? null
-          : await ImageService().extractMetadata(response);
-      if (metadataString != null) {
+    // Read from the original response bytes so PNG tEXt/iTXt metadata is
+    // preserved even when the decoder does not expose it on img.Image. Split
+    // focus batches may have several responses; use the first valid metadata
+    // carrier instead of assuming the last tile has one. A base-image source
+    // is a final fallback for response formats that omit metadata entirely.
+    for (final source in [responseBytes, ...metadataSources]) {
+      try {
+        final metadataString =
+            await ImageService().extractMetadataFromBytes(source);
+        if (metadataString == null || metadataString.trim().isEmpty) continue;
         pngBytes = await ImageService().embedMetadata(pngBytes, metadataString);
+        break;
+      } catch (_) {
+        // Metadata is best-effort; try the next tile/source before returning
+        // the composed image without a metadata carrier.
       }
-    } catch (_) {
-      // Metadata is best-effort; the composed image itself matters more.
     }
     return pngBytes;
   }

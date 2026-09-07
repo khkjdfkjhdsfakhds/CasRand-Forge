@@ -10,7 +10,7 @@ jobs:
   build-android:
     runs-on: ubuntu-latest
     env:
-      ASSET_NAME: NAI-CasRand-Forge-v0.9.8-Android.apk
+      ASSET_NAME: NAI-CasRand-Forge-v0.9.10-Android.apk
 
     steps:
       - name: Check out source
@@ -72,7 +72,7 @@ jobs:
           AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)"
           test -n "$AAPT"
           BADGING="$("$AAPT" dump badging "$ASSET_NAME")"
-          grep -Fq "package: name='io.github.khkjdfkjhdsfakhds.casrandforge.beta' versionCode='95' versionName='0.9.8'" <<<"$BADGING"
+          grep -Fq "package: name='io.github.khkjdfkjhdsfakhds.casrandforge.beta' versionCode='117' versionName='0.9.10'" <<<"$BADGING"
           grep -Fq "application-label:'NAI CasRand Forge'" <<<"$BADGING"
           grep -Fq "certificate SHA-256 digest: aa180c392642bf83b47eac1b7ec6756b6e0cefe2b4443ac8e1e22b3a24c31b3e" < <("$APKSIGNER" verify --verbose --print-certs "$ASSET_NAME")
 

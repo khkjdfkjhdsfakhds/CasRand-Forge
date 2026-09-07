@@ -13,6 +13,13 @@ class I2iTabView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: Listenable.merge([viewmodel, viewmodel.payloadConfig]),
+      builder: (context, _) => _buildContent(context),
+    );
+  }
+
+  Widget _buildContent(BuildContext context) {
     if (viewmodel.isV5) {
       return Center(
         child: Padding(

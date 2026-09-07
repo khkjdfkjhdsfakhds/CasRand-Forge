@@ -37,6 +37,15 @@ class _GenerationPageViewState extends State<GenerationPageView> {
     return _resultKeys.putIfAbsent(command, GlobalKey.new);
   }
 
+  void _pruneResultKeys() {
+    // Keep this temporary snapshot outside the item-builder closure context:
+    // mounted cards retain their callbacks after a later history eviction.
+    final retainedCommands = viewmodel.commandList.toSet();
+    _resultKeys.removeWhere(
+      (command, _) => !retainedCommands.contains(command),
+    );
+  }
+
   @override
   void dispose() {
     _resultScrollController.dispose();
@@ -46,9 +55,19 @@ class _GenerationPageViewState extends State<GenerationPageView> {
   @override
   Widget build(BuildContext context) {
     final content = ListenableBuilder(
-        listenable: viewmodel,
+        listenable: Listenable.merge([
+          viewmodel,
+          viewmodel.payloadConfig,
+        ]),
         builder: (context, _) {
+          _pruneResultKeys();
           final itemCount = viewmodel.commandList.length;
+          final indexesByKey = <Key, int>{
+            for (final (index, command) in viewmodel.commandList.indexed)
+              if (_resultKeys.containsKey(command))
+                _resultKeys[command]!: itemCount - 1 - index,
+          };
+          int? findResultIndex(Key key) => indexesByKey[key];
           final useClassicMode =
               viewmodel.payloadConfig.settings.resultDisplayMode == 'classic';
           return Column(
@@ -65,6 +84,7 @@ class _GenerationPageViewState extends State<GenerationPageView> {
                         ),
                         padding: const EdgeInsets.all(8.0),
                         itemCount: itemCount,
+                        findChildIndexCallback: findResultIndex,
                         itemBuilder: (context, index) {
                           final command =
                               viewmodel.commandList[itemCount - 1 - index];
@@ -77,31 +97,37 @@ class _GenerationPageViewState extends State<GenerationPageView> {
                           );
                         },
                       )
-                    : WaterfallFlow.builder(
+                    : WaterfallFlow.custom(
                         controller: _resultScrollController,
                         gridDelegate:
                             SliverWaterfallFlowDelegateWithFixedCrossAxisCount(
                                 crossAxisCount: viewmodel.colNum),
                         padding: const EdgeInsets.all(8.0),
-                        itemCount: itemCount,
-                        itemBuilder: (context, index) {
-                          final command =
-                              viewmodel.commandList[itemCount - 1 - index];
-                          return KeyedSubtree(
-                            key: _keyFor(command),
-                            child: InfoCard(
-                              command: command,
-                              onOpenDetail: () => _openResultGallery(command),
-                            ),
-                          );
-                        },
+                        childrenDelegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            final command =
+                                viewmodel.commandList[itemCount - 1 - index];
+                            return KeyedSubtree(
+                              key: _keyFor(command),
+                              child: InfoCard(
+                                command: command,
+                                onOpenDetail: () => _openResultGallery(command),
+                              ),
+                            );
+                          },
+                          childCount: itemCount,
+                          findChildIndexCallback: findResultIndex,
+                        ),
                       ),
               ),
             ],
           );
         });
     final buttons = ListenableBuilder(
-      listenable: viewmodel,
+      listenable: Listenable.merge([
+        viewmodel,
+        viewmodel.payloadConfig,
+      ]),
       builder: (context, _) => Column(
         mainAxisSize: MainAxisSize.min,
         mainAxisAlignment: MainAxisAlignment.end,
@@ -357,6 +383,8 @@ class _GenerationPageViewState extends State<GenerationPageView> {
         viewmodel.commandStatus.isGenerationActive,
         viewmodel.commandStatus.isStopping,
         viewmodel.nextCostEstimate,
+        viewmodel,
+        viewmodel.payloadConfig,
       ]),
       builder: (context, _) {
         final active = viewmodel.commandStatus.isGenerationActive.value;
@@ -381,6 +409,29 @@ class _GenerationPageViewState extends State<GenerationPageView> {
             tooltip: tr('stop_generation'),
             icon: const Icon(Icons.stop),
             label: Text(tr('stop_generation')),
+          );
+        }
+        if (viewmodel.isBusyPreparingOrSingle) {
+          return FixedTooltipFab(
+            heroTag: 'gpfab3',
+            buttonKey: const Key('generation-toggle-fab'),
+            onPressed: null,
+            tooltip: tr('generation_busy'),
+            icon: const SizedBox.square(
+                dimension: 22,
+                child: CircularProgressIndicator(strokeWidth: 2.5)),
+            label: Text(tr('generation_busy')),
+          );
+        }
+        if (viewmodel.lockToAllCombinations &&
+            viewmodel.allCombinationsTooLarge) {
+          return FixedTooltipFab(
+            heroTag: 'gpfab3',
+            buttonKey: const Key('generation-toggle-fab'),
+            onPressed: null,
+            tooltip: tr('generation_count_exceeds_limit'),
+            icon: const Icon(Icons.warning_amber),
+            label: Text(tr('generation_count_out_of_range')),
           );
         }
         final cost = viewmodel.nextCostEstimate.value;

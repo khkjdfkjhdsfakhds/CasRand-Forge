@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_command/flutter_command.dart';
@@ -19,6 +20,7 @@ import 'package:nai_casrand/data/models/opus_usage.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
+import 'package:nai_casrand/data/models/user_input_validation.dart';
 import 'package:lorem_ipsum/lorem_ipsum.dart';
 import 'package:nai_casrand/data/services/account_service.dart';
 import 'package:nai_casrand/data/services/api_service.dart';
@@ -111,6 +113,15 @@ class _LogicalGenerationTask {
   String? cachedRetryFingerprint;
   GenerationDiagnosticContext? diagnosticContext;
   Command<void, InfoCardContent>? cardCommand;
+  final Map<int, Uint8List> completedTiles = {};
+  int savedPartialTileCount = 0;
+}
+
+class _PartialInpaintFailure implements Exception {
+  const _PartialInpaintFailure(this.cause, this.bytes, this.completedTiles);
+  final Object cause;
+  final Uint8List bytes;
+  final int completedTiles;
 }
 
 class _BatchAccounting {
@@ -135,6 +146,8 @@ class _BatchAccounting {
 }
 
 class GenerationPageViewmodel extends ChangeNotifier {
+  bool _disposed = false;
+  int _stopRevision = 0;
   final EncodeVibeUseCase _encodeVibeUseCase;
   final ApiService _apiService;
   final AccountService _accountService;
@@ -163,7 +176,18 @@ class GenerationPageViewmodel extends ChangeNotifier {
             AccountService(apiService: apiService ?? ApiService.shared),
         _fileService = fileService ?? FileService(),
         _generatedImageStorage = generatedImageStorage ??
-            GeneratedImageStorageService(fileService: fileService),
+            GeneratedImageStorageService(
+              fileService: fileService,
+              metadataProcessor: imageService == null
+                  ? null
+                  : (bytes, metadata) async => ImageMetadataEmbeddingResult(
+                        bytes:
+                            await imageService.embedMetadata(bytes, metadata),
+                        mode: metadata.trim().isEmpty
+                            ? ImageMetadataEmbeddingMode.erased
+                            : ImageMetadataEmbeddingMode.stealth,
+                      ),
+            ),
         _imageService = imageService ?? ImageService(),
         _prepareDirectorToolRequest = prepareDirectorToolRequest ??
             const PrepareDirectorToolRequestUseCase(),
@@ -177,9 +201,53 @@ class GenerationPageViewmodel extends ChangeNotifier {
       commandStatus.commandList;
   int get colNum => payloadConfig.settings.generationPageColumnCount;
 
+  bool get isBusyPreparingOrSingle =>
+      _isPreparingEnhance ||
+      _isPreparingDirector ||
+      (!commandStatus.isGenerationActive.value &&
+          (currentCommand?.isExecuting.value ?? false));
+
   Command<void, InfoCardContent>? currentCommand;
-  Command<void, InfoCardContent>? lastEnhanceCommand;
-  Command<void, InfoCardContent>? lastDirectorCommand;
+  Command<void, InfoCardContent>? _lastEnhanceCommand;
+  Command<void, InfoCardContent>? _lastDirectorCommand;
+  Object? _lastEnhanceSource;
+  Object? _lastDirectorSource;
+  int? _lastEnhanceImageRevision;
+  int? _lastDirectorImageRevision;
+
+  Command<void, InfoCardContent>? get lastEnhanceCommand {
+    final source = payloadConfig.enhanceConfig;
+    if (!identical(source, _lastEnhanceSource) ||
+        source.imageRevision != _lastEnhanceImageRevision) {
+      _lastEnhanceCommand = null;
+      _lastEnhanceSource = null;
+    }
+    return _lastEnhanceCommand;
+  }
+
+  set lastEnhanceCommand(Command<void, InfoCardContent>? command) {
+    _lastEnhanceCommand = command;
+    final source = payloadConfig.enhanceConfig;
+    _lastEnhanceSource = command == null ? null : source;
+    _lastEnhanceImageRevision = command == null ? null : source.imageRevision;
+  }
+
+  Command<void, InfoCardContent>? get lastDirectorCommand {
+    final source = payloadConfig.directorToolConfig;
+    if (!identical(source, _lastDirectorSource) ||
+        source.imageRevision != _lastDirectorImageRevision) {
+      _lastDirectorCommand = null;
+      _lastDirectorSource = null;
+    }
+    return _lastDirectorCommand;
+  }
+
+  set lastDirectorCommand(Command<void, InfoCardContent>? command) {
+    _lastDirectorCommand = command;
+    final source = payloadConfig.directorToolConfig;
+    _lastDirectorSource = command == null ? null : source;
+    _lastDirectorImageRevision = command == null ? null : source.imageRevision;
+  }
 
   bool _isPreparingEnhance = false;
   bool get isPreparingEnhance => _isPreparingEnhance;
@@ -205,6 +273,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
   String? _cachedRetryFingerprint;
   GenerationDiagnosticContext? _cachedDiagnosticContext;
   int _primaryConsecutiveFailures = 0;
+  final Map<int, Duration> _workerRetryDelays = {};
   bool _primaryWorkerPaused = false;
   Timer? _generationIntervalTimer;
 
@@ -229,8 +298,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
   final ValueNotifier<AnlasCost?> nextCostEstimate = ValueNotifier(null);
   String? _costEstimateKey;
   int _costEstimateEpoch = 0;
-  bool _subscriptionRefreshInFlight = false;
-  DateTime? _lastSubscriptionRefreshAttempt;
+  final Set<String> _subscriptionRefreshInFlight = {};
+  final Map<String, DateTime> _lastSubscriptionRefreshAttempts = {};
+  String? _displayedSubscriptionToken;
 
   /// True when the estimate is an upper bound (several sizes configured, one
   /// picked at random per request — the estimate uses the most expensive).
@@ -294,6 +364,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
               .length
           : 0,
       payloadConfig.vibeEnabled ? payloadConfig.vibeConfigListV4.length : 0,
+      payloadConfig.activeReferenceUsage.vibeCount,
       _pendingVibeEncodingAnlas,
       paramConfig.nSamples,
     ].join('|');
@@ -319,18 +390,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
         : !usage.isNegative;
     final sm = _smActive && paramConfig.sm;
     final smDyn = _smActive && paramConfig.smDyn;
-    final supportsReferences = ImageImportCapabilities.forModel(
-      paramConfig.model,
-    ).supports(ImageImportAction.vibeTransfer);
-    final preciseCount =
-        supportsReferences && payloadConfig.preciseReferenceEnabled
-            ? payloadConfig.preciseReferenceConfigList
-                .where((reference) => reference.enabled)
-                .length
-            : 0;
-    final vibeCount = supportsReferences && payloadConfig.vibeEnabled
-        ? payloadConfig.vibeConfigListV4.length
-        : 0;
+    final referenceUsage = payloadConfig.activeReferenceUsage;
+    final preciseCount = referenceUsage.preciseReferenceCount;
+    final vibeCount = referenceUsage.vibeCount;
     final vibeEncodingAnlas = _pendingVibeEncodingAnlas;
     // With several sizes one is picked at random per request; estimate the
     // most expensive so the display is an honest upper bound.
@@ -413,19 +475,12 @@ class GenerationPageViewmodel extends ChangeNotifier {
   /// Calls within one minute are coalesced. Generation uses this cached
   /// snapshot for pricing and never waits for an account query before sending.
   Future<void> refreshSubscriptionSnapshot() async {
-    if (_subscriptionRefreshInFlight) return;
     final settings = payloadConfig.settings;
     if (settings.debugApiEnabled) {
       settings.subscriptionTier = 0;
       settings.subscriptionActive = false;
       settings.subscriptionStatusKnown = true;
       settings.opusUsageAvailable = false;
-      return;
-    }
-    final now = DateTime.now();
-    final lastAttempt = _lastSubscriptionRefreshAttempt;
-    if (lastAttempt != null &&
-        now.difference(lastAttempt) < const Duration(minutes: 1)) {
       return;
     }
     final tokens = settings.effectiveApiTokens;
@@ -438,20 +493,48 @@ class GenerationPageViewmodel extends ChangeNotifier {
       settings.opusUsageAvailable = false;
       return;
     }
-    _subscriptionRefreshInFlight = true;
-    _lastSubscriptionRefreshAttempt = now;
-    final info = await _accountService.fetchSubscription(
-      token: tokens.first.token,
-      proxy: settings.proxy,
-    );
-    _subscriptionRefreshInFlight = false;
-    if (info == null) {
+    final token = tokens.first.token;
+    final proxy = settings.proxy;
+    final refreshIdentity = '$token\u0000$proxy';
+    if (_displayedSubscriptionToken != refreshIdentity) {
+      _displayedSubscriptionToken = refreshIdentity;
       settings.subscriptionStatusKnown = false;
-    } else {
-      _recordSubscriptionInfo(tokens.first.token, info);
+      _costEstimateKey = null;
+      final cached = _freshSubscriptionSnapshot(token);
+      if (cached != null) _recordSubscriptionInfo(token, cached);
+    }
+    if (_subscriptionRefreshInFlight.contains(refreshIdentity)) return;
+    final now = DateTime.now();
+    final lastAttempt = _lastSubscriptionRefreshAttempts[refreshIdentity];
+    if (lastAttempt != null &&
+        now.difference(lastAttempt) < const Duration(minutes: 1)) {
+      return;
+    }
+    _subscriptionRefreshInFlight.add(refreshIdentity);
+    _lastSubscriptionRefreshAttempts[refreshIdentity] = now;
+    try {
+      final info = await _accountService.fetchSubscription(
+        token: token,
+        proxy: proxy,
+      );
+      if (_disposed || settings.proxy != proxy) return;
+      if (info != null) {
+        _recordSubscriptionInfo(token, info);
+      } else if (identical(payloadConfig.settings, settings) &&
+          settings.effectiveApiTokens.firstOrNull?.token == token) {
+        settings.subscriptionStatusKnown = false;
+      }
+    } catch (_) {
+      if (!_disposed &&
+          identical(payloadConfig.settings, settings) &&
+          settings.effectiveApiTokens.firstOrNull?.token == token) {
+        settings.subscriptionStatusKnown = false;
+      }
+    } finally {
+      _subscriptionRefreshInFlight.remove(refreshIdentity);
     }
     _costEstimateKey = null;
-    notifyListeners();
+    if (!_disposed) notifyListeners();
   }
 
   void _recordSubscriptionInfo(String token, SubscriptionInfo info) {
@@ -526,13 +609,14 @@ class GenerationPageViewmodel extends ChangeNotifier {
     notifyListeners();
   }
 
-  void addManualSize(String width, String height) {
-    var parsedWidth = int.tryParse(width);
-    var parsedHeight = int.tryParse(height);
-    if (parsedWidth == null || parsedHeight == null) return;
-    parsedWidth = (parsedWidth / 64).ceil() * 64;
-    parsedHeight = (parsedHeight / 64).ceil() * 64;
-    addSize(GenerationSize(width: parsedWidth, height: parsedHeight));
+  UserInputValidationResult<GenerationSize> addManualSize(
+    String width,
+    String height,
+  ) {
+    final result = validateManualGenerationSize(width, height);
+    final size = result.value;
+    if (size != null) addSize(size);
+    return result;
   }
 
   void setGenerationInterval(String value) {
@@ -546,11 +630,15 @@ class GenerationPageViewmodel extends ChangeNotifier {
       payloadConfig.settings.lockToAllCombinations;
 
   int get totalCombinations => payloadConfig.totalCombinations;
+  BigInt get totalCombinationCycle => payloadConfig.totalCombinationCycle;
+  bool get allCombinationsTooLarge =>
+      payloadConfig.totalCombinationTaskCount == null;
 
   void setLockToAllCombinations(bool value) {
     payloadConfig.settings.lockToAllCombinations = value;
-    if (value) {
-      setGenerationCount(totalCombinations.toString());
+    final count = value ? payloadConfig.totalCombinationTaskCount : null;
+    if (count != null) {
+      setGenerationCount(count.toString());
     } else if (GetIt.I.isRegistered<ConfigService>()) {
       GetIt.I<ConfigService>().saveConfig(payloadConfig.toJson());
     }
@@ -606,7 +694,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
   }
 
   String _tokenForWorker(int workerIndex) {
-    if (workerIndex < _activeTokens.length) return _activeTokens[workerIndex];
+    if (_activeBatch != null && workerIndex < _activeTokens.length) {
+      return _activeTokens[workerIndex];
+    }
     return payloadConfig.settings.apiKey;
   }
 
@@ -618,64 +708,87 @@ class GenerationPageViewmodel extends ChangeNotifier {
     required I2iRequestBatch batch,
     required PayloadGenerationResult basePayloadResult,
     required Future<Uint8List> Function(Map<String, dynamic>) sendPlan,
+    required Map<int, Uint8List> completedTiles,
   }) async {
     const maxTileConcurrency = 4;
     final useCase = PrepareI2iRequestUseCase(config: payloadConfig.i2iConfig);
     final canvas = useCase.newCompositeCanvas(
       baseImageB64: batch.compositeBaseImageB64,
     );
-    Uint8List? lastResponse;
+    Object? failure;
     if (batch.serial) {
-      for (final (index, plan) in batch.plans.indexed) {
-        final requestPlan = index == 0
-            ? plan
-            : useCase.rebaseFocusPlanOnCanvas(canvas: canvas, plan: plan);
-        final payload = GeneratePayloadUseCase.applyI2iPlanToPayload(
-          basePayloadResult.payload,
-          requestPlan,
-        );
-        final response = await sendPlan(payload);
-        useCase.blendInpaintTileInto(
-          canvas: canvas,
-          responseBytes: response,
-          plan: plan,
-        );
-        lastResponse = response;
+      // Replaying cached tiles also reconstructs the exact source canvas for
+      // the next overlapping tile. A paid success never enters sendPlan again.
+      try {
+        for (final (index, plan) in batch.plans.indexed) {
+          var response = completedTiles[index];
+          if (response == null) {
+            final requestPlan = index == 0
+                ? plan
+                : useCase.rebaseFocusPlanOnCanvas(canvas: canvas, plan: plan);
+            response =
+                await sendPlan(GeneratePayloadUseCase.applyI2iPlanToPayload(
+              basePayloadResult.payload,
+              requestPlan,
+            ));
+            completedTiles[index] = response;
+          }
+          useCase.blendInpaintTileInto(
+              canvas: canvas, responseBytes: response, plan: plan);
+        }
+      } catch (error) {
+        failure = error;
       }
     } else {
-      // Freeze all non-overlapping requests before the first await. They share
-      // prompt/model/reference/seed semantics and can safely run concurrently.
-      final payloads = batch.plans
-          .map(
-            (plan) => GeneratePayloadUseCase.applyI2iPlanToPayload(
+      final missing = [
+        for (var i = 0; i < batch.plans.length; i++)
+          if (!completedTiles.containsKey(i)) i
+      ];
+      try {
+        for (var start = 0;
+            start < missing.length;
+            start += maxTileConcurrency) {
+          // Future.wait waits for every submitted sibling, including failures.
+          // Record each success independently before the group can throw.
+          await Future.wait(
+              missing.skip(start).take(maxTileConcurrency).map((index) async {
+            final response =
+                await sendPlan(GeneratePayloadUseCase.applyI2iPlanToPayload(
               basePayloadResult.payload,
-              plan,
-            ),
-          )
-          .toList(growable: false);
-      for (var start = 0;
-          start < batch.plans.length;
-          start += maxTileConcurrency) {
-        final slice = batch.plans.skip(start).take(maxTileConcurrency).toList();
-        final payloadSlice = payloads.skip(start).take(maxTileConcurrency);
-        final responses = await Future.wait(
-          payloadSlice.map(sendPlan),
-        );
-        for (final (index, response) in responses.indexed) {
+              batch.plans[index],
+            ));
+            completedTiles[index] = response;
+          }));
+        }
+      } catch (error) {
+        failure = error;
+      }
+      for (var index = 0; index < batch.plans.length; index++) {
+        final response = completedTiles[index];
+        if (response != null) {
           useCase.blendInpaintTileInto(
-            canvas: canvas,
-            responseBytes: response,
-            plan: slice[index],
-          );
-          lastResponse = response;
+              canvas: canvas,
+              responseBytes: response,
+              plan: batch.plans[index]);
         }
       }
     }
-
-    return useCase.finishComposite(
+    if (failure != null && completedTiles.isEmpty) throw failure;
+    final sources = <Uint8List>[...completedTiles.values];
+    if (batch.compositeBaseImageB64 != null) {
+      try {
+        sources.add(base64Decode(batch.compositeBaseImageB64!));
+      } catch (_) {}
+    }
+    final bytes = await useCase.finishComposite(
       canvas: canvas,
-      responseBytes: lastResponse ?? Uint8List(0),
+      responseBytes: sources.firstOrNull ?? Uint8List(0),
+      metadataSources: sources,
     );
+    if (failure != null) {
+      throw _PartialInpaintFailure(failure, bytes, completedTiles.length);
+    }
+    return bytes;
   }
 
   String? _tokenLabelForWorker(int workerIndex) {
@@ -700,8 +813,23 @@ class GenerationPageViewmodel extends ChangeNotifier {
     String promptSuffix = '',
   }) {
     final batchAccounting = _activeBatch;
+    final stopRevision = _stopRevision;
+    var requestSuspended = false;
+    bool shouldSend() =>
+        !_disposed && !requestSuspended && stopRevision == _stopRevision;
     final token = _tokenForWorker(workerIndex);
     final scheduledLease = _leaseForWorker(workerIndex);
+    final schedulerContext = _scheduler;
+    final logicalTask = scheduledLease == null
+        ? null
+        : _logicalTasks.putIfAbsent(
+            scheduledLease.taskNumber,
+            _LogicalGenerationTask.new,
+          );
+    final requestTimestamp = commandStatus.generationTimestamp;
+    final requestNumber =
+        scheduledLease?.taskNumber ?? commandStatus.currentGenerationCount;
+    final tokenLabel = _tokenLabelForWorker(workerIndex);
     final acceptedSettings = payloadConfig.settings;
     final storagePolicy = _storagePolicySnapshot(acceptedSettings);
     final metadataPolicy = GeneratedImageMetadataPolicy(
@@ -709,6 +837,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
       customMetadataEnabled: acceptedSettings.customMetadataEnabled,
       customMetadataContent: acceptedSettings.customMetadataContent,
     );
+    final acceptedProxy = acceptedSettings.proxy;
     int? startingBalance;
     DateTime? startingBalanceTime;
     var vibeExtractionAnlas = 0;
@@ -726,9 +855,49 @@ class GenerationPageViewmodel extends ChangeNotifier {
       PayloadGenerationResult? payloadResult;
       I2iRequestBatch? i2iBatch;
       GenerationDiagnosticContext? diagnosticContext;
+      var outcomeWasUnknown = false;
+      void markOutcomeUnknown(NovelAiApiException error) {
+        if (outcomeWasUnknown || _disposed) return;
+        outcomeWasUnknown = true;
+        requestSuspended = true;
+        final card = logicalTask?.cardCommand ?? command;
+        card.value = InfoCardContent(
+          title: tr('generation_outcome_unknown'),
+          info: error.toString(),
+          additionalInfo:
+              payloadResult == null ? {} : digestPayloadResult(payloadResult),
+          tokenLabel: tokenLabel,
+        );
+        commandStatus.setOutcomeUnknown(card, message: error.toString());
+        if (scheduledLease != null) {
+          schedulerContext?.suspendOutcome(scheduledLease);
+        }
+        if (identical(schedulerContext, _scheduler)) {
+          if (workerIndex == 0 && identical(currentCommand, command)) {
+            _primaryWorkerPaused = true;
+            currentCommand = null;
+            _primaryLease = null;
+          } else {
+            final state = _extraWorkers[workerIndex];
+            if (state != null && identical(state.command, command)) {
+              state.paused = true;
+              state.command = null;
+              state.lease = null;
+            }
+          }
+          _wakeIdleWorkers();
+          _finishScheduledBatchIfNeeded();
+        } else if (scheduledLease == null &&
+            identical(currentCommand, command)) {
+          currentCommand = null;
+        }
+        if (!_disposed) notifyListeners();
+      }
+
       try {
         vibeExtractionAnlas = await ensureVibeEncodings(
           token: token,
+          shouldContinue: shouldSend,
           endpoint: settings.debugApiEnabled
               ? EncodeVibeUseCase.endpointForDebugGenerationPath(endpoint)
               : EncodeVibeUseCase.officialEndpoint,
@@ -767,6 +936,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
             while (true) {
               vibeExtractionAnlas += await ensureVibeEncodings(
                 token: token,
+                shouldContinue: shouldSend,
                 endpoint: settings.debugApiEnabled
                     ? EncodeVibeUseCase.endpointForDebugGenerationPath(endpoint)
                     : EncodeVibeUseCase.officialEndpoint,
@@ -790,6 +960,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
                 final target = i2iConfig.requestSize;
                 try {
                   await _preparationFeedbackBarrier();
+                  if (!shouldSend()) throw const RequestNotSentException();
                   i2iBatch = await _prepareI2iBatch(
                     config: i2iConfig,
                     targetWidth: target.width,
@@ -864,25 +1035,40 @@ class GenerationPageViewmodel extends ChangeNotifier {
           throw const NovelAiApiException(
             'The freshly refreshed Anlas balance is insufficient for this '
             'estimated request.',
+            statusCode: 402,
           );
         }
 
         final headers = payloadConfig.getHeadersForToken(token);
-        Future<Uint8List> sendPlan(Map<String, dynamic> payload) async {
+        String? incompleteResponseWarning;
+        Future<ProcessedResponseImages> sendPlanImages(
+          Map<String, dynamic> payload,
+        ) async {
+          if (!shouldSend()) throw const RequestNotSentException();
           batchAccounting?.sentRequests.update(
             token,
             (value) => value + 1,
             ifAbsent: () => 1,
           );
-          final response = await _apiService.fetchData(
-            ApiRequest(
-              endpoint: endpoint,
-              proxy: settings.proxy,
-              headers: headers,
-              payload: payload,
-              diagnosticContext: diagnosticContext,
-            ),
+          final request = ApiRequest(
+            endpoint: endpoint,
+            proxy: acceptedProxy,
+            headers: headers,
+            payload: payload,
+            diagnosticContext: diagnosticContext,
+            shouldSend: shouldSend,
           );
+          ApiResponse response;
+          try {
+            response = await _apiService.fetchData(request);
+          } on NovelAiApiException catch (error) {
+            if (!error.isOutcomeUnknown) rethrow;
+            markOutcomeUnknown(error);
+            final pendingResponse = error.lateResponse;
+            if (pendingResponse == null) rethrow;
+            // Await the very same submitted request, never issue another POST.
+            response = await pendingResponse;
+          }
           final data = ApiService.requireSuccessfulData(
             response,
             operation: 'generate the image',
@@ -895,7 +1081,14 @@ class GenerationPageViewmodel extends ChangeNotifier {
             ));
           }
           try {
-            final processed = _imageService.processResponse(data);
+            final parameters = payload['parameters'] as Map<String, dynamic>?;
+            final expectedSampleCount =
+                (parameters?['n_samples'] as num?)?.toInt();
+            final processed = _imageService.processResponseImages(
+              data,
+              expectedSampleCount: expectedSampleCount,
+            );
+            incompleteResponseWarning ??= processed.incompleteWarning;
             processingStopwatch.stop();
             if (diagnosticContext != null) {
               _apiService.recordDiagnostic(GenerationPerformanceEvent(
@@ -919,69 +1112,55 @@ class GenerationPageViewmodel extends ChangeNotifier {
           }
         }
 
-        Uint8List imageBytes;
+        Future<Uint8List> sendPlan(Map<String, dynamic> payload) async {
+          final processed = await sendPlanImages(payload);
+          final imageZero = processed.sampleIndices.indexOf(0);
+          if (imageZero < 0) {
+            throw Exception('Image file image_0.png not found in archive.');
+          }
+          return processed[imageZero];
+        }
+
+        List<Uint8List> imageResults;
+        List<int> responseSampleIndices;
         if (i2iBatch != null && i2iBatch.isSplit) {
-          imageBytes = await _runSplitInpaint(
-            batch: i2iBatch,
-            basePayloadResult: payloadResult,
-            sendPlan: sendPlan,
-          );
+          imageResults = [
+            await _runSplitInpaint(
+              batch: i2iBatch,
+              basePayloadResult: payloadResult,
+              sendPlan: sendPlan,
+              completedTiles: logicalTask?.completedTiles ?? <int, Uint8List>{},
+            ),
+          ];
+          responseSampleIndices = const [0];
         } else {
-          imageBytes = await sendPlan(payloadResult.payload);
+          final processed = await sendPlanImages(payloadResult.payload);
+          imageResults = processed.toList(growable: false);
+          responseSampleIndices = processed.sampleIndices;
           // NovelAI returns raw infill pixels. Match the official frontend by
           // blending every infill response locally with its feathered mask.
           final plan = i2iBatch?.plans.first;
           if (plan?.isInpaint == true) {
-            imageBytes = await PrepareI2iRequestUseCase(
+            final useCase = PrepareI2iRequestUseCase(
               config: payloadConfig.i2iConfig,
-            ).compositeInpaintResponse(
-              responseBytes: imageBytes,
-              plan: plan!,
-              compositeBaseImageB64: i2iBatch?.compositeBaseImageB64,
             );
+            imageResults = await Future.wait([
+              for (final responseBytes in imageResults)
+                useCase.compositeInpaintResponse(
+                  responseBytes: responseBytes,
+                  plan: plan!,
+                  compositeBaseImageB64: i2iBatch?.compositeBaseImageB64,
+                ),
+            ]);
           }
         }
-        // Add custom metadata
-        if (metadataPolicy.eraseMetadata) {
-          final metadataString = metadataPolicy.customMetadataEnabled
-              ? metadataPolicy.customMetadataContent
-              : '';
-          imageBytes = await _imageService.embedMetadata(
-            imageBytes,
-            metadataString,
-          );
-        }
         if (scheduledLease != null &&
-            _scheduler?.reserveSuccess(scheduledLease) != true) {
+            schedulerContext?.reserveSuccess(scheduledLease) != true) {
           return InfoCardContent.fromEmpty();
         }
-        // Save image
         final filePrefix = payloadResult.suggestedFileName.isNotEmpty
             ? _getSafeFileName(payloadResult.suggestedFileName)
             : '';
-        final fileName = [
-          if (filePrefix.isNotEmpty) filePrefix,
-          _fileService.generateTimestampString(
-            commandStatus.generationTimestamp,
-          ),
-          (scheduledLease?.taskNumber ?? commandStatus.currentGenerationCount)
-              .toString()
-              .padLeft(6, '0'),
-          '${_fileService.generateRandomString()}.png',
-        ].join('-');
-        final storageSubmission = _generatedImageStorage.submit(
-          GeneratedImageStorageRequest(
-            logicalTaskId: scheduledLease == null
-                ? 'generation:${commandStatus.currentGenerationCount}:'
-                    '${commandStatus.generationTimestamp.microsecondsSinceEpoch}'
-                : 'generation:${scheduledLease.taskNumber}:'
-                    '${commandStatus.generationTimestamp.microsecondsSinceEpoch}',
-            pngBytes: imageBytes,
-            fileName: fileName,
-            storagePolicy: storagePolicy,
-            metadataPolicy: metadataPolicy,
-          ),
-        );
         final estimatedCost = _estimateResultAnlas(
           token: token,
           payloadResult: payloadResult,
@@ -995,84 +1174,214 @@ class GenerationPageViewmodel extends ChangeNotifier {
           model: model,
           debugApiEnabled: settings.debugApiEnabled,
         );
-        final previewContent = InfoCardContent(
-          title: fileName,
-          info: payloadResult.comment,
-          additionalInfo: digestPayloadResult(payloadResult),
-          imageArtifact: storageSubmission.artifact,
-          anlasCost: estimatedCost,
-          anlasCostIsEstimated: true,
-          tokenLabel: _tokenLabelForWorker(workerIndex),
-          opusUsage: opusPreview,
-          opusUsageIsEstimated: settleOpusUsage,
-          opusUsageSettling: settleOpusUsage,
-        );
-        command.value = previewContent;
+        final submissions = <GeneratedImageStorageSubmission>[];
+        final contents = <InfoCardContent>[];
+        final logicalTaskId = scheduledLease == null
+            ? 'generation:$requestNumber:'
+                '${requestTimestamp.microsecondsSinceEpoch}'
+            : 'generation:${scheduledLease.taskNumber}:'
+                '${requestTimestamp.microsecondsSinceEpoch}';
+        for (final (sampleIndex, imageBytes) in imageResults.indexed) {
+          final responseSampleIndex = responseSampleIndices[sampleIndex];
+          final fileName = [
+            if (filePrefix.isNotEmpty) filePrefix,
+            _fileService.generateTimestampString(
+              requestTimestamp,
+            ),
+            requestNumber.toString().padLeft(6, '0'),
+            if (imageResults.length > 1) 'sample-${responseSampleIndex + 1}',
+            '${_fileService.generateRandomString()}.png',
+          ].join('-');
+          final storageRequest = GeneratedImageStorageRequest(
+            logicalTaskId: '$logicalTaskId:sample:$responseSampleIndex',
+            pngBytes: imageBytes,
+            fileName: fileName,
+            storagePolicy: storagePolicy,
+            metadataPolicy: metadataPolicy,
+          );
+          final submission = _generatedImageStorage.submit(storageRequest);
+          submissions.add(submission);
+          late Command<void, InfoCardContent> resultCommand;
+          final content = InfoCardContent(
+            title: fileName,
+            info: payloadResult.comment,
+            additionalInfo: {
+              ...digestPayloadResult(payloadResult),
+              'sample_index': responseSampleIndex,
+              'sample_count': imageResults.length,
+              if (incompleteResponseWarning != null)
+                'response_warning': incompleteResponseWarning,
+            },
+            imageArtifact: submission.artifact,
+            retryImageStorage: () => _retryImageStorage(
+              command: resultCommand,
+              request: storageRequest,
+            ),
+            anlasCost: sampleIndex == 0 ? estimatedCost : null,
+            anlasCostIsEstimated: sampleIndex == 0,
+            tokenLabel: tokenLabel,
+            opusUsage: sampleIndex == 0 ? opusPreview : null,
+            opusUsageIsEstimated: sampleIndex == 0 && settleOpusUsage,
+            opusUsageSettling: sampleIndex == 0 && settleOpusUsage,
+          );
+          contents.add(content);
+          if (sampleIndex == 0) {
+            resultCommand = command;
+            command.value = content;
+          } else {
+            resultCommand = _addCompletedResult(content);
+          }
+        }
+        final previewContent = contents.first;
+        commandStatus.clearState(logicalTask?.cardCommand ?? command);
+        commandStatus.unbindAttempt(logicalTask?.cardCommand ?? command);
         if (scheduledLease != null) {
-          final card = _logicalTasks[scheduledLease.taskNumber]?.cardCommand;
+          final card = logicalTask?.cardCommand;
           if (card != null && !identical(card, command)) {
             card.value = previewContent;
             notifyListeners();
           }
         }
         if (scheduledLease != null) {
-          if (_scheduler?.detachWorkerForPersistence(scheduledLease) != true) {
+          if (schedulerContext?.detachWorkerForPersistence(scheduledLease) !=
+              true) {
             return InfoCardContent.fromEmpty();
           }
-          unawaited(_completeScheduledStorage(
+          if (!_completeScheduledGeneration(
             lease: scheduledLease,
             workerIndex: workerIndex,
             token: token,
             estimatedCost: estimatedCost,
             batch: batchAccounting,
-            submission: storageSubmission,
-          ));
+            schedulerContext: schedulerContext!,
+            task: logicalTask,
+            requestTimestamp: requestTimestamp,
+          )) {
+            return InfoCardContent.fromEmpty();
+          }
+          for (final submission in submissions) {
+            unawaited(_watchScheduledStorage(submission));
+          }
           return previewContent;
         }
 
-        final imageArtifact = await storageSubmission.completed;
-        _setCachedPayload(workerIndex, null, null);
-        _recordAttemptSuccess(workerIndex);
-        commandStatus.currentGenerationCount++;
-        return InfoCardContent(
-          title: fileName,
-          info: payloadResult.comment,
-          additionalInfo: digestPayloadResult(payloadResult),
-          imageArtifact: imageArtifact,
-          anlasCost: estimatedCost,
-          anlasCostIsEstimated: true,
-          tokenLabel: _tokenLabelForWorker(workerIndex),
-          opusUsage: opusPreview,
-          opusUsageIsEstimated: settleOpusUsage,
-          opusUsageSettling: settleOpusUsage,
-        );
-      } catch (e) {
-        final scheduledFailure = scheduledLease == null
-            ? null
-            : _scheduler?.completeFailure(scheduledLease);
-        final failureCount = scheduledFailure == null
-            ? _recordAttemptFailure(workerIndex)
-            : _recordScheduledFailure(workerIndex, scheduledFailure);
-        final pauseNotice =
-            commandStatus.isGenerationActive.value && failureCount >= 5
-                ? '\nAutomatic attempts for this token will pause after five '
-                    'consecutive failures. You can retry manually later.'
+        if (requestTimestamp == commandStatus.generationTimestamp) {
+          _setCachedPayload(workerIndex, null, null);
+          _recordAttemptSuccess(workerIndex);
+          commandStatus.currentGenerationCount++;
+        }
+        for (final submission in submissions) {
+          unawaited(_watchScheduledStorage(submission));
+        }
+        return previewContent;
+      } catch (error) {
+        final e = error is _PartialInpaintFailure ? error.cause : error;
+        if (error is _PartialInpaintFailure &&
+            error.completedTiles > (logicalTask?.savedPartialTileCount ?? 0)) {
+          if (logicalTask != null) {
+            logicalTask.savedPartialTileCount = error.completedTiles;
+          }
+          final fileName =
+              '${_fileService.generateTimestampString(requestTimestamp)}-'
+              '${scheduledLease?.taskNumber ?? 0}-partial-${error.completedTiles}-'
+              '${_fileService.generateRandomString()}.png';
+          final request = GeneratedImageStorageRequest(
+            logicalTaskId: 'partial:${requestTimestamp.microsecondsSinceEpoch}:'
+                '${scheduledLease?.taskNumber ?? 0}:${error.completedTiles}',
+            pngBytes: error.bytes,
+            fileName: fileName,
+            storagePolicy: storagePolicy,
+            metadataPolicy: metadataPolicy,
+          );
+          final submission = _generatedImageStorage.submit(request);
+          late final Command<void, InfoCardContent> partialCard;
+          partialCard = _addCompletedResult(InfoCardContent(
+            title: fileName,
+            info: tr('generation_partial_saved_detail'),
+            additionalInfo: {
+              'response_warning': tr('generation_partial_saved'),
+              'completed_tiles': error.completedTiles,
+              'total_tiles': i2iBatch?.tileCount
+            },
+            imageArtifact: submission.artifact,
+            retryImageStorage: () =>
+                _retryImageStorage(command: partialCard, request: request),
+            tokenLabel: tokenLabel,
+          ));
+          unawaited(_watchScheduledStorage(submission));
+        }
+        final currentBatch = identical(schedulerContext, _scheduler);
+        final unknown = e is NovelAiApiException && e.isOutcomeUnknown;
+        final cancelled = e is RequestNotSentException;
+        final accountBlocked = e is NovelAiApiException && e.isAccountBlocked;
+        var failureCount = 0;
+        if (unknown) {
+          markOutcomeUnknown(e);
+          if (e is VibeEncodingException && e.lateEncoding != null) {
+            final card = logicalTask?.cardCommand ?? command;
+            unawaited(e.lateEncoding!.then<void>((_) {
+              if (_disposed) return;
+              commandStatus.clearState(card);
+              commandStatus.unbindAttempt(card);
+              card.value = InfoCardContent(
+                  title: 'Vibe',
+                  info: tr('generation_vibe_ready_after_delay'),
+                  additionalInfo: card.value.additionalInfo,
+                  anlasCost: 2,
+                  anlasCostIsEstimated: true,
+                  tokenLabel: tokenLabel);
+              notifyListeners();
+            }, onError: (Object _) {}));
+          }
+        } else if (cancelled) {
+          if (scheduledLease != null) schedulerContext?.cancel(scheduledLease);
+        } else if (!outcomeWasUnknown) {
+          if (currentBatch &&
+              e is NovelAiApiException &&
+              e.retryAfter != null) {
+            _workerRetryDelays[workerIndex] = e.retryAfter!;
+          }
+          final scheduledFailure = scheduledLease == null
+              ? null
+              : schedulerContext?.completeFailure(scheduledLease,
+                  pauseWorker: accountBlocked);
+          if (currentBatch) {
+            failureCount = scheduledFailure == null
+                ? _recordAttemptFailure(workerIndex)
+                : _recordScheduledFailure(workerIndex, scheduledFailure);
+          }
+        }
+        final pauseNotice = accountBlocked
+            ? '\n${tr('generation_account_paused')}'
+            : commandStatus.isGenerationActive.value && failureCount >= 5
+                ? '\nAutomatic attempts for this token will pause after five consecutive failures.'
                 : '';
+        if (cancelled) {
+          commandStatus.clearState(logicalTask?.cardCommand ?? command);
+        }
         return InfoCardContent(
-          title: 'Error occurred in generation process.',
+          title: cancelled
+              ? tr('generation_request_cancelled')
+              : unknown
+                  ? tr('generation_outcome_unknown')
+                  : 'Error occurred in generation process.',
           info: '${e.toString()}$pauseNotice',
           additionalInfo:
               payloadResult != null ? digestPayloadResult(payloadResult) : {},
           anlasCost: vibeExtractionAnlas == 0 ? null : vibeExtractionAnlas,
           anlasCostIsEstimated: vibeExtractionAnlas != 0,
-          tokenLabel: _tokenLabelForWorker(workerIndex),
+          tokenLabel: tokenLabel,
         );
       }
     }
 
     command = Command.createAsyncNoParam(
       commandFunc,
-      initialValue: InfoCardContent.fromEmpty(),
+      initialValue: InfoCardContent(
+          title: '',
+          info: '',
+          additionalInfo: const {},
+          tokenLabel: tokenLabel),
     );
     command.isExecuting.addListener(() {
       if (command.isExecuting.value) return;
@@ -1087,62 +1396,92 @@ class GenerationPageViewmodel extends ChangeNotifier {
     return command;
   }
 
-  Future<void> _completeScheduledStorage({
+  bool _completeScheduledGeneration({
     required GenerationLease lease,
     required int workerIndex,
     required String token,
     required int estimatedCost,
     required _BatchAccounting? batch,
-    required GeneratedImageStorageSubmission submission,
-  }) async {
-    try {
-      await submission.completed;
-      if (_scheduler?.completeSuccess(lease) != true) return;
-      if (batch != null) {
-        batch.estimatedTotals.update(
-          token,
-          (value) => value + estimatedCost,
-          ifAbsent: () => estimatedCost,
-        );
-        batch.successCounts.update(
-          token,
-          (value) => value + 1,
-          ifAbsent: () => 1,
-        );
-      }
-      final task = _logicalTasks[lease.taskNumber];
-      if (task != null) {
-        task.cachedPayloadResult = null;
-        task.cachedI2iBatch = null;
-        task.cachedRetryFingerprint = null;
-        task.diagnosticContext = null;
-      }
-      if (batch != null && task?.cardCommand != null) {
-        final previousTask = batch.lastSuccessfulTaskNumbers[token] ?? -1;
-        if (lease.taskNumber >= previousTask) {
-          batch.lastSuccessfulTaskNumbers[token] = lease.taskNumber;
-          batch.lastCommands[token] = task!.cardCommand!;
-        }
-      }
-      _recordAttemptSuccess(workerIndex);
-      commandStatus.currentGenerationCount++;
-      notifyListeners();
-      _finishScheduledBatchIfNeeded();
-    } catch (_) {
-      final failure = _scheduler?.completeFailure(lease);
-      if (failure == null) return;
-      _recordScheduledFailure(workerIndex, failure);
-      notifyListeners();
-      if (!commandStatus.isGenerationActive.value) return;
-      if (workerIndex == 0) {
-        if (!(currentCommand?.isExecuting.value ?? false)) nextCommand();
-      } else {
-        final state = _extraWorkers[workerIndex];
-        if (!(state?.command?.isExecuting.value ?? false)) {
-          _nextCommandForExtraWorker(workerIndex);
-        }
+    required GenerationScheduler schedulerContext,
+    required _LogicalGenerationTask? task,
+    required DateTime requestTimestamp,
+  }) {
+    if (schedulerContext.completeSuccess(lease) != true) return false;
+    if (batch != null) {
+      batch.estimatedTotals.update(
+        token,
+        (value) => value + estimatedCost,
+        ifAbsent: () => estimatedCost,
+      );
+      batch.successCounts.update(
+        token,
+        (value) => value + 1,
+        ifAbsent: () => 1,
+      );
+    }
+    if (task != null) {
+      task.completedTiles.clear();
+      task.cachedPayloadResult = null;
+      task.cachedI2iBatch = null;
+      task.cachedRetryFingerprint = null;
+      task.diagnosticContext = null;
+    }
+    if (batch != null && task?.cardCommand != null) {
+      final previousTask = batch.lastSuccessfulTaskNumbers[token] ?? -1;
+      if (lease.taskNumber >= previousTask) {
+        batch.lastSuccessfulTaskNumbers[token] = lease.taskNumber;
+        batch.lastCommands[token] = task!.cardCommand!;
       }
     }
+    // The history and any pending save own their result now. A completed task
+    // must not keep evicted image bytes alive for the rest of a long batch.
+    if (identical(_logicalTasks[lease.taskNumber], task)) {
+      _logicalTasks.remove(lease.taskNumber);
+    }
+    if (identical(schedulerContext, _scheduler)) {
+      _recordAttemptSuccess(workerIndex);
+    }
+    if (requestTimestamp == commandStatus.generationTimestamp) {
+      commandStatus.currentGenerationCount++;
+    }
+    if (!_disposed) notifyListeners();
+    if (identical(schedulerContext, _scheduler)) {
+      _finishScheduledBatchIfNeeded();
+    }
+    return true;
+  }
+
+  Future<void> _watchScheduledStorage(
+    GeneratedImageStorageSubmission submission,
+  ) async {
+    try {
+      await submission.completed;
+    } catch (_) {
+      // Generation has already succeeded and been charged. Persistence has
+      // its own recoverable state on the result artifact and must never put
+      // the logical task back through the NovelAI generation endpoint.
+    }
+    if (!_disposed) notifyListeners();
+  }
+
+  Future<void> _retryImageStorage({
+    required Command<void, InfoCardContent> command,
+    required GeneratedImageStorageRequest request,
+  }) async {
+    if (command.value.imageArtifact?.status !=
+        GeneratedImageStorageStatus.failed) {
+      return;
+    }
+    final submission = _generatedImageStorage.submit(request);
+    command.value = command.value.copyWith(imageArtifact: submission.artifact);
+    notifyListeners();
+    try {
+      await submission.completed;
+    } catch (_) {
+      // The replacement artifact contains the concrete storage error and can
+      // be retried again with the same paid response bytes.
+    }
+    if (!_disposed) notifyListeners();
   }
 
   @visibleForTesting
@@ -1607,6 +1946,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
   Future<int> ensureVibeEncodings({
     required String token,
     String endpoint = EncodeVibeUseCase.officialEndpoint,
+    bool Function()? shouldContinue,
   }) async {
     var extractedCount = 0;
 
@@ -1615,6 +1955,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
     // *current* list is fully ready. Results remain cached only on the exact
     // Vibe object and model/information pair that started each extraction.
     while (true) {
+      if (shouldContinue?.call() == false) {
+        throw const RequestNotSentException();
+      }
       final config = payloadConfig;
       final model = config.paramConfig.model;
       final capabilities = ImageImportCapabilities.forModel(model);
@@ -1632,6 +1975,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
 
       final vibes = List.of(config.vibeConfigListV4);
       for (final vibe in vibes) {
+        if (shouldContinue?.call() == false) {
+          throw const RequestNotSentException();
+        }
         if (vibe.encodingFor(model) != null) continue;
         final imageBytes = vibe.imageBytes;
         if (imageBytes == null || imageBytes.isEmpty) {
@@ -1653,6 +1999,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
             informationExtracted: info,
             model: model,
             token: token,
+            shouldSend: shouldContinue,
             proxy: config.settings.proxy,
             endpoint: endpoint,
           );
@@ -1666,8 +2013,37 @@ class GenerationPageViewmodel extends ChangeNotifier {
             informationExtracted: info,
             encoding: encoding,
           );
-        } finally {
+        } on VibeEncodingException catch (error) {
+          if (!error.isOutcomeUnknown) {
+            if (identical(_vibeEncodingFutures[cacheKey], future)) {
+              _vibeEncodingFutures.remove(cacheKey);
+            }
+            rethrow;
+          }
+          if (ownsExtraction && error.lateEncoding != null) {
+            unawaited(error.lateEncoding!.then<void>((encoding) {
+              vibe.cacheEncoding(
+                  model: model, informationExtracted: info, encoding: encoding);
+              if (identical(_vibeEncodingFutures[cacheKey], future)) {
+                _vibeEncodingFutures.remove(cacheKey);
+              }
+              if (!_disposed) notifyListeners();
+            }, onError: (Object _) {
+              // Retain the uncertainty tombstone. A later attempt must not
+              // silently repeat extraction on the same original image.
+            }));
+          }
+          rethrow;
+        } catch (_) {
           if (identical(_vibeEncodingFutures[cacheKey], future)) {
+            _vibeEncodingFutures.remove(cacheKey);
+          }
+          rethrow;
+        } finally {
+          // Successful encodings are cached above. Unknown errors deliberately
+          // remain shared; deterministic failures may be retried normally.
+          if (vibe.encodingFor(model, informationExtracted: info) != null &&
+              identical(_vibeEncodingFutures[cacheKey], future)) {
             _vibeEncodingFutures.remove(cacheKey);
           }
         }
@@ -1819,6 +2195,10 @@ class GenerationPageViewmodel extends ChangeNotifier {
   }) {
     final task = _logicalTaskForWorker(workerIndex);
     if (task != null) {
+      if (!identical(task.cachedPayloadResult, result)) {
+        task.completedTiles.clear();
+        task.savedPartialTileCount = 0;
+      }
       task.cachedPayloadResult = result;
       task.cachedI2iBatch = batch;
       task.cachedRetryFingerprint = result == null ? null : retryFingerprint;
@@ -1893,12 +2273,14 @@ class GenerationPageViewmodel extends ChangeNotifier {
       );
       return true;
     }
+    final batch = _activeBatch;
+    commandStatus.bindAttempt(card, command);
     command.isExecuting.addListener(() {
       if (command.isExecuting.value) return;
+      commandStatus.unbindAttempt(card);
       final content = command.value;
       if (content.title.isEmpty && content.imageBytes == null) return;
       card.value = content;
-      final batch = _activeBatch;
       if (content.imageBytes != null && batch != null) {
         batch.lastCommands[token] = card;
       }
@@ -1923,6 +2305,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
   }
 
   void _recordAttemptSuccess(int workerIndex) {
+    _workerRetryDelays.remove(workerIndex);
     if (workerIndex == 0) {
       _primaryConsecutiveFailures = 0;
       _primaryWorkerPaused = false;
@@ -1951,12 +2334,38 @@ class GenerationPageViewmodel extends ChangeNotifier {
     return Duration.zero;
   }
 
+  Duration _retryDelay(int workerIndex, int consecutiveFailures) {
+    final fallback = _failureBackoff(consecutiveFailures);
+    final suggested = _workerRetryDelays[workerIndex];
+    return suggested != null && suggested > fallback ? suggested : fallback;
+  }
+
   bool get _allWorkersPaused =>
       _primaryWorkerPaused &&
       _extraWorkers.values.every((state) => state.paused);
 
+  void _wakeIdleWorkers() {
+    if (!commandStatus.isGenerationActive.value ||
+        commandStatus.isStopping.value) {
+      return;
+    }
+    if (!_primaryWorkerPaused &&
+        !commandStatus.isWaitingForNextGeneration.value &&
+        !(currentCommand?.isExecuting.value ?? false)) {
+      nextCommand();
+    }
+    for (final entry in _extraWorkers.entries.toList()) {
+      final state = entry.value;
+      if (!state.paused &&
+          state.intervalTimer == null &&
+          !(state.command?.isExecuting.value ?? false)) {
+        _nextCommandForExtraWorker(entry.key);
+      }
+    }
+  }
+
   void nextCommand() {
-    if (!commandStatus.isGenerationActive.value) return;
+    if (!commandStatus.isGenerationActive.value || _primaryWorkerPaused) return;
     if (commandStatus.isWaitingForNextGeneration.value) return;
 
     // Skip if active command exists
@@ -1978,7 +2387,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
       // Only update after execution
       if (command.isExecuting.value) return;
 
-      continueAfterGenerationAttempt();
+      if (identical(currentCommand, command)) continueAfterGenerationAttempt();
     });
 
     // Execute command
@@ -2006,6 +2415,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
     // Capture one immutable request snapshot at the click boundary. Response
     // handling must not be reclassified if the user prepares another tool or
     // image while this request is in flight.
+    final stopRevision = _stopRevision;
+    bool shouldSend() => !_disposed && stopRevision == _stopRevision;
     final requestRevision = config.requestRevision;
     final requestParameters = config.getRequestParameters();
     final toolType = config.type;
@@ -2022,6 +2433,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
     final customMetadataContent = settings.customMetadataContent;
     final debugApiEnabled = settings.debugApiEnabled;
     final requestTimestamp = DateTime.now();
+    final requestNumber = commandStatus.currentGenerationCount;
     commandStatus.generationTimestamp = requestTimestamp;
 
     _isPreparingDirector = true;
@@ -2032,13 +2444,15 @@ class GenerationPageViewmodel extends ChangeNotifier {
     late final int requestHeight;
     try {
       await _preparationFeedbackBarrier();
+      if (!shouldSend()) return false;
       final prepared = await _prepareDirectorToolRequest(
         imageBytes: imageBytes,
         width: sourceWidth,
         height: sourceHeight,
       );
       final currentConfig = payloadConfig.directorToolConfig;
-      if (!identical(currentConfig, config) ||
+      if (!shouldSend() ||
+          !identical(currentConfig, config) ||
           currentConfig.requestRevision != requestRevision ||
           commandStatus.isGenerationActive.value ||
           (currentCommand?.isExecuting.value ?? false)) {
@@ -2060,21 +2474,35 @@ class GenerationPageViewmodel extends ChangeNotifier {
       notifyListeners();
     }
 
-    var additionalResults = const <InfoCardContent>[];
     int? startingBalance;
     DateTime? startingBalanceTime;
+    late final Command<void, InfoCardContent> command;
     commandFunc() async {
       startingBalance = _lastAnlasBalances[apiKey];
       startingBalanceTime = _lastAnlasBalanceTimes[apiKey];
       try {
-        final response = await _apiService.fetchData(
-          ApiRequest(
+        if (!shouldSend()) throw const RequestNotSentException();
+        ApiResponse response;
+        try {
+          response = await _apiService.fetchData(ApiRequest(
             endpoint: augmentImageEndpoint,
             proxy: proxy,
             headers: headers,
             payload: payload,
-          ),
-        );
+            shouldSend: shouldSend,
+          ));
+        } on NovelAiApiException catch (error) {
+          if (!error.isOutcomeUnknown) rethrow;
+          command.value = InfoCardContent(
+              title: tr('generation_outcome_unknown'),
+              info: error.toString(),
+              additionalInfo: const {});
+          commandStatus.setOutcomeUnknown(command, message: error.toString());
+          if (identical(currentCommand, command)) currentCommand = null;
+          if (!_disposed) notifyListeners();
+          if (error.lateResponse == null) rethrow;
+          response = await error.lateResponse!;
+        }
         final data = ApiService.requireSuccessfulData(
           response,
           operation: 'run Director Tools',
@@ -2098,61 +2526,66 @@ class GenerationPageViewmodel extends ChangeNotifier {
           height: requestHeight,
         );
         final results = <InfoCardContent>[];
-        for (final (index, rawBytes) in responseImages.indexed) {
-          var imageBytes = rawBytes;
-          if (metadataEraseEnabled) {
-            final metadataString =
-                customMetadataEnabled ? customMetadataContent : '';
-            imageBytes = await _imageService.embedMetadata(
-              imageBytes,
-              metadataString,
-            );
-          }
+        for (final (index, imageBytes) in responseImages.indexed) {
           final variant =
               toolType == 'bg-removal' ? backgroundVariants[index] : toolName;
           final fileName = [
             _fileService.generateTimestampString(requestTimestamp),
-            commandStatus.currentGenerationCount.toString().padLeft(6, '0'),
+            (requestNumber + index).toString().padLeft(6, '0'),
             toolType,
             if (toolType == 'bg-removal') variant.toLowerCase(),
             '${_fileService.generateRandomString()}.png',
           ].join('-');
-          final storageSubmission = _generatedImageStorage.submit(
-            GeneratedImageStorageRequest(
-              logicalTaskId:
-                  'director:${requestTimestamp.microsecondsSinceEpoch}:'
-                  '$toolType:$index',
-              pngBytes: imageBytes,
-              fileName: fileName,
-              storagePolicy: storagePolicy,
-              metadataPolicy: GeneratedImageMetadataPolicy(
-                eraseMetadata: metadataEraseEnabled,
-                customMetadataEnabled: customMetadataEnabled,
-                customMetadataContent: customMetadataContent,
-              ),
+          final storageRequest = GeneratedImageStorageRequest(
+            logicalTaskId:
+                'director:${requestTimestamp.microsecondsSinceEpoch}:'
+                '$toolType:$index',
+            pngBytes: imageBytes,
+            fileName: fileName,
+            storagePolicy: storagePolicy,
+            metadataPolicy: GeneratedImageMetadataPolicy(
+              eraseMetadata: metadataEraseEnabled,
+              customMetadataEnabled: customMetadataEnabled,
+              customMetadataContent: customMetadataContent,
             ),
           );
-          final imageArtifact = await storageSubmission.completed;
-          commandStatus.currentGenerationCount++;
+          final storageSubmission = _generatedImageStorage.submit(
+            storageRequest,
+          );
+          if (requestTimestamp == commandStatus.generationTimestamp) {
+            commandStatus.currentGenerationCount++;
+          }
           final resultInfo = <String, dynamic>{
             ...info,
             if (toolType == 'bg-removal') 'background_removal_variant': variant,
           };
           final resultLabel =
               toolType == 'bg-removal' ? '$toolName · $variant' : toolName;
-          results.add(InfoCardContent(
+          late Command<void, InfoCardContent> resultCommand;
+          final content = InfoCardContent(
             title: fileName,
             info:
                 '$resultLabel\n${resultInfo.entries.map((e) => '${e.key}: ${e.value}').join('\n')}',
             additionalInfo: resultInfo,
-            imageArtifact: imageArtifact,
+            imageArtifact: storageSubmission.artifact,
+            retryImageStorage: () => _retryImageStorage(
+              command: resultCommand,
+              request: storageRequest,
+            ),
             // One API request produced all three variants; report its total
             // cost once instead of making every card look separately billed.
             anlasCost: index == 0 ? estimatedCost : null,
             anlasCostIsEstimated: index == 0,
-          ));
+          );
+          results.add(content);
+          if (index == 0) {
+            resultCommand = command;
+          } else {
+            resultCommand = _addCompletedResult(content);
+          }
+          unawaited(_watchScheduledStorage(storageSubmission));
         }
-        additionalResults = results.skip(1).toList(growable: false);
+        commandStatus.clearState(command);
         return results.first;
       } catch (e) {
         return InfoCardContent(
@@ -2163,18 +2596,13 @@ class GenerationPageViewmodel extends ChangeNotifier {
       }
     }
 
-    final command = Command.createAsyncNoParam(
+    command = Command.createAsyncNoParam(
       commandFunc,
       initialValue: InfoCardContent.fromEmpty(),
     );
-    var appendedAdditionalResults = false;
     command.isExecuting.addListener(() {
       notifyListeners();
-      if (command.isExecuting.value || appendedAdditionalResults) return;
-      appendedAdditionalResults = true;
-      for (final result in additionalResults) {
-        _addCompletedResult(result);
-      }
+      if (command.isExecuting.value) return;
       if (command.value.imageBytes != null && !debugApiEnabled) {
         unawaited(_refreshSingleResultBalance(
           command: command,
@@ -2190,15 +2618,17 @@ class GenerationPageViewmodel extends ChangeNotifier {
     return true;
   }
 
-  void _addCompletedResult(InfoCardContent content) {
+  Command<void, InfoCardContent> _addCompletedResult(InfoCardContent content) {
     while (commandList.length >= infoCardContentListLength) {
       commandStatus.removeProgress(commandList.removeAt(0));
     }
-    commandList.add(Command.createAsyncNoParam(
+    final command = Command.createAsyncNoParam(
       () async => content,
       initialValue: content,
-    ));
+    );
+    commandList.add(command);
     notifyListeners();
+    return command;
   }
 
   void clearDirectorResult() {
@@ -2209,8 +2639,15 @@ class GenerationPageViewmodel extends ChangeNotifier {
   /// Runs one generation outside the start/stop loop (used by the
   /// img2img page's "generate once" action).
   void runSingleGeneration() {
+    if (_isPreparingEnhance || _isPreparingDirector) return;
     if (commandStatus.isGenerationActive.value) return;
     if (currentCommand != null && currentCommand!.isExecuting.value) return;
+    final cycleCount =
+        lockToAllCombinations ? payloadConfig.totalCombinationTaskCount : null;
+    if (lockToAllCombinations && cycleCount == null) {
+      notifyListeners();
+      return;
+    }
     final paramConfig = payloadConfig.paramConfig;
     if (!paramConfig.randomSeed && paramConfig.seed == null) {
       paramConfig.seed = 0;
@@ -2237,6 +2674,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
     final enhance = payloadConfig.enhanceConfig;
     final bytes = enhance.imageBytes;
     if (bytes == null) return false;
+    final stopRevision = _stopRevision;
+    bool shouldSend() => !_disposed && stopRevision == _stopRevision;
     final imageRevision = enhance.imageRevision;
     final scale = enhance.scale;
     final presetIndex = enhance.presetIndex;
@@ -2251,6 +2690,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
     notifyListeners();
     try {
       await _preparationFeedbackBarrier();
+      if (!shouldSend()) return false;
       final plan = await preparePlainImg2ImgBytesInBackground(
         imageBytes: bytes,
         sourceWidth: enhance.width,
@@ -2263,7 +2703,10 @@ class GenerationPageViewmodel extends ChangeNotifier {
         normalizeToTarget: false,
       );
       final currentEnhance = payloadConfig.enhanceConfig;
-      if (!identical(currentEnhance, enhance) ||
+      if (!shouldSend() ||
+          !identical(currentEnhance, enhance) ||
+          commandStatus.isGenerationActive.value ||
+          (currentCommand?.isExecuting.value ?? false) ||
           !currentEnhance.hasImage ||
           currentEnhance.imageRevision != imageRevision ||
           currentEnhance.scale != scale ||
@@ -2329,7 +2772,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
   void _nextCommandForExtraWorker(int workerIndex) {
     if (!commandStatus.isGenerationActive.value) return;
     final state = _extraWorkers[workerIndex];
-    if (state == null) return;
+    if (state == null || state.paused) return;
     if (state.command != null && state.command!.isExecuting.value) return;
 
     final lease = _scheduler?.claim(workerIndex.toString());
@@ -2353,7 +2796,10 @@ class GenerationPageViewmodel extends ChangeNotifier {
     command.isExecuting.addListener(() {
       notifyListeners();
       if (command.isExecuting.value) return;
-      _continueExtraWorkerAfterAttempt(workerIndex);
+      if (identical(_extraWorkers[workerIndex], state) &&
+          identical(state.command, command)) {
+        _continueExtraWorkerAfterAttempt(workerIndex);
+      }
     });
     state.command = command;
     if (addTaskCard) {
@@ -2361,6 +2807,21 @@ class GenerationPageViewmodel extends ChangeNotifier {
     } else {
       command();
     }
+  }
+
+  void _showWorkerWaiting(int workerIndex, Duration delay) {
+    final failures = workerIndex == 0
+        ? _primaryConsecutiveFailures
+        : (_extraWorkers[workerIndex]?.consecutiveFailures ?? 0);
+    if (failures == 0 || delay == Duration.zero) return;
+    final card = _logicalTaskForWorker(workerIndex)?.cardCommand;
+    if (card == null) return;
+    final attempt = _leaseForWorker(workerIndex)?.attemptNumber ?? failures;
+    commandStatus.setWaiting(card,
+        retryAt: DateTime.now().add(delay),
+        message: '${tr('generation_retry_attempt', namedArgs: {
+              'attempt': '$attempt'
+            })} · ${card.value.info}');
   }
 
   void _continueExtraWorkerAfterAttempt(int workerIndex) {
@@ -2381,22 +2842,24 @@ class GenerationPageViewmodel extends ChangeNotifier {
 
     final state = _extraWorkers[workerIndex];
     if (state == null) return;
-    if (state.consecutiveFailures >= 5) {
+    if (state.paused || state.consecutiveFailures >= 5) {
       state.paused = true;
       if (_allWorkersPaused) stopGeneration();
+      _wakeIdleWorkers();
       return;
     }
     state.intervalTimer?.cancel();
     final configuredDelay = Duration(
       seconds: payloadConfig.settings.generationIntervalSec,
     );
-    final backoff = _failureBackoff(state.consecutiveFailures);
+    final backoff = _retryDelay(workerIndex, state.consecutiveFailures);
     final delay =
         configuredDelay.compareTo(backoff) >= 0 ? configuredDelay : backoff;
     if (delay == Duration.zero) {
       _nextCommandForExtraWorker(workerIndex);
       return;
     }
+    _showWorkerWaiting(workerIndex, delay);
     state.intervalTimer = Timer(delay, () {
       state.intervalTimer = null;
       _nextCommandForExtraWorker(workerIndex);
@@ -2431,6 +2894,17 @@ class GenerationPageViewmodel extends ChangeNotifier {
   }
 
   void startGeneration() {
+    if (_isPreparingEnhance || _isPreparingDirector) return;
+    if (commandStatus.isGenerationActive.value ||
+        (currentCommand?.isExecuting.value ?? false)) {
+      return;
+    }
+    final cycleCount =
+        lockToAllCombinations ? payloadConfig.totalCombinationTaskCount : null;
+    if (lockToAllCombinations && cycleCount == null) {
+      notifyListeners();
+      return;
+    }
     final paramConfig = payloadConfig.paramConfig;
     if (!paramConfig.randomSeed && paramConfig.seed == null) {
       paramConfig.seed = 0;
@@ -2439,6 +2913,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
     _generationIntervalTimer?.cancel();
     commandStatus.isWaitingForNextGeneration.value = false;
     _primaryConsecutiveFailures = 0;
+    _workerRetryDelays.clear();
     _primaryWorkerPaused = false;
     if (!payloadConfig.settings.rememberSequentialProgress) {
       payloadConfig.resetSequentialState();
@@ -2449,7 +2924,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
     }
     _clearExtraWorkers();
     if (lockToAllCombinations) {
-      payloadConfig.settings.generationCount = totalCombinations;
+      payloadConfig.settings.generationCount = cycleCount!;
     }
     final tokens = payloadConfig.settings.effectiveApiTokens;
     final generationCount = payloadConfig.settings.generationCount;
@@ -2498,11 +2973,17 @@ class GenerationPageViewmodel extends ChangeNotifier {
   void stopGeneration() {
     final scheduler = _scheduler;
     if (!commandStatus.isStopping.value) {
+      _stopRevision++;
       commandStatus.isStopping.value = true;
       scheduler?.requestStop();
       _generationIntervalTimer?.cancel();
       _generationIntervalTimer = null;
       _cancelWorkerIntervals();
+      for (final card in commandList) {
+        if (commandStatus.waitingFor(card) != null) {
+          commandStatus.clearState(card);
+        }
+      }
       commandStatus.isWaitingForNextGeneration.value = false;
     }
     if (scheduler != null && !scheduler.status.finished) {
@@ -2523,6 +3004,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
     }
     _scheduler = null;
     _primaryLease = null;
+    _activeTokens = [];
+    _activeTokenLabels = [];
   }
 
   void scheduleNextGeneration({Duration minimumDelay = Duration.zero}) {
@@ -2540,6 +3023,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
       return;
     }
 
+    _showWorkerWaiting(0, delay);
     commandStatus.isWaitingForNextGeneration.value = true;
     _generationIntervalTimer = Timer(delay, () {
       _generationIntervalTimer = null;
@@ -2564,13 +3048,14 @@ class GenerationPageViewmodel extends ChangeNotifier {
       stopGeneration();
       return;
     }
-    if (_primaryConsecutiveFailures >= 5) {
+    if (_primaryWorkerPaused || _primaryConsecutiveFailures >= 5) {
       _primaryWorkerPaused = true;
       if (_allWorkersPaused) stopGeneration();
+      _wakeIdleWorkers();
       return;
     }
     scheduleNextGeneration(
-      minimumDelay: _failureBackoff(_primaryConsecutiveFailures),
+      minimumDelay: _retryDelay(0, _primaryConsecutiveFailures),
     );
   }
 
@@ -2585,6 +3070,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     _generationIntervalTimer?.cancel();
     _clearExtraWorkers();
     nextCostEstimate.dispose();

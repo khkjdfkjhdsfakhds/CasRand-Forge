@@ -5,6 +5,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/services/generated_image_storage.dart';
+import 'package:nai_casrand/data/services/image_service.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
 import 'package:nai_casrand/ui/core/utils/platform_support.dart';
 import 'package:super_clipboard/super_clipboard.dart';
@@ -69,6 +70,17 @@ String? generatedImageStorageStatusKey(GeneratedImageStorageStatus status) {
     GeneratedImageStorageStatus.saved =>
       null,
   };
+}
+
+String? generatedImageMetadataStatusKey({
+  required ImageMetadataEmbeddingMode? mode,
+  required Object? failure,
+}) {
+  if (failure != null) return 'generated_image_metadata_failed';
+  if (mode == ImageMetadataEmbeddingMode.pngInternationalText) {
+    return 'generated_image_metadata_fallback';
+  }
+  return null;
 }
 
 class GeneratedImageTransferService {
@@ -139,7 +151,21 @@ class GeneratedImageView extends StatelessWidget {
       builder: (context, child) {
         final actions = _buildFileActions(context, artifact, child!);
         final statusKey = generatedImageStorageStatusKey(artifact.status);
-        if (statusKey == null) return actions;
+        final metadataStatusKey = generatedImageMetadataStatusKey(
+          mode: artifact.metadataEmbeddingMode,
+          failure: artifact.metadataFailure,
+        );
+        if (statusKey == null && metadataStatusKey == null) return actions;
+        final statusMessages = [
+          if (statusKey != null) tr(statusKey),
+          if (metadataStatusKey != null)
+            tr(
+              metadataStatusKey,
+              namedArgs: {
+                'error': artifact.metadataFailure?.toString() ?? '',
+              },
+            ),
+        ];
         return Stack(
           fit: StackFit.expand,
           children: [
@@ -158,9 +184,36 @@ class GeneratedImageView extends StatelessWidget {
                 child: Padding(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  child: Text(
-                    context.tr(statusKey),
-                    style: Theme.of(context).textTheme.labelSmall,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            for (final message in statusMessages)
+                              Text(
+                                message,
+                                style: Theme.of(context).textTheme.labelSmall,
+                              ),
+                          ],
+                        ),
+                      ),
+                      if (artifact.status ==
+                              GeneratedImageStorageStatus.failed &&
+                          content.retryImageStorage != null) ...[
+                        const SizedBox(width: 8),
+                        TextButton.icon(
+                          key: const Key('retry-generated-image-storage'),
+                          onPressed: () async {
+                            await content.retryImageStorage!();
+                          },
+                          icon: const Icon(Icons.refresh, size: 16),
+                          label: Text(tr('retry')),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
               ),

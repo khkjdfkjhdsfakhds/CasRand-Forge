@@ -85,6 +85,14 @@ class PromptTabViewmodel extends ChangeNotifier {
         PayloadConfig.fixedPromptConfig(value, negative: true);
   }
 
+  void renameCharacter(CharacterConfig character, String value) {
+    if (!characterConfigList.contains(character) || character.name == value) {
+      return;
+    }
+    character.name = value;
+    notifyListeners();
+  }
+
   void setCharacterEnabled(int index, bool value) {
     characterConfigList[index].enabled = value;
     notifyListeners();
@@ -99,6 +107,12 @@ class PromptTabViewmodel extends ChangeNotifier {
     notifyListeners();
   }
 
+  void reorderCharacterAdjusted(int oldIndex, int newIndex) {
+    final item = characterConfigList.removeAt(oldIndex);
+    characterConfigList.insert(newIndex, item);
+    notifyListeners();
+  }
+
   void removeCharacter(int index) {
     characterConfigList.removeAt(index);
     notifyListeners();
@@ -106,8 +120,12 @@ class PromptTabViewmodel extends ChangeNotifier {
 
   void setAutoPosition(bool value) {
     paramConfig.autoPosition = value;
-    if (!value) {
-      for (final character in characterConfigList) {
+    for (final character in characterConfigList) {
+      if (value) {
+        // The setting is global for the payload. Clear stale V5 points so an
+        // old manual coordinate cannot force use_coords back on.
+        character.freeCenter = null;
+      } else {
         if (character.positions.isEmpty) {
           character.positions = [CharacterConfig.defaultPosition];
         }

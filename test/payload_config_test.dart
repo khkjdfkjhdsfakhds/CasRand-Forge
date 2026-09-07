@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
+import 'package:nai_casrand/data/models/api_token_config.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
@@ -517,5 +518,52 @@ void main() {
     ));
     config.noteVibeImported(wasEmpty: true);
     expect(config.vibeEnabled, isTrue);
+  });
+
+  test('shareable export removes every authentication token', () {
+    final config = PayloadConfig.fromJson(legacyConfigJson('legacy'));
+    config.settings
+      ..updatePrimaryApiKey('pst-primary-secret')
+      ..apiTokens.add(ApiTokenConfig(
+        label: 'Secondary',
+        token: 'pst-secondary-secret',
+      ));
+
+    final exported = config.toShareableJson();
+    final exportedSettings = exported['settings'] as Map<String, dynamic>;
+    final encoded = jsonEncode(exported);
+
+    expect(exportedSettings, isNot(contains('api_key')));
+    expect(exportedSettings, isNot(contains('api_tokens')));
+    expect(encoded, isNot(contains('pst-primary-secret')));
+    expect(encoded, isNot(contains('pst-secondary-secret')));
+    expect(config.settings.apiKey, 'pst-primary-secret');
+    expect(config.settings.apiTokens, hasLength(2));
+  });
+
+  test('loading a credential-free shareable config keeps local credentials',
+      () {
+    final local = PayloadConfig.fromJson(legacyConfigJson('local'));
+    local.settings
+      ..updatePrimaryApiKey('pst-local-primary')
+      ..apiTokens.add(ApiTokenConfig(
+        label: 'Local secondary',
+        token: 'pst-local-secondary',
+        enabled: false,
+      ))
+      ..parallelApiEnabled = true;
+    final imported = PayloadConfig.fromJson(legacyConfigJson('imported'));
+    imported.settings.themeMode = 'light';
+
+    local.loadShareableJson(imported.toShareableJson());
+
+    expect(local.settings.themeMode, 'light');
+    expect(local.settings.apiKey, 'pst-local-primary');
+    expect(local.settings.apiTokens.map((entry) => entry.token), [
+      'pst-local-primary',
+      'pst-local-secondary',
+    ]);
+    expect(local.settings.apiTokens.last.enabled, isFalse);
+    expect(local.settings.parallelApiEnabled, isTrue);
   });
 }

@@ -1,6 +1,7 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:nai_casrand/data/models/character_config.dart';
 import 'package:nai_casrand/ui/character_config/widgets/character_config_view.dart';
 import 'package:nai_casrand/ui/character_config/view_models/character_config_viewmodel.dart';
 import 'package:nai_casrand/ui/core/widgets/prompt_mode_switch_button.dart';
@@ -15,6 +16,18 @@ import 'package:nai_casrand/ui/saved_config_list/view_models/saved_config_list_v
 import 'package:nai_casrand/ui/saved_config_list/widgets/saved_config_list_view.dart';
 import 'package:provider/provider.dart';
 
+/// Line bounds for the fixed-mode positive prompt editor.
+///
+/// Most NAI5 tags are dumped into this field, so it starts taller than the
+/// generic assisted field and grows with content until
+/// [kFixedPromptFieldMaxLines] before scrolling internally.
+const int kFixedPromptFieldMinLines = 10;
+const int kFixedPromptFieldMaxLines = 24;
+
+/// Line bounds for the fixed-mode negative prompt editor.
+const int kFixedNegativePromptMinLines = 4;
+const int kFixedNegativePromptMaxLines = 8;
+
 class PromptTabView extends StatelessWidget {
   const PromptTabView({
     super.key,
@@ -27,12 +40,17 @@ class PromptTabView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final changes = Listenable.merge([
+      viewmodel,
+      if (viewmodel.payloadConfig != null) viewmodel.payloadConfig!,
+    ]);
     final content = ChangeNotifierProvider.value(
       value: viewmodel,
-      child: Consumer<PromptTabViewmodel>(
-        builder: (context, value, child) => value.isFixedMode
+      child: ListenableBuilder(
+        listenable: changes,
+        builder: (context, child) => viewmodel.isFixedMode
             ? _FixedPromptEditor(
-                viewmodel: value,
+                viewmodel: viewmodel,
                 promptAssistance:
                     promptAssistance ?? PromptEditingAssistance.shared,
               )
@@ -55,26 +73,13 @@ class PromptTabView extends StatelessWidget {
                   ),
                   for (final (index, characterConfig)
                       in viewmodel.characterConfigList.indexed)
-                    _PromptSectionCard(
-                      key: Key('character-prompt-section-$index'),
-                      title: 'Character ${index + 1}',
-                      icon: Icons.person_outline,
-                      accentColor: Theme.of(context).colorScheme.secondary,
-                      child: CharacterConfigView(
-                        viewmodel: CharacterConfigViewmodel(
-                          config: characterConfig,
-                          paramConfig: viewmodel.paramConfig,
-                          onAutoPositionChanged: viewmodel.setAutoPosition,
-                        ),
-                        characterIndex: index,
-                        referencePositions: viewmodel.characterConfigList
-                            .map((c) => c.freeCenter)
-                            .toList(),
-                        promptAssistance:
-                            promptAssistance ?? PromptEditingAssistance.shared,
-                        autocompleteEnabled:
-                            viewmodel.promptAutocompleteEnabled,
-                      ),
+                    _CharacterPromptSection(
+                      key: ObjectKey(characterConfig),
+                      viewmodel: viewmodel,
+                      character: characterConfig,
+                      index: index,
+                      promptAssistance:
+                          promptAssistance ?? PromptEditingAssistance.shared,
                     ),
                   _PromptSectionCard(
                     key: const Key('negative-prompt-section'),
@@ -100,7 +105,7 @@ class PromptTabView extends StatelessWidget {
       ),
     );
     final buttons = ListenableBuilder(
-      listenable: viewmodel,
+      listenable: changes,
       builder: (context, _) => Column(
         mainAxisSize: MainAxisSize.min,
         mainAxisAlignment: MainAxisAlignment.end,
@@ -140,6 +145,7 @@ class PromptTabView extends StatelessWidget {
     );
     return Scaffold(
       body: SingleChildScrollView(
+        key: const Key('prompt-tab-scroll'),
         child: content,
       ),
       floatingActionButton: buttons,
@@ -215,28 +221,18 @@ class _FixedPromptEditor extends StatelessWidget {
             autocompleteEnabled: viewmodel.promptAutocompleteEnabled,
             assistance: promptAssistance,
             onChanged: viewmodel.setFixedPrompt,
+            minLines: kFixedPromptFieldMinLines,
+            maxLines: kFixedPromptFieldMaxLines,
           ),
         ),
         for (final (index, character) in viewmodel.characterConfigList.indexed)
-          _PromptSectionCard(
-            key: Key('fixed-character-section-$index'),
-            title: '${context.tr('character')} ${index + 1}',
-            icon: Icons.person_outline,
-            accentColor: Theme.of(context).colorScheme.secondary,
-            child: CharacterConfigView(
-              viewmodel: CharacterConfigViewmodel(
-                config: character,
-                paramConfig: viewmodel.paramConfig,
-                onAutoPositionChanged: viewmodel.setAutoPosition,
-              ),
-              characterIndex: index,
-              referencePositions: viewmodel.characterConfigList
-                  .map((c) => c.freeCenter)
-                  .toList(),
-              promptAssistance:
-                  promptAssistance ?? PromptEditingAssistance.shared,
-              autocompleteEnabled: viewmodel.promptAutocompleteEnabled,
-            ),
+          _CharacterPromptSection(
+            key: ObjectKey(character),
+            viewmodel: viewmodel,
+            character: character,
+            index: index,
+            promptAssistance:
+                promptAssistance ?? PromptEditingAssistance.shared,
           ),
         _PromptSectionCard(
           key: const Key('fixed-negative-section'),
@@ -250,6 +246,8 @@ class _FixedPromptEditor extends StatelessWidget {
             autocompleteEnabled: viewmodel.promptAutocompleteEnabled,
             assistance: promptAssistance,
             onChanged: viewmodel.setFixedNegativePrompt,
+            minLines: kFixedNegativePromptMinLines,
+            maxLines: kFixedNegativePromptMaxLines,
           ),
         ),
       ],
@@ -263,6 +261,8 @@ class _FixedTextField extends StatefulWidget {
     required this.initialValue,
     required this.hintText,
     required this.onChanged,
+    required this.minLines,
+    required this.maxLines,
     this.autocompleteEnabled = false,
     this.assistance,
   });
@@ -273,6 +273,8 @@ class _FixedTextField extends StatefulWidget {
   final ValueChanged<String> onChanged;
   final bool autocompleteEnabled;
   final PromptEditingAssistance? assistance;
+  final int minLines;
+  final int maxLines;
 
   @override
   State<_FixedTextField> createState() => _FixedTextFieldState();
@@ -294,8 +296,10 @@ class _FixedTextFieldState extends State<_FixedTextField> {
   @override
   void didUpdateWidget(covariant _FixedTextField oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.initialValue != oldWidget.initialValue &&
-        widget.initialValue != _controller.text) {
+    // The user may have edited the controller since the previous widget
+    // value was supplied. A re-import of that same value is still a change.
+    // Leave equal text untouched so normal rebuilds preserve caret and IME.
+    if (widget.initialValue != _controller.text) {
       _controller.text = widget.initialValue;
     }
   }
@@ -399,6 +403,8 @@ class _FixedTextFieldState extends State<_FixedTextField> {
             assistance: widget.assistance,
             completionEnabled: widget.autocompleteEnabled,
             normalizeWeightOnFocusLoss: true,
+            minLines: widget.minLines,
+            maxLines: widget.maxLines,
           ),
         ],
       ),
@@ -435,6 +441,195 @@ enum _FixedShortcut {
   moveForward,
 }
 
+class _CharacterPromptSection extends StatefulWidget {
+  const _CharacterPromptSection({
+    super.key,
+    required this.viewmodel,
+    required this.character,
+    required this.index,
+    required this.promptAssistance,
+  });
+
+  final PromptTabViewmodel viewmodel;
+  final CharacterConfig character;
+  final int index;
+  final PromptEditingAssistance promptAssistance;
+
+  @override
+  State<_CharacterPromptSection> createState() =>
+      _CharacterPromptSectionState();
+}
+
+class _CharacterPromptSectionState extends State<_CharacterPromptSection> {
+  bool _expanded = true;
+  bool _restored = false;
+  late final CharacterConfigViewmodel _details;
+  late final TextEditingController _nameController;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController(text: widget.character.name);
+    _details = CharacterConfigViewmodel(
+      config: widget.character,
+      paramConfig: widget.viewmodel.paramConfig,
+      onAutoPositionChanged: widget.viewmodel.setAutoPosition,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _CharacterPromptSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_nameController.text != widget.character.name) {
+      _nameController.value = TextEditingValue(
+        text: widget.character.name,
+        selection:
+            TextSelection.collapsed(offset: widget.character.name.length),
+      );
+    }
+    _details
+      ..config = widget.character
+      ..paramConfig = widget.viewmodel.paramConfig
+      ..onAutoPositionChanged = widget.viewmodel.setAutoPosition;
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _details.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_restored) {
+      _expanded = PageStorage.maybeOf(context)
+              ?.readState(context, identifier: widget.character) as bool? ??
+          true;
+      _restored = true;
+    }
+  }
+
+  void _toggleExpanded() {
+    setState(() => _expanded = !_expanded);
+    PageStorage.maybeOf(context)?.writeState(
+      context,
+      _expanded,
+      identifier: widget.character,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final vm = widget.viewmodel;
+    final index = widget.index;
+    final prefix = vm.isFixedMode ? 'fixed-character' : 'character-prompt';
+    return LayoutBuilder(builder: (context, constraints) {
+      final compact = constraints.maxWidth < 600;
+      final buttonSize = compact ? 40.0 : 48.0;
+      final controlGap = compact ? 4.0 : 12.0;
+      Widget action(
+              String key, String tooltip, IconData icon, VoidCallback? tap) =>
+          IconButton(
+            key: Key(key),
+            tooltip: context.tr(tooltip),
+            onPressed: tap,
+            icon: Icon(icon, size: compact ? 22 : 26),
+            constraints:
+                BoxConstraints.tightFor(width: buttonSize, height: buttonSize),
+            padding: EdgeInsets.zero,
+            visualDensity: VisualDensity.standard,
+            style: IconButton.styleFrom(
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          );
+      return _PromptSectionCard(
+        key: Key('$prefix-section-$index'),
+        title: context
+            .tr('character_number', namedArgs: {'number': '${index + 1}'}),
+        titleWidget: TextField(
+          key: const Key('character-name-field'),
+          controller: _nameController,
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                color: Theme.of(context).colorScheme.secondary,
+                fontWeight: FontWeight.w600,
+              ),
+          decoration: InputDecoration(
+            hintText: context
+                .tr('character_number', namedArgs: {'number': '${index + 1}'}),
+            hintStyle: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.secondary,
+                  fontWeight: FontWeight.w600,
+                ),
+            border: InputBorder.none,
+            enabledBorder: InputBorder.none,
+            focusedBorder: InputBorder.none,
+            filled: false,
+            isDense: true,
+            contentPadding: const EdgeInsets.symmetric(vertical: 12),
+          ),
+          textInputAction: TextInputAction.done,
+          onChanged: (value) => vm.renameCharacter(widget.character, value),
+        ),
+        icon: Icons.person_outline,
+        accentColor: Theme.of(context).colorScheme.secondary,
+        expanded: _expanded,
+        trailing: Row(
+          spacing: controlGap,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            action(
+                'character-move-up',
+                'move_character_up',
+                Icons.arrow_drop_up,
+                index > 0
+                    ? () => vm.reorderCharacterAdjusted(index, index - 1)
+                    : null),
+            action(
+                'character-move-down',
+                'move_character_down',
+                Icons.arrow_drop_down,
+                index < vm.characterConfigList.length - 1
+                    ? () => vm.reorderCharacterAdjusted(index, index + 1)
+                    : null),
+            Tooltip(
+              message:
+                  context.tr(widget.character.enabled ? 'enabled' : 'disabled'),
+              child: SizedBox(
+                width: buttonSize,
+                height: buttonSize,
+                child: Checkbox(
+                  key: const Key('character-enabled-checkbox'),
+                  value: widget.character.enabled,
+                  onChanged: (value) {
+                    if (value != null) vm.setCharacterEnabled(index, value);
+                  },
+                ),
+              ),
+            ),
+            action('character-delete-button', 'delete', Icons.delete_outline,
+                () => vm.removeCharacter(index)),
+            action(
+                'character-expand-button',
+                _expanded ? 'collapse_character' : 'expand_character',
+                _expanded ? Icons.unfold_less : Icons.unfold_more,
+                _toggleExpanded),
+          ],
+        ),
+        child: CharacterConfigView(
+          viewmodel: _details,
+          characterIndex: index,
+          referencePositions:
+              vm.characterConfigList.map((c) => c.freeCenter).toList(),
+          promptAssistance: widget.promptAssistance,
+          autocompleteEnabled: vm.promptAutocompleteEnabled,
+        ),
+      );
+    });
+  }
+}
+
 class _PromptSectionCard extends StatelessWidget {
   const _PromptSectionCard({
     super.key,
@@ -442,12 +637,18 @@ class _PromptSectionCard extends StatelessWidget {
     required this.icon,
     required this.accentColor,
     required this.child,
+    this.trailing,
+    this.titleWidget,
+    this.expanded = true,
   });
 
   final String title;
   final IconData icon;
   final Color accentColor;
   final Widget child;
+  final Widget? trailing;
+  final Widget? titleWidget;
+  final bool expanded;
 
   @override
   Widget build(BuildContext context) {
@@ -468,6 +669,7 @@ class _PromptSectionCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Container(
+              key: const Key('prompt-section-header'),
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
               decoration: BoxDecoration(
                 color: accentColor.withAlpha(28),
@@ -479,19 +681,30 @@ class _PromptSectionCard extends StatelessWidget {
                 children: [
                   Icon(icon, color: accentColor, size: 20),
                   const SizedBox(width: 8),
-                  Text(
-                    title,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          color: accentColor,
-                          fontWeight: FontWeight.w600,
+                  Expanded(
+                    child: titleWidget ??
+                        Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style:
+                              Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    color: accentColor,
+                                    fontWeight: FontWeight.w600,
+                                  ),
                         ),
                   ),
+                  if (trailing != null) trailing!,
                 ],
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(4, 2, 4, 8),
-              child: child,
+            Visibility(
+              visible: expanded,
+              maintainState: true,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(4, 2, 4, 8),
+                child: child,
+              ),
             ),
           ],
         ),
@@ -513,7 +726,16 @@ class CharacterRearrangeView extends StatelessWidget {
           builder: (context, viewmodel, child) => ReorderableListView.builder(
             itemBuilder: (context, index) => ListTile(
               key: Key('character-manager-row-$index'),
-              title: Text('Character ${index + 1}'),
+              title: Text(
+                viewmodel.characterConfigList[index].name.isNotEmpty
+                    ? viewmodel.characterConfigList[index].name
+                    : context.tr(
+                        'character_number',
+                        namedArgs: {'number': '${index + 1}'},
+                      ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
               leading: const Icon(Icons.person),
               trailing: Padding(
                   padding: const EdgeInsets.only(right: 16.0),
@@ -523,8 +745,7 @@ class CharacterRearrangeView extends StatelessWidget {
                   )),
             ),
             itemCount: viewmodel.characterConfigList.length,
-            onReorder: (oldIndex, newIndex) =>
-                viewmodel.reorderCharacter(oldIndex, newIndex),
+            onReorderItem: viewmodel.reorderCharacterAdjusted,
           ),
         ));
   }

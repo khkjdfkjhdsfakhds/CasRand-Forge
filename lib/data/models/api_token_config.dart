@@ -33,7 +33,10 @@ class ApiTokenConfig {
   /// Masked display form: keeps a short prefix/suffix, hides the middle.
   String get maskedToken {
     if (token.isEmpty) return '';
-    if (token.length <= 10) return '${token.substring(0, 2)}···';
+    if (token.length <= 10) {
+      final visibleLength = token.length.clamp(1, 2);
+      return '${token.substring(0, visibleLength)}···';
+    }
     return '${token.substring(0, 6)}···${token.substring(token.length - 4)}';
   }
 }

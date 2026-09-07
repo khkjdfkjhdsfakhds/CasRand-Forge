@@ -359,6 +359,36 @@ void main() {
     expect(find.text('896 × 1280'), findsOneWidget);
   });
 
+  testWidgets('invalid manual image size stays open and shows feedback', (
+    tester,
+  ) async {
+    final viewmodel = GenerationPageViewmodel();
+    await tester.pumpWidget(
+      localizedApp(
+        Scaffold(body: GenerationSettingsView(viewmodel: viewmodel)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('generation-settings-image-size')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('manual-size-width')), '0');
+    await tester.enterText(find.byKey(const Key('manual-size-height')), '1024');
+    final addButton = find.byKey(const Key('manual-size-add'));
+    await tester.ensureVisible(addButton);
+    await tester.pumpAndSettle();
+    await tester.tap(addButton);
+    await tester.pump();
+
+    expect(find.byKey(const Key('manual-size-error')), findsOneWidget);
+    expect(find.text('Width and height must be greater than zero.'),
+        findsOneWidget);
+    expect(
+      viewmodel.payloadConfig.paramConfig.sizes,
+      isNot(contains(const GenerationSize(width: 0, height: 1024))),
+    );
+  });
+
   testWidgets('old pages no longer expose the moved settings', (tester) async {
     await tester.pumpWidget(
       localizedApp(
@@ -574,7 +604,7 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(1200, 1000));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final character = CharacterConfig.fromEmpty();
-    final paramConfig = ParamConfig();
+    final paramConfig = ParamConfig(model: 'nai-diffusion-4-5-full');
     final viewmodel = PromptTabViewmodel(
       promptConfig: PromptConfig(strs: [], prompts: []),
       negativePromptConfig: PromptConfig(strs: [], prompts: []),
@@ -648,6 +678,43 @@ void main() {
     await tester.pump();
     expect(paramConfig.autoPosition, isFalse);
     expect(character.positions, [CharacterConfig.defaultPosition]);
+  });
+
+  testWidgets('V5 manual position exposes AI choice and can switch back',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final character = CharacterConfig.fromEmpty()
+      ..freeCenter = const Point<double>(0.244, 0.541);
+    final paramConfig = ParamConfig(
+      model: 'nai-diffusion-5-full',
+      autoPosition: false,
+    );
+    final viewmodel = PromptTabViewmodel(
+      promptConfig: PromptConfig(strs: [], prompts: []),
+      negativePromptConfig: PromptConfig(strs: [], prompts: []),
+      characterConfigList: [character],
+      savedConfigList: [],
+      paramConfig: paramConfig,
+    );
+    await tester.pumpWidget(localizedApp(PromptTabView(viewmodel: viewmodel)));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('character-position-tile')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('character-free-canvas')), findsOneWidget);
+    expect(find.byKey(const Key('auto-position-checkbox')), findsOneWidget);
+    expect(find.text("AI's Choice"), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('auto-position-checkbox')));
+    await tester.pump();
+
+    expect(paramConfig.autoPosition, isTrue);
+    expect(character.freeCenter, isNull);
+    expect(find.byKey(const Key('character-free-canvas')), findsNothing);
+    expect(find.byKey(const Key('character-position-grid')), findsOneWidget);
+    expect(find.byKey(const Key('auto-position-checkbox')), findsOneWidget);
   });
 
   testWidgets('gender starts blank and Other removes a selected binary prefix',
@@ -770,7 +837,8 @@ void main() {
     );
   });
 
-  testWidgets('run all combinations locks generation count to total combinations', (
+  testWidgets(
+      'run all combinations locks generation count to total combinations', (
     tester,
   ) async {
     final payloadConfig = GetIt.instance<PayloadConfig>();
@@ -781,19 +849,19 @@ void main() {
       prompts: [
         PromptConfig(
           selectionMethod: 'single',
-          strs: ['tag1', 'tag2', 'tag3'], // 3
+          strs: ['tag1', 'tag2', 'tag3'], // 1: random is not exhaustive
           prompts: [],
         ),
         PromptConfig(
           selectionMethod: 'single',
-          strs: ['style1', 'style2'], // 2
+          strs: ['style1', 'style2'], // 1: random is not exhaustive
           prompts: [],
         ),
       ],
-    ); // Total = 3 * 2 = 6
+    ); // Total = 1 * 1 = 1
 
     final viewmodel = GenerationPageViewmodel();
-    expect(viewmodel.totalCombinations, 6);
+    expect(viewmodel.totalCombinations, 1);
 
     await tester.pumpWidget(
       localizedApp(
@@ -804,7 +872,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Total combinations: 6'), findsOneWidget);
+    expect(find.text('Total combinations: 1'), findsOneWidget);
     expect(find.text('Run all combinations'), findsOneWidget);
 
     final checkboxFinder = find.byKey(
@@ -817,11 +885,13 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(viewmodel.lockToAllCombinations, isTrue);
-    expect(payloadConfig.settings.generationCount, 6);
-    expect(find.descendant(
-      of: find.byKey(const Key('generation-settings-count')),
-      matching: find.text('6'),
-    ), findsOneWidget);
+    expect(payloadConfig.settings.generationCount, 1);
+    expect(
+        find.descendant(
+          of: find.byKey(const Key('generation-settings-count')),
+          matching: find.text('1'),
+        ),
+        findsOneWidget);
 
     // Verify count tile is disabled
     final countTile = tester.widget<ListTile>(
@@ -879,5 +949,66 @@ void main() {
       find.byKey(const Key('generation-settings-lock-all-combinations')),
     );
     expect(checkbox.value, isTrue);
+  });
+  testWidgets(
+      'oversized full cycle stays exact and does not start a truncated batch',
+      (tester) async {
+    final config = GetIt.I<PayloadConfig>();
+    config.rootPromptConfig = PromptConfig(
+        type: 'config',
+        selectionMethod: 'all',
+        strs: [],
+        prompts: [
+          PromptConfig(
+              selectionMethod: 'single_sequential',
+              num: 4000000000,
+              strs: ['A'],
+              prompts: []),
+          PromptConfig(
+              selectionMethod: 'single_sequential',
+              num: 4000000001,
+              strs: ['B'],
+              prompts: []),
+        ]);
+    final viewmodel = _NoNetworkGenerationPageViewmodel();
+    addTearDown(viewmodel.dispose);
+    viewmodel.setLockToAllCombinations(true);
+    await tester.pumpWidget(localizedApp(
+        Scaffold(body: GenerationSettingsView(viewmodel: viewmodel))));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('16000000004000000000'), findsWidgets);
+    expect(find.textContaining('exceeds'), findsOneWidget);
+    final originalCount = config.settings.generationCount;
+    viewmodel.startGeneration();
+    expect(config.settings.generationCount, originalCount);
+    expect(viewmodel.commandStatus.isGenerationActive.value, isFalse);
+    expect(viewmodel.commandList, isEmpty);
+  });
+
+  testWidgets(
+      'locked count display refreshes from current settings without consuming sequence',
+      (tester) async {
+    final config = GetIt.I<PayloadConfig>();
+    config.rootPromptConfig = PromptConfig(
+        selectionMethod: 'single_sequential',
+        strs: ['A', 'B', 'C'],
+        prompts: []);
+    final viewmodel = _NoNetworkGenerationPageViewmodel();
+    addTearDown(viewmodel.dispose);
+    viewmodel.setLockToAllCombinations(true);
+    await tester.pumpWidget(localizedApp(
+        Scaffold(body: GenerationSettingsView(viewmodel: viewmodel))));
+    await tester.pumpAndSettle();
+    config.rootPromptConfig.num = 2;
+    config.notifyListeners();
+    await tester.pumpAndSettle();
+    expect(find.text('Total combinations: 6'), findsOneWidget);
+    expect(
+        find.descendant(
+            of: find.byKey(const Key('generation-settings-count')),
+            matching: find.text('6')),
+        findsOneWidget);
+    expect(config.rootPromptConfig.getPrmpts().toPrompt(), 'A');
+    expect(config.rootPromptConfig.getPrmpts().toPrompt(), 'A');
   });
 }
