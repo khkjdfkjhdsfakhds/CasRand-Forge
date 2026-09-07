@@ -11,6 +11,10 @@ abstract final class PromptWeightSyntax {
     r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)::',
   );
 
+  /// Shared opener grammar for highlighting and structural editing.
+  static Match? numericOpenerAt(String text, int offset) =>
+      _numericOpener.matchAsPrefix(text, offset);
+
   /// Describes the semantic ranges NovelAI displays for numeric weights.
   static PromptWeightAnalysis analyze(String text) {
     final spans = <PromptWeightSpan>[];

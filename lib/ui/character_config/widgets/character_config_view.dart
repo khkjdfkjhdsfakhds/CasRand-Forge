@@ -327,7 +327,8 @@ class CharacterPositionView extends StatelessWidget {
                   List<Widget> cols = [];
                   for (final x in indexes) {
                     final pt = Point(x, y);
-                    final selected = viewmodel.config.positions.contains(pt);
+                    final selected =
+                        viewmodel.config.effectiveGridPositions.contains(pt);
                     final label = '${xMapping[x]}${y.toString()}';
                     cols.add(InkWell(
                       key: Key('character-position-$label'),

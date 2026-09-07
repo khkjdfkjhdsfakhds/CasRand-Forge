@@ -1,3 +1,4 @@
+import 'package:nai_casrand/data/use_cases/enhance_request_options.dart';
 import 'dart:math';
 
 import 'package:easy_localization/easy_localization.dart';
@@ -35,7 +36,45 @@ class PayloadGenerationResult {
   });
 }
 
+class _CharacterPositionSnapshot {
+  final List<Point<double>> centers;
+  final String basePrompt;
+  const _CharacterPositionSnapshot(this.centers, this.basePrompt);
+}
+
 class GeneratePayloadUseCase {
+  // Local-only provenance: never serialized into the API request. Keeping the
+  // full-image points prevents repeated transforms in serial/parallel tiles.
+  static final _positionSnapshots = Expando<_CharacterPositionSnapshot>();
+
+  /// Pure coordinate projection shared by request construction and previews.
+  /// Crop first, include request padding, clamp, then apply model grid rules.
+  static Point<double> effectiveCharacterCenter(
+    Point<double> fullImageCenter, {
+    required String model,
+    I2iRequestPlan? plan,
+  }) {
+    var center = fullImageCenter;
+    final crop = plan?.composite;
+    if (crop != null && crop.sourceWidth != null && crop.sourceHeight != null) {
+      center = Point(
+        (((center.x * crop.sourceWidth! - crop.outer.x) /
+                        crop.outer.w *
+                        crop.contentWidth +
+                    crop.contentOffsetX) /
+                plan!.width)
+            .clamp(0.0, 1.0),
+        (((center.y * crop.sourceHeight! - crop.outer.y) /
+                        crop.outer.h *
+                        crop.contentHeight +
+                    crop.contentOffsetY) /
+                plan.height)
+            .clamp(0.0, 1.0),
+      );
+    }
+    return CharacterConfig.centerForModel(center, model);
+  }
+
   final PayloadConfig payloadConfig;
 
   /// Optional img2img / inpainting request plan. When present the payload
@@ -46,6 +85,7 @@ class GeneratePayloadUseCase {
   /// not mutate the user's saved prompt or seed settings.
   final int? seedOverride;
   final String promptSuffix;
+  final EnhanceRequestOptions? enhanceOptions;
   final bool applyPlainI2iCompatibilityFields;
   final Random? random;
 
@@ -54,6 +94,7 @@ class GeneratePayloadUseCase {
     this.i2iPlan,
     this.seedOverride,
     this.promptSuffix = '',
+    this.enhanceOptions,
     this.applyPlainI2iCompatibilityFields = true,
     this.random,
   });
@@ -71,6 +112,14 @@ class GeneratePayloadUseCase {
   String get fileNameKey => payloadConfig.settings.fileNamePrefixKey;
 
   PayloadGenerationResult call() {
+    final plan = i2iPlan;
+    final selectedParameters = payloadConfig.paramConfig;
+    final model = effectiveGenerationModel(selectedParameters.model,
+        inpaint: plan?.isInpaint ?? false);
+    final paramConfig = model == selectedParameters.model
+        ? selectedParameters
+        : (ParamConfig.fromJson(selectedParameters.toJson())..model = model);
+    final usesV5 = model.contains('diffusion-5');
     // Get prompt
     final filterEntryComments = payloadConfig.promptMode != PromptMode.fixed;
     final basePromptResult = rootPromptConfig.getPrmpts(
@@ -81,10 +130,13 @@ class GeneratePayloadUseCase {
       comment: basePromptResult.toComment(),
     );
     var effectiveBasePrompt = _appendPromptSuffix(
-      _appendPromptSuffix(basePair.prompt, promptSuffix),
-      paramConfig.transparentBackground ? 'transparent background' : '',
+      enhanceOptions?.prompt(basePair.prompt, model) ?? basePair.prompt,
+      promptSuffix,
     );
-    final plan = i2iPlan;
+    if (usesV5 && paramConfig.transparentBackground) {
+      effectiveBasePrompt =
+          NovelAiTextRendering.appendTransparentBackground(effectiveBasePrompt);
+    }
     final paramPayload = plan == null
         ? paramConfig.getPayload(random: random)
         : paramConfig.getPayload(
@@ -115,10 +167,9 @@ class GeneratePayloadUseCase {
       (result) => result.isFreePosition,
     );
     for (final (index, result) in characterPromptResultList.indexed) {
-      final posAsDouble = {
-        'x': result.center.x,
-        'y': result.center.y,
-      };
+      final center =
+          effectiveCharacterCenter(result.center, model: model, plan: plan);
+      final posAsDouble = {'x': center.x, 'y': center.y};
       final posAsString = result.isFreePosition
           ? 'x:${result.center.x.toStringAsFixed(3)}, '
               'y:${result.center.y.toStringAsFixed(3)}'
@@ -133,7 +184,7 @@ class GeneratePayloadUseCase {
       );
       textCharacters.add(TextRenderingCharacter(
         prompt: characterPair.prompt,
-        center: result.center,
+        center: center,
       ));
       payloadComment += '\n\nCharacter ${index + 1} at $posAsString:\n'
           '${characterPair.comment}\n'
@@ -161,7 +212,8 @@ class GeneratePayloadUseCase {
     );
     payloadComment += '\n\n${tr('uc')}:\n${negativePair.comment}';
     paramPayload['negative_prompt'] = negativePair.prompt;
-    if (paramConfig.model.contains('diffusion-5')) {
+    final baseWithoutAutomaticText = effectiveBasePrompt;
+    if (usesV5) {
       effectiveBasePrompt = NovelAiTextRendering.appendToBase(
         effectiveBasePrompt,
         textCharacters,
@@ -256,14 +308,12 @@ class GeneratePayloadUseCase {
 
     // img2img / inpainting request fields, mirroring the official frontend.
     var action = 'generate';
-    var model = paramConfig.model;
     if (plan != null) {
       final seed = paramPayload['seed'] as int;
       paramPayload['image'] = plan.imageB64;
       paramPayload['extra_noise_seed'] = (seed - 1) & 0xFFFFFFFF;
       if (plan.isInpaint) {
         action = 'infill';
-        model = inpaintModelMapping[model] ?? model;
         paramPayload['mask'] = plan.maskB64;
         // The official frontend always requests the raw infill result, then
         // blends it over the source image locally with a feathered mask.
@@ -289,6 +339,7 @@ class GeneratePayloadUseCase {
           paramPayload['sm_dyn'] = false;
         }
       }
+      if (!plan.isInpaint) enhanceOptions?.apply(paramPayload, model);
       payloadComment += '\n\nI2I: ${plan.summary}';
     }
 
@@ -308,15 +359,21 @@ class GeneratePayloadUseCase {
         ? extractedPrefixes.join('-')
         : _processFileNameKey(fileNameKey, basePromptResult);
 
+    final payload = <String, dynamic>{
+      'input': effectiveBasePrompt,
+      'model': model,
+      'action': action,
+      'parameters': paramPayload,
+    };
+    _positionSnapshots[payload] = _CharacterPositionSnapshot(
+      List.unmodifiable(
+          characterPromptResultList.map((result) => result.center)),
+      baseWithoutAutomaticText,
+    );
     return PayloadGenerationResult(
       comment: payloadComment,
       suggestedFileName: processedFileName,
-      payload: {
-        'input': effectiveBasePrompt,
-        'model': model,
-        'action': action,
-        'parameters': paramPayload,
-      },
+      payload: payload,
     );
   }
 
@@ -366,6 +423,34 @@ class GeneratePayloadUseCase {
         ..['color_correct'] = false
         ..['sm'] = false
         ..['sm_dyn'] = false;
+    }
+    final snapshot = _positionSnapshots[basePayload];
+    if (snapshot != null) {
+      final model = payload['model'] as String;
+      final characters = parameters['characterPrompts'] as List;
+      final positive = parameters['v4_prompt'] as Map;
+      final positiveCaption = positive['caption'] as Map;
+      final negativeCaption =
+          parameters['v4_negative_prompt']['caption'] as Map;
+      final textCharacters = <TextRenderingCharacter>[];
+      for (var i = 0; i < characters.length; i++) {
+        final center = effectiveCharacterCenter(snapshot.centers[i],
+            model: model, plan: plan);
+        final point = {'x': center.x, 'y': center.y};
+        characters[i]['center'] = point;
+        positiveCaption['char_captions'][i]['centers'] = [point];
+        negativeCaption['char_captions'][i]['centers'] = [point];
+        textCharacters.add(TextRenderingCharacter(
+            prompt: characters[i]['prompt'] as String, center: center));
+      }
+      final base = model.contains('diffusion-5')
+          ? NovelAiTextRendering.appendToBase(
+              snapshot.basePrompt, textCharacters,
+              useCoords: positive['use_coords'] == true)
+          : snapshot.basePrompt;
+      payload['input'] = base;
+      positiveCaption['base_caption'] = base;
+      _positionSnapshots[payload] = snapshot;
     }
     return payload;
   }

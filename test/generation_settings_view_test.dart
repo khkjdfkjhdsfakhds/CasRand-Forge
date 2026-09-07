@@ -1,3 +1,4 @@
+import 'package:nai_casrand/data/models/batch_tool_snapshot.dart';
 import 'dart:convert';
 import 'dart:math';
 
@@ -110,6 +111,34 @@ void main() {
       ),
     );
   }
+
+  testWidgets(
+      'advanced tool toggle is reachable at 390 width and restores random mode',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final config = GetIt.I<PayloadConfig>();
+    config.activateBatchTool(BatchToolSnapshot.director(payload: const {
+      'req_type': 'lineart',
+      'image': 'source',
+      'width': 1024,
+      'height': 1024
+    }, label: 'Line Art', outputWidth: 1024, outputHeight: 1024));
+    final vm = _NoNetworkGenerationPageViewmodel();
+    await tester.pumpWidget(localizedApp(GenerationPageView(viewmodel: vm)));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('active-batch-tool-summary')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('advanced-features-fab')));
+    await tester.pumpAndSettle();
+    final toggle = find.byKey(const Key('batch-director-toggle'));
+    await tester.ensureVisible(toggle);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(config.activeBatchTool, isNull);
+    expect(config.promptMode, PromptMode.random);
+    expect(tester.takeException(), isNull);
+    vm.dispose();
+  });
 
   testWidgets('moved settings appear together on the generation page', (
     tester,
@@ -751,13 +780,13 @@ void main() {
     expect(character.positivePromptConfig.strs.single, 'portrait');
   });
 
-  test('character manager supports at most six characters', () {
+  test('legacy character manager supports at most six characters', () {
     final viewmodel = PromptTabViewmodel(
       promptConfig: PromptConfig(strs: [], prompts: []),
       negativePromptConfig: PromptConfig(strs: [], prompts: []),
       characterConfigList: [],
       savedConfigList: [],
-      paramConfig: ParamConfig(),
+      paramConfig: ParamConfig(model: 'nai-diffusion-4-5-full'),
     );
 
     for (var i = 0; i < 7; i++) {

@@ -1,7 +1,9 @@
+import 'package:nai_casrand/data/use_cases/enhance_request_options.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/data/models/image_handoff_coordinator.dart';
+import 'package:nai_casrand/data/models/enhance_config.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/use_cases/anlas_cost.dart';
@@ -83,31 +85,36 @@ class ResultActions {
     _returnToShell(context);
   }
 
-  /// Estimated Anlas for an Enhance run of this image at the Enhance page's
-  /// current magnification and preset, or null when the size is unknown.
+  /// Estimates the state after this image is handed off: importing a new
+  /// source resets Max and selects its largest valid ordinary scale.
   AnlasCost? estimateEnhanceCost() {
     final width = content.additionalInfo['width'];
     final height = content.additionalInfo['height'];
-    if (width is! int || height is! int) return null;
+    final bytes = content.imageBytes;
+    if (width is! int || height is! int || bytes == null) return null;
     if (!_payloadConfig.settings.subscriptionStatusKnown) return null;
-    final enhance = _payloadConfig.enhanceConfig;
-    int snap(int value) => value < 64 ? 64 : (value / 64).round() * 64;
-    final targetW = snap((width * enhance.scale).round());
-    final targetH = snap((height * enhance.scale).round());
+    final destination = EnhanceConfig()
+      ..setPreparedImage(bytes, width: width, height: height);
+    if (destination.availableScales.isEmpty) return null;
+    final rawTarget = destination.targetSize;
+    final target =
+        EnhanceRequestOptions.apiSize(rawTarget.width, rawTarget.height);
+    destination.dispose();
     final paramConfig = _payloadConfig.paramConfig;
-    final smActive = !paramConfig.model.contains('diffusion-4') &&
-        !paramConfig.model.contains('diffusion-5');
+    final model = content.additionalInfo['model'] is String
+        ? content.additionalInfo['model'] as String
+        : paramConfig.model;
     return estimateAnlasCost(
-      width: targetW,
-      height: targetH,
+      width: target.width,
+      height: target.height,
       steps: sourceSteps ?? paramConfig.steps,
       action: 'img2img',
-      strength: enhance.preset.strength,
-      sm: smActive && paramConfig.sm,
-      smDyn: smActive && paramConfig.smDyn,
+      strength: _payloadConfig.enhanceConfig.strength,
+      sm: false,
+      smDyn: false,
       tier: _payloadConfig.settings.subscriptionTier,
       subscriptionActive: _payloadConfig.settings.subscriptionActive,
-      model: paramConfig.model,
+      model: model,
       opusUsageAvailable: _payloadConfig.settings.opusUsageAvailable,
     );
   }

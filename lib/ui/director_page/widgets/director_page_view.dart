@@ -1,3 +1,5 @@
+import 'package:nai_casrand/data/models/batch_tool_snapshot.dart';
+import 'package:nai_casrand/ui/generation_page/widgets/tool_batch_send_button.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
@@ -59,7 +61,7 @@ class DirectorPageView extends StatelessWidget {
 
   Widget _buildPrimaryAction(BuildContext context) {
     final cost = viewmodel.currentCost;
-    final busy = generationViewmodel.isPreparingDirector ||
+    final busy = generationViewmodel.isBusyPreparingOrSingle ||
         generationViewmodel.commandStatus.isGenerationActive.value ||
         (generationViewmodel.currentCommand?.isExecuting.value ?? false);
     final enabled = viewmodel.config.hasImage && !busy;
@@ -67,28 +69,39 @@ class DirectorPageView extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
       child: Align(
         alignment: Alignment.centerRight,
-        child: Tooltip(
-          message: cost == null
-              ? tr('estimated_generation_cost_pending')
-              : tr(
-                  'estimated_generation_cost_tooltip',
-                  namedArgs: {'anlas': cost.toString()},
+        child: Wrap(
+          alignment: WrapAlignment.end,
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            Tooltip(
+              message: cost == null
+                  ? tr('estimated_generation_cost_pending')
+                  : tr(
+                      'estimated_generation_cost_tooltip',
+                      namedArgs: {'anlas': cost.toString()},
+                    ),
+              child: FilledButton.icon(
+                key: const Key('director-run'),
+                onPressed: enabled ? () => _run(context) : null,
+                icon: busy
+                    ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.play_arrow),
+                label: Text(
+                  cost == null
+                      ? tr('director_tool_run')
+                      : '${tr('director_tool_run')} · ${tr('estimated_cost_prefix')} $cost',
                 ),
-          child: FilledButton.icon(
-            key: const Key('director-run'),
-            onPressed: enabled ? () => _run(context) : null,
-            icon: busy
-                ? const SizedBox.square(
-                    dimension: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.play_arrow),
-            label: Text(
-              cost == null
-                  ? tr('director_tool_run')
-                  : '${tr('director_tool_run')} · ${tr('estimated_cost_prefix')} $cost',
+              ),
             ),
-          ),
+            ToolBatchSendButton(
+                kind: BatchToolKind.director,
+                viewmodel: generationViewmodel,
+                enabled: enabled),
+          ],
         ),
       ),
     );

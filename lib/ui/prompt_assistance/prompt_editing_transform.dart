@@ -1,691 +1,405 @@
 import 'package:flutter/services.dart';
 import 'package:nai_casrand/ui/prompt_assistance/prompt_weight_syntax.dart';
 
-/// Which prompt surface is being edited by a text transformation.
-///
-/// A fixed prompt is one final prompt and therefore treats top-level newlines
-/// as separators.  A cascaded entry is one random-selection candidate; its
-/// caller supplies the entry range and newlines inside that range stay part of
-/// the candidate (only commas separate tags).
-enum PromptEditingScope {
-  fixedPrompt,
-  cascadedEntry,
-}
+enum PromptEditingScope { fixedPrompt, cascadedEntry }
 
 enum PromptWeightDirection { increase, decrease }
 
 enum PromptMoveDirection { backward, forward }
 
-/// The complete result of a shared prompt text edit.
-///
-/// Returning a [TextEditingValue] keeps selection and composing state together
-/// so adapters can assign it to their controller as one undoable edit.
 class PromptTextEditResult {
   final TextEditingValue value;
   final bool changed;
-
   const PromptTextEditResult({required this.value, required this.changed});
-
   static PromptTextEditResult unchanged(TextEditingValue value) =>
       PromptTextEditResult(value: value, changed: false);
 }
 
-/// Stateless weight and position transforms used by both prompt editor types.
-///
-/// The methods intentionally do not know about widgets, controllers, settings,
-/// or persistence.  Adapters provide the current value and selection and can
-/// pass the resulting value to their existing history mechanism.
+/// Lossless local edits: the parser locates source spans; it never serializes
+/// or normalizes an unrelated part of the document.
 class PromptEditingTransform {
   const PromptEditingTransform._();
-
-  static const double weightStep = 0.1;
+  static const double weightStep = .1;
   static const double minimumWeight = -10;
   static const double maximumWeight = 10;
 
-  /// Adjusts the complete tag/group containing [value.selection].
-  ///
-  /// [editableRange] is useful for cascaded editors: pass the current entry's
-  /// range to prevent the operation from touching neighbouring entries.  For
-  /// fixed prompts it may be omitted and the whole document is used.
   static PromptTextEditResult adjustWeight(
     TextEditingValue value, {
     required PromptWeightDirection direction,
     PromptEditingScope scope = PromptEditingScope.fixedPrompt,
     TextRange? editableRange,
   }) {
-    if (_isComposing(value) || !_hasUsableSelection(value)) {
-      return PromptTextEditResult.unchanged(value);
-    }
-    final range = _effectiveRange(value.text, editableRange);
-    final items = _scanItems(
-      value.text,
-      range,
-      splitOnNewlines: scope == PromptEditingScope.fixedPrompt,
-    );
-    final item = _itemForSelection(items, value.selection);
-    if (item == null || item.isComment) {
-      return PromptTextEditResult.unchanged(value);
-    }
-
-    final oldSegment = value.text.substring(item.start, item.end);
-    final syntax = _parseWeightSyntax(oldSegment);
-    if (syntax == null) return PromptTextEditResult.unchanged(value);
-
+    final target = _target(value, scope, editableRange);
+    if (target == null) return PromptTextEditResult.unchanged(value);
+    final (node, caret) = target;
+    final group = node.weight;
     final delta =
         direction == PromptWeightDirection.increase ? weightStep : -weightStep;
-    final next = syntax.adjusted(delta);
-    if (next.source == oldSegment) {
-      return PromptTextEditResult.unchanged(value);
+    if (group != null) {
+      final old =
+          double.parse(value.text.substring(group.start, group.bodyStart - 2));
+      final next =
+          ((old + delta).clamp(minimumWeight, maximumWeight) * 10).round() / 10;
+      if (next == old) return PromptTextEditResult.unchanged(value);
+      final body = value.text.substring(group.bodyStart, group.bodyEnd);
+      final prefix = next == 1 ? '' : '${_number(next)}::';
+      final suffix =
+          next == 1 ? '' : value.text.substring(group.bodyEnd, group.end);
+      return _replace(
+          value,
+          group.start,
+          group.end,
+          '$prefix$body$suffix',
+          group.start +
+              prefix.length +
+              (caret - group.bodyStart).clamp(0, body.length));
     }
-
-    final newText = value.text.replaceRange(item.start, item.end, next.source);
-    final newSelection = _mapSelectionThroughWeightEdit(
-      value.selection,
-      item,
-      syntax,
-      next,
-    );
-    return PromptTextEditResult(
-      value: value.copyWith(
-        text: newText,
-        selection: newSelection,
-        composing: TextRange.empty,
-      ),
-      changed: true,
-    );
+    final body = value.text.substring(node.start, node.end);
+    final prefix = '${_number(1 + delta)}::';
+    final replacement = PromptWeightSyntax.normalizeText('$prefix$body::');
+    return _replace(
+        value,
+        node.start,
+        node.end,
+        replacement,
+        node.start +
+            prefix.length +
+            (caret - node.start).clamp(0, body.length));
   }
 
-  /// Exchanges the complete tag/group containing [value.selection] with its
-  /// previous or next valid item.
-  ///
-  /// Separators, whitespace, comments and line endings remain byte-for-byte
-  /// where they were.  Only the two item spans are exchanged, so the caret
-  /// follows the moved item and repeated shortcuts keep acting on it.
   static PromptTextEditResult move(
     TextEditingValue value, {
     required PromptMoveDirection direction,
     PromptEditingScope scope = PromptEditingScope.fixedPrompt,
     TextRange? editableRange,
   }) {
-    if (_isComposing(value) || !_hasUsableSelection(value)) {
-      return PromptTextEditResult.unchanged(value);
+    final target = _target(value, scope, editableRange);
+    if (target == null) return PromptTextEditResult.unchanged(value);
+    final (leaf, caret) = target;
+    var current = leaf;
+    var parent = current.parent!;
+    final originallyWrapped = parent.kind != _Kind.root;
+    // A one-tag wrapper travels with its tag, as in the reference shortcut.
+    if (parent.kind != _Kind.root && parent.children.length == 1) {
+      current = parent;
+      parent = current.parent!;
     }
-    final range = _effectiveRange(value.text, editableRange);
-    final items = _scanItems(
-      value.text,
-      range,
-      splitOnNewlines: scope == PromptEditingScope.fixedPrompt,
-    );
-    final index = items.indexWhere(
-      (item) => !item.isComment && _containsSelection(item, value.selection),
-    );
-    if (index < 0) return PromptTextEditResult.unchanged(value);
-
+    final siblings = parent.children;
+    final index = siblings.indexOf(current);
     final step = direction == PromptMoveDirection.backward ? -1 : 1;
-    var neighbourIndex = index + step;
-    while (neighbourIndex >= 0 && neighbourIndex < items.length) {
-      if (!items[neighbourIndex].isComment) break;
-      neighbourIndex += step;
+    final nextIndex = index + step;
+    final text = value.text;
+    final moved = text.substring(current.start, current.end);
+    final relativeCaret = (caret - current.start).clamp(0, moved.length);
+    if (nextIndex >= 0 && nextIndex < siblings.length) {
+      final neighbour = siblings[nextIndex];
+      final left = step < 0 ? neighbour : current;
+      final right = step < 0 ? current : neighbour;
+      final gap = text.substring(left.end, right.start);
+      // Random choices and prompt chunks are boundaries, never neighbours.
+      if (gap.contains('|')) return PromptTextEditResult.unchanged(value);
+      if (!originallyWrapped &&
+          neighbour.kind == _Kind.weight &&
+          !gap.contains('#')) {
+        final prefix = text.substring(neighbour.start, neighbour.bodyStart);
+        final body = text.substring(neighbour.bodyStart, neighbour.bodyEnd);
+        final close = text.substring(neighbour.bodyEnd, neighbour.end);
+        final joining = _joiner(body, moved);
+        final inside = step < 0 ? '$body$joining$moved' : '$moved$joining$body';
+        final caretIn = prefix.length +
+            (step < 0 ? body.length + joining.length : 0) +
+            relativeCaret;
+        return _replace(value, left.start, right.end, '$prefix$inside$close',
+            left.start + caretIn);
+      }
+      final other = text.substring(neighbour.start, neighbour.end);
+      // An open group moved before another item needs a local closing marker,
+      // otherwise the next item would accidentally inherit its weight.
+      final movedBefore = _closedForFollowing(current, moved);
+      final otherBefore = _closedForFollowing(neighbour, other);
+      final separator = gap.isEmpty ? ' ' : gap;
+      final replacement = step < 0
+          ? '$movedBefore$separator$other'
+          : '$otherBefore$separator$moved';
+      return _replace(
+          value,
+          left.start,
+          right.end,
+          replacement,
+          left.start +
+              (step < 0 ? 0 : otherBefore.length + separator.length) +
+              relativeCaret);
     }
-    if (neighbourIndex < 0 || neighbourIndex >= items.length) {
+    if (parent.kind == _Kind.root ||
+        parent.kind == _Kind.random ||
+        parent.children.length < 2) {
       return PromptTextEditResult.unchanged(value);
     }
-
-    final current = items[index];
-    final neighbour = items[neighbourIndex];
-    final currentText = value.text.substring(current.start, current.end);
-    final neighbourText = value.text.substring(neighbour.start, neighbour.end);
-    if (currentText == neighbourText && current.start == neighbour.start) {
+    final remainingStart = step < 0 ? siblings[1].start : parent.bodyStart;
+    final remainingEnd =
+        step > 0 ? siblings[siblings.length - 2].end : parent.bodyEnd;
+    final removedGap = step < 0
+        ? text.substring(current.end, remainingStart)
+        : text.substring(remainingEnd, current.start);
+    if (removedGap.contains('#') || removedGap.contains('|')) {
       return PromptTextEditResult.unchanged(value);
     }
+    final remaining =
+        (step < 0 ? text.substring(parent.bodyStart, current.start) : '') +
+            text.substring(remainingStart, remainingEnd) +
+            (step > 0 ? text.substring(current.end, parent.bodyEnd) : '');
+    var wrapper = text.substring(parent.start, parent.bodyStart) +
+        remaining +
+        text.substring(parent.bodyEnd, parent.end);
+    if (step > 0) wrapper = _closedForFollowing(parent, wrapper);
+    if (parent.kind == _Kind.weight && parent.end > parent.bodyEnd) {
+      wrapper = _appendWeightClose(wrapper.substring(0, wrapper.length - 2));
+    }
+    final separator = removedGap.isEmpty ? ', ' : removedGap;
+    final replacement =
+        step < 0 ? '$moved$separator$wrapper' : '$wrapper$separator$moved';
+    return _replace(
+        value,
+        parent.start,
+        parent.end,
+        replacement,
+        parent.start +
+            (step < 0 ? 0 : wrapper.length + separator.length) +
+            relativeCaret);
+  }
 
-    final edits = <_Replacement>[
-      _Replacement(start: current.start, end: current.end, text: neighbourText),
-      _Replacement(
-          start: neighbour.start, end: neighbour.end, text: currentText),
-    ]..sort((a, b) => a.start.compareTo(b.start));
-    final newText = _applyReplacements(value.text, edits);
-    final mappedSelection = _mapSelectionForMove(
-      value.selection,
-      current,
-      neighbour,
-      currentText.length,
-      neighbourText.length,
-    );
+  static String _closedForFollowing(_Node node, String source) =>
+      node.kind == _Kind.weight && node.end == node.bodyEnd
+          ? _appendWeightClose(source)
+          : source;
+
+  static String _appendWeightClose(String source) =>
+      RegExp(r'\d\.?$').hasMatch(source) ? '$source ::' : '$source::';
+
+  static String _joiner(String a, String b) =>
+      a.trim().isEmpty || b.trim().isEmpty ? '' : ', ';
+  static String _number(double n) =>
+      n.toStringAsFixed(1).replaceFirst(RegExp(r'\.0$'), '');
+
+  static PromptTextEditResult _replace(TextEditingValue value, int start,
+      int end, String replacement, int caret) {
+    final text = value.text.replaceRange(start, end, replacement);
     return PromptTextEditResult(
-      value: value.copyWith(
-        text: newText,
-        selection: mappedSelection,
-        composing: TextRange.empty,
-      ),
-      changed: true,
-    );
+        value: value.copyWith(
+            text: text,
+            selection:
+                TextSelection.collapsed(offset: caret.clamp(0, text.length)),
+            composing: TextRange.empty),
+        changed: text != value.text);
+  }
+
+  static (_Node, int)? _target(
+      TextEditingValue value, PromptEditingScope scope, TextRange? range) {
+    if (!value.selection.isValid ||
+        value.selection.end > value.text.length ||
+        (value.composing.isValid && !value.composing.isCollapsed)) {
+      return null;
+    }
+    final start = (range?.start ?? 0).clamp(0, value.text.length);
+    final end =
+        (range?.end ?? value.text.length).clamp(start, value.text.length);
+    final caret = (value.selection.start + value.selection.end) ~/ 2;
+    if (caret < start || caret > end) return null;
+    final parser =
+        _Parser(value.text, end, scope == PromptEditingScope.fixedPrompt);
+    final root = _Node(_Kind.root, start, end, start, end);
+    parser.sequence(root, start, null, 0);
+    final node = parser.locate(root, caret);
+    if (node == null) return null;
+    node.weight = parser.indicatedWeight ?? node.weight;
+    return (node, caret.clamp(node.start, node.end));
   }
 }
 
-class _PromptItem {
+enum _Kind { root, tag, weight, brace, random }
+
+class _Node {
+  final _Kind kind;
   final int start;
-  final int end;
-  final bool isComment;
-
-  const _PromptItem(
-      {required this.start, required this.end, this.isComment = false});
-}
-
-class _Replacement {
-  final int start;
-  final int end;
-  final String text;
-
-  const _Replacement(
-      {required this.start, required this.end, required this.text});
-}
-
-class _WeightSyntax {
-  final String source;
-  final double? numericWeight;
-  final String body;
+  int end;
   final int bodyStart;
-  final int bodyEnd;
-
-  /// Complete outer wrappers, from outside to inside.  Keeping the sequence
-  /// (rather than only counts) means mixed nested forms such as `{[tag]}` are
-  /// preserved when the outer wrapper is adjusted.
-  final List<String> wrappers;
-  final bool invalid;
-
-  const _WeightSyntax({
-    required this.source,
-    required this.numericWeight,
-    required this.body,
-    required this.bodyStart,
-    required this.bodyEnd,
-    required this.wrappers,
-    required this.invalid,
-  });
-
-  String get _trimmed => source.trim();
-
-  _WeightSyntax adjusted(double delta) {
-    if (invalid) return this;
-    if (numericWeight != null) {
-      final weight = _roundWeight(
-        (numericWeight! + delta).clamp(
-          PromptEditingTransform.minimumWeight,
-          PromptEditingTransform.maximumWeight,
-        ),
-      );
-      if (weight == 1) {
-        return _WeightSyntax(
-          source: body,
-          numericWeight: null,
-          body: body,
-          bodyStart: 0,
-          bodyEnd: body.length,
-          wrappers: const [],
-          invalid: false,
-        );
-      }
-      final formatted = _formatWeight(weight);
-      final replacement = PromptWeightSyntax.normalizeText(
-        '$formatted::$body::',
-      );
-      return _WeightSyntax(
-        source: replacement,
-        numericWeight: weight,
-        body: body,
-        bodyStart: formatted.length + 2,
-        bodyEnd: formatted.length + 2 + body.length,
-        wrappers: const [],
-        invalid: false,
-      );
-    }
-
-    if (wrappers.isNotEmpty && wrappers.first == '{') {
-      final nextWrappers = List<String>.of(wrappers);
-      if (delta > 0) {
-        nextWrappers.insert(0, '{');
-      } else {
-        nextWrappers.removeAt(0);
-      }
-      final core = body;
-      final wrapped = _wrapWithWrappers(nextWrappers, core);
-      final coreStart = nextWrappers.length;
-      return _WeightSyntax(
-        source: wrapped,
-        numericWeight: null,
-        body: core,
-        bodyStart: coreStart,
-        bodyEnd: coreStart + core.length,
-        wrappers: nextWrappers,
-        invalid: false,
-      );
-    }
-
-    if (wrappers.isNotEmpty && wrappers.first == '[') {
-      // Square brackets are inverse emphasis: increasing removes a level,
-      // decreasing adds one.
-      final nextWrappers = List<String>.of(wrappers);
-      if (delta > 0) {
-        nextWrappers.removeAt(0);
-      } else {
-        nextWrappers.insert(0, '[');
-      }
-      final core = body;
-      final wrapped = _wrapWithWrappers(nextWrappers, core);
-      final coreStart = nextWrappers.length;
-      return _WeightSyntax(
-        source: wrapped,
-        numericWeight: null,
-        body: core,
-        bodyStart: coreStart,
-        bodyEnd: coreStart + core.length,
-        wrappers: nextWrappers,
-        invalid: false,
-      );
-    }
-
-    final weight = _roundWeight(
-      (1 + delta).clamp(
-        PromptEditingTransform.minimumWeight,
-        PromptEditingTransform.maximumWeight,
-      ),
-    );
-    final formatted = _formatWeight(weight);
-    final replacement = PromptWeightSyntax.normalizeText(
-      '$formatted::$_trimmed::',
-    );
-    return _WeightSyntax(
-      source: replacement,
-      numericWeight: weight,
-      body: _trimmed,
-      bodyStart: formatted.length + 2,
-      bodyEnd: formatted.length + 2 + _trimmed.length,
-      wrappers: const [],
-      invalid: false,
-    );
+  int bodyEnd;
+  _Node? parent;
+  _Node? weight;
+  final children = <_Node>[];
+  _Node(this.kind, this.start, this.end, this.bodyStart, this.bodyEnd);
+  void add(_Node child) {
+    child.parent = this;
+    children.add(child);
   }
 }
 
-bool _isComposing(TextEditingValue value) {
-  final composing = value.composing;
-  return composing.isValid && !composing.isCollapsed;
-}
-
-bool _hasUsableSelection(TextEditingValue value) {
-  final selection = value.selection;
-  return selection.isValid &&
-      selection.start >= 0 &&
-      selection.end <= value.text.length;
-}
-
-TextRange _effectiveRange(String text, TextRange? range) {
-  final candidate = range ?? TextRange(start: 0, end: text.length);
-  final start = candidate.start.clamp(0, text.length);
-  final end = candidate.end.clamp(start, text.length);
-  return TextRange(start: start, end: end);
-}
-
-bool _containsSelection(_PromptItem item, TextSelection selection) {
-  if (!selection.isValid || selection.start != selection.end) return false;
-  return selection.extentOffset >= item.start &&
-      selection.extentOffset <= item.end;
-}
-
-_PromptItem? _itemForSelection(
-  List<_PromptItem> items,
-  TextSelection selection,
-) {
-  if (!selection.isValid || !selection.isCollapsed) return null;
-  for (final item in items) {
-    if (item.isComment) continue;
-    if (_containsSelection(item, selection)) return item;
-  }
-  return null;
-}
-
-List<_PromptItem> _scanItems(
-  String text,
-  TextRange range, {
-  required bool splitOnNewlines,
-}) {
-  if (range.start == range.end) return const [];
-  final items = <_PromptItem>[];
-  var segmentStart = range.start;
-  final delimiters = <String>[];
-  var numericGroup = false;
-  var numericPrefixStart = range.start;
-  var lineStart = range.start;
-  var lineComment = false;
-
-  void emit(int separatorStart, {bool comment = false}) {
-    final rawStart = segmentStart;
-    final rawEnd = separatorStart;
-    var start = rawStart;
-    var end = rawEnd;
-    while (start < end && _isPromptWhitespace(text[start])) {
-      start++;
-    }
-    while (end > start && _isPromptWhitespace(text[end - 1])) {
-      end--;
-    }
-    if (start < end) {
-      items.add(_PromptItem(start: start, end: end, isComment: comment));
-    }
-    segmentStart = separatorStart + 1;
-    delimiters.clear();
-    numericGroup = false;
-    numericPrefixStart = segmentStart;
+class _Parser {
+  final String text;
+  final int end;
+  final bool splitLines;
+  final comments = <TextRange>[];
+  _Node? activeWeight;
+  _Node? indicatedWeight;
+  _Parser(this.text, this.end, this.splitLines);
+  static final _space = RegExp(r'\s');
+  static final _wordEnd = RegExp(r'[\p{L}\p{N}_.]', unicode: true);
+  bool space(int i) => _space.hasMatch(text[i]);
+  bool comment(int i) {
+    if (text[i] != '#') return false;
+    final line = text.lastIndexOf('\n', i == 0 ? 0 : i - 1) + 1;
+    return text.substring(line, i).trim().isEmpty;
   }
 
-  for (var index = range.start; index < range.end; index++) {
-    final character = text[index];
-    if (character == '\n') {
-      if (lineComment) {
-        // Comment lines are their own non-target item even in a cascaded
-        // entry, where ordinary internal newlines are intentionally not
-        // separators.  This prevents a following comma-delimited tag from
-        // absorbing the comment into its editable span.
-        emit(index, comment: true);
-      } else if (splitOnNewlines && delimiters.isEmpty && !numericGroup) {
-        emit(index);
-      }
-      lineStart = index + 1;
-      lineComment = false;
-      continue;
-    }
+  Match? opener(int i) {
+    if (i > 0 && _wordEnd.hasMatch(text[i - 1])) return null;
+    final match = PromptWeightSyntax.numericOpenerAt(text, i);
+    return match != null && match.end <= end ? match : null;
+  }
 
-    if (delimiters.isEmpty &&
-        !numericGroup &&
-        _isCommentLineStart(text, lineStart, index)) {
-      if (lineStart > segmentStart) {
-        // A comment may follow an ordinary internal newline in a cascaded
-        // entry.  Close the preceding tag before starting the comment span;
-        // the newline itself remains an untouched separator in the source.
-        emit(lineStart - 1);
+  int sequence(_Node parent, int cursor, String? close, int depth) {
+    if (depth > 64) return end;
+    var i = cursor;
+    while (i < end) {
+      if (close != null && text.startsWith(close, i)) {
+        if (close == '::') activeWeight = null;
+        parent.bodyEnd = i;
+        parent.end = i + close.length;
+        return parent.end;
       }
-      lineComment = true;
-    }
-    if (lineComment) continue;
-
-    if (numericGroup) {
-      if (character == ':' && index + 1 < range.end && text[index + 1] == ':') {
-        numericGroup = false;
-        index++;
+      if (text[i] == '\n') {
+        activeWeight = null;
+        if (splitLines && parent.kind == _Kind.weight) {
+          parent.bodyEnd = i;
+          parent.end = i;
+          return i;
+        }
       }
-      continue;
-    }
-
-    if (delimiters.isEmpty &&
-        character == ':' &&
-        index + 1 < range.end &&
-        text[index + 1] == ':') {
-      final prefix = text.substring(numericPrefixStart, index).trim();
-      if (RegExp(r'^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$').hasMatch(prefix)) {
-        numericGroup = true;
-        index++;
+      if (comment(i)) {
+        final next = text.indexOf('\n', i);
+        final stop = next < 0 ? end : next.clamp(i, end);
+        comments.add(TextRange(start: i, end: stop));
+        i = stop;
         continue;
       }
+      if (space(i) || text[i] == ',' || text[i] == '，') {
+        i++;
+        continue;
+      }
+      final weight = opener(i);
+      final kind = weight != null
+          ? _Kind.weight
+          : text.startsWith('||', i)
+              ? _Kind.random
+              : '{[('.contains(text[i])
+                  ? _Kind.brace
+                  : null;
+      if (kind != null) {
+        final bodyStart = weight?.end ?? i + (kind == _Kind.random ? 2 : 1);
+        final closing = weight != null
+            ? '::'
+            : kind == _Kind.random
+                ? '||'
+                : {'{': '}', '[': ']', '(': ')'}[text[i]]!;
+        final node = _Node(kind, i, end, bodyStart, end);
+        // Parentheses are an atomic tag (commas inside them are literal).
+        if (text[i] == '(') {
+          var j = bodyStart, nesting = 1;
+          while (j < end && nesting > 0) {
+            if (text[j] == '(') nesting++;
+            if (text[j] == ')') nesting--;
+            j++;
+          }
+          parent.add(_Node(_Kind.tag, i, j, i, j)..weight = activeWeight);
+          i = j;
+          continue;
+        }
+        parent.add(node);
+        if (kind == _Kind.weight) activeWeight = node;
+        i = sequence(node, bodyStart, closing, depth + 1);
+        continue;
+      }
+      if (text.startsWith('::', i)) {
+        activeWeight = null;
+        i += 2;
+        continue;
+      }
+      if ('|}]'.contains(text[i])) {
+        i++;
+        continue;
+      }
+      final start = i;
+      while (i < end) {
+        if ((close != null && text.startsWith(close, i)) ||
+            text.startsWith('::', i) ||
+            ',，{}[]|'.contains(text[i]) ||
+            (splitLines && text[i] == '\n') ||
+            comment(i)) {
+          break;
+        }
+        if (i > start && opener(i) != null) break;
+        i++;
+      }
+      var stop = i;
+      while (stop > start && space(stop - 1)) {
+        stop--;
+      }
+      if (stop > start) {
+        parent.add(
+            _Node(_Kind.tag, start, stop, start, stop)..weight = activeWeight);
+      }
+      if (i == start) i++;
     }
+    parent.bodyEnd = end;
+    parent.end = end;
+    return end;
+  }
 
-    if (delimiters.isEmpty &&
-        (character == ',' ||
-            character == '，' ||
-            (splitOnNewlines && character == '\n'))) {
-      emit(index);
-      continue;
+  _Node? locate(_Node parent, int caret) {
+    if (comments.any((c) => caret >= c.start && caret <= c.end)) return null;
+    if (parent.kind == _Kind.weight &&
+        ((caret >= parent.start && caret < parent.bodyStart) ||
+            (caret >= parent.bodyEnd && caret < parent.end))) {
+      indicatedWeight = parent;
     }
-    if (character == '(' || character == '{' || character == '[') {
-      delimiters.add(character);
-    } else if (character == ')' || character == '}' || character == ']') {
-      if (delimiters.isNotEmpty &&
-          _matchingDelimiter(delimiters.last, character)) {
-        delimiters.removeLast();
-      } else {
-        // Keep scanning the item.  The weight parser rejects this item as
-        // invalid instead of destructively normalizing it.
-        delimiters.add('!');
+    final nodes = parent.children;
+    if (nodes.isEmpty) return null;
+    _Node? chosen;
+    // An exact next-tag start wins over trailing-whitespace attachment.
+    for (final n in nodes) {
+      if (caret >= n.start && caret < n.end) {
+        chosen = n;
+        break;
       }
     }
-    if (delimiters.isEmpty && text[index] != ' ' && text[index] != '\t') {
-      numericPrefixStart = segmentStart;
-    }
-  }
-
-  var start = segmentStart;
-  var end = range.end;
-  while (start < end && _isPromptWhitespace(text[start])) {
-    start++;
-  }
-  while (end > start && _isPromptWhitespace(text[end - 1])) {
-    end--;
-  }
-  if (start < end) {
-    items.add(_PromptItem(start: start, end: end, isComment: lineComment));
-  }
-  return items;
-}
-
-bool _isCommentLineStart(String text, int lineStart, int index) {
-  var cursor = lineStart;
-  while (cursor < index && _isPromptWhitespace(text[cursor])) {
-    cursor++;
-  }
-  return cursor <= index && cursor < text.length && text[cursor] == '#';
-}
-
-bool _isPromptWhitespace(String value) =>
-    value == ' ' || value == '\t' || value == '\r' || value == '　';
-
-bool _matchingDelimiter(String opening, String closing) =>
-    (opening == '(' && closing == ')') ||
-    (opening == '{' && closing == '}') ||
-    (opening == '[' && closing == ']');
-
-_WeightSyntax? _parseWeightSyntax(String source) {
-  final leading = source.length - source.trimLeft().length;
-  final trimmed = source.trim();
-  if (trimmed.isEmpty || !_balanced(trimmed)) return null;
-
-  final numericPrefix = RegExp(
-    r'^([+-]?(?:\d+(?:\.\d*)?|\.\d+))::',
-  ).firstMatch(trimmed);
-  if (numericPrefix != null) {
-    final close = trimmed.lastIndexOf('::');
-    final bodyStart = numericPrefix.end;
-    if (close <= bodyStart || close != trimmed.length - 2) return null;
-    final body = trimmed.substring(bodyStart, close);
-    if (body.trim().isEmpty || !_balanced(body)) return null;
-    final numeric = double.tryParse(numericPrefix.group(1)!);
-    if (numeric == null || numeric.isNaN || numeric.isInfinite) return null;
-    return _WeightSyntax(
-      source: source,
-      numericWeight: numeric,
-      body: body,
-      bodyStart: leading + bodyStart,
-      bodyEnd: leading + close,
-      wrappers: const [],
-      invalid: false,
-    );
-  }
-
-  // A stray numeric delimiter is likely an incomplete syntax.  Leave it
-  // untouched rather than wrapping it in another numeric group.
-  if (trimmed.contains('::')) return null;
-
-  var core = trimmed;
-  final wrappers = <String>[];
-  while (core.length >= 2) {
-    if (_isCompleteOuterWrapper(core, '{', '}')) {
-      wrappers.add('{');
-      core = core.substring(1, core.length - 1);
-      continue;
-    }
-    if (_isCompleteOuterWrapper(core, '[', ']')) {
-      wrappers.add('[');
-      core = core.substring(1, core.length - 1);
-      continue;
-    }
-    break;
-  }
-  if (core.trim().isEmpty || !_balanced(core)) return null;
-  final coreStart = trimmed.indexOf(core);
-  return _WeightSyntax(
-    source: source,
-    numericWeight: null,
-    body: core,
-    bodyStart: leading + coreStart,
-    bodyEnd: leading + coreStart + core.length,
-    wrappers: wrappers,
-    invalid: false,
-  );
-}
-
-String _wrapWithWrappers(List<String> wrappers, String core) {
-  var result = core;
-  for (final opening in wrappers.reversed) {
-    final closing = switch (opening) {
-      '{' => '}',
-      '[' => ']',
-      '(' => ')',
-      _ => opening,
-    };
-    result = '$opening$result$closing';
-  }
-  return result;
-}
-
-bool _isCompleteOuterWrapper(String value, String opening, String closing) {
-  if (value.length < 2 ||
-      value[0] != opening ||
-      value[value.length - 1] != closing) {
-    return false;
-  }
-  var depth = 0;
-  final stack = <String>[];
-  for (var index = 0; index < value.length; index++) {
-    final character = value[index];
-    if (character == '(' || character == '{' || character == '[') {
-      stack.add(character);
-      depth++;
-    } else if (character == ')' || character == '}' || character == ']') {
-      if (stack.isEmpty || !_matchingDelimiter(stack.removeLast(), character)) {
-        return false;
-      }
-      depth--;
-      if (depth == 0 && index != value.length - 1) return false;
-    }
-  }
-  return stack.isEmpty;
-}
-
-bool _balanced(String value) {
-  final stack = <String>[];
-  for (var index = 0; index < value.length; index++) {
-    final character = value[index];
-    if (character == '(' || character == '{' || character == '[') {
-      stack.add(character);
-      continue;
-    }
-    if (character == ')' || character == '}' || character == ']') {
-      if (stack.isEmpty || !_matchingDelimiter(stack.removeLast(), character)) {
-        return false;
+    if (chosen == null) {
+      for (final n in nodes.reversed) {
+        if (caret >= n.end &&
+            text
+                .substring(n.end, caret.clamp(n.end, parent.end))
+                .trim()
+                .isEmpty) {
+          chosen = n;
+          break;
+        }
       }
     }
-  }
-  return stack.isEmpty;
-}
-
-double _roundWeight(num value) {
-  final rounded = (value.toDouble() * 100).roundToDouble() / 100;
-  return rounded == -0.0 ? 0.0 : rounded;
-}
-
-String _formatWeight(double value) {
-  final rounded = _roundWeight(value);
-  if (rounded == rounded.roundToDouble()) return rounded.toInt().toString();
-  return rounded
-      .toStringAsFixed(2)
-      .replaceFirst(RegExp(r'0+$'), '')
-      .replaceFirst(RegExp(r'\.\$'), '');
-}
-
-String _applyReplacements(String source, List<_Replacement> replacements) {
-  final buffer = StringBuffer();
-  var cursor = 0;
-  for (final replacement in replacements) {
-    buffer
-      ..write(source.substring(cursor, replacement.start))
-      ..write(replacement.text);
-    cursor = replacement.end;
-  }
-  buffer.write(source.substring(cursor));
-  return buffer.toString();
-}
-
-TextSelection _mapSelectionForMove(
-  TextSelection selection,
-  _PromptItem current,
-  _PromptItem neighbour,
-  int currentLength,
-  int neighbourLength,
-) {
-  // When the current item is moved right, the longer/shorter neighbour's
-  // replacement occurs after it and the target start shifts by the length
-  // delta of the earlier replacement.  Moving left keeps the target at the
-  // current item's original start.
-  final targetStart = current.start < neighbour.start
-      ? neighbour.start + neighbourLength - currentLength
-      : neighbour.start;
-
-  int mapOffset(int offset) {
-    final relative = (offset - current.start).clamp(0, currentLength);
-    // The offset is relative to the item being moved, not to the neighbour's
-    // replacement text.  Do not clamp it to [neighbourLength]: when a longer
-    // item moves over a shorter one (for example `long, a`), the tail of the
-    // caret range still belongs to the moved item after the swap.
-    return targetStart + relative;
-  }
-
-  return TextSelection(
-    baseOffset: mapOffset(selection.baseOffset),
-    extentOffset: mapOffset(selection.extentOffset),
-    affinity: selection.affinity,
-    isDirectional: selection.isDirectional,
-  );
-}
-
-TextSelection _mapSelectionThroughWeightEdit(
-  TextSelection selection,
-  _PromptItem item,
-  _WeightSyntax oldSyntax,
-  _WeightSyntax newSyntax,
-) {
-  int mapOffset(int offset) {
-    final oldRelative = (offset - item.start).clamp(0, oldSyntax.source.length);
-    final oldBodyStart = oldSyntax.bodyStart;
-    final oldBodyEnd = oldSyntax.bodyEnd;
-    final newBodyStart = newSyntax.bodyStart;
-    final newBodyEnd = newSyntax.bodyEnd;
-    if (oldRelative < oldBodyStart) {
-      return item.start + oldRelative.clamp(0, newBodyStart);
+    // A comma and the whitespace after it belong to the following tag.
+    if (chosen == null) {
+      for (final n in nodes) {
+        if (caret < n.start &&
+            RegExp(r'^[\s,，]*$').hasMatch(text.substring(caret, n.start))) {
+          chosen = n;
+          break;
+        }
+      }
     }
-    if (oldRelative <= oldBodyEnd) {
-      final bodyRelative = oldRelative - oldBodyStart;
-      return item.start +
-          newBodyStart +
-          bodyRelative.clamp(0, newBodyEnd - newBodyStart);
-    }
-    final trailing = oldRelative - oldBodyEnd;
-    return item.start +
-        newBodyEnd +
-        trailing.clamp(0, newSyntax.source.length - newBodyEnd);
+    chosen ??= caret <= nodes.first.start
+        ? nodes.first
+        : caret >= nodes.last.end
+            ? nodes.last
+            : null;
+    if (chosen == null) return null;
+    return chosen.kind == _Kind.tag ? chosen : locate(chosen, caret);
   }
-
-  return TextSelection(
-    baseOffset: mapOffset(selection.baseOffset),
-    extentOffset: mapOffset(selection.extentOffset),
-    affinity: selection.affinity,
-    isDirectional: selection.isDirectional,
-  );
 }

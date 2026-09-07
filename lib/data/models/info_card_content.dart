@@ -3,6 +3,20 @@ import 'dart:typed_data';
 import 'package:nai_casrand/data/services/generated_image_storage.dart';
 import 'package:nai_casrand/data/models/opus_usage.dart';
 
+/// An already received successful HTTP response, retained with its request
+/// identity if local result processing fails. It must never trigger a new POST.
+class ReceivedGenerationResponse {
+  final String logicalTaskId;
+  final int responseIndex;
+  final Uint8List bytes;
+
+  ReceivedGenerationResponse({
+    required this.logicalTaskId,
+    required this.responseIndex,
+    required Uint8List bytes,
+  }) : bytes = bytes.asUnmodifiableView();
+}
+
 class InfoCardContent {
   final String title;
   final String info;
@@ -11,6 +25,10 @@ class InfoCardContent {
   final Uint8List? _imageBytes;
   final GeneratedImageArtifact? imageArtifact;
   final Future<void> Function()? retryImageStorage;
+
+  /// Recovery data lives with this history card, like unsaved image previews.
+  /// Kept separate from imageBytes: a ZIP or damaged response is not a PNG.
+  final List<ReceivedGenerationResponse> receivedResponses;
 
   Uint8List? get imageBytes => imageArtifact?.previewBytes ?? _imageBytes;
   GeneratedImageFile? get currentImageFile => imageArtifact?.currentFile;
@@ -46,6 +64,7 @@ class InfoCardContent {
     Uint8List? imageBytes,
     this.imageArtifact,
     this.retryImageStorage,
+    this.receivedResponses = const [],
     this.anlasCost,
     this.anlasCostIsEstimated = false,
     this.anlasRemaining,
@@ -73,6 +92,7 @@ class InfoCardContent {
       imageBytes: _imageBytes,
       imageArtifact: imageArtifact ?? this.imageArtifact,
       retryImageStorage: retryImageStorage,
+      receivedResponses: receivedResponses,
       anlasCost: anlasCost ?? this.anlasCost,
       anlasCostIsEstimated: anlasCostIsEstimated ?? this.anlasCostIsEstimated,
       anlasRemaining: anlasRemaining ?? this.anlasRemaining,

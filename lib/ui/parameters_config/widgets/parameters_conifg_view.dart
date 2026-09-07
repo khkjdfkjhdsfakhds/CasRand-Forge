@@ -1,3 +1,4 @@
+import 'package:nai_casrand/ui/parameters_config/widgets/prompt_token_usage.dart';
 import 'dart:convert';
 
 import 'package:easy_localization/easy_localization.dart';
@@ -26,6 +27,7 @@ class ParametersConfigView extends StatelessWidget {
       builder: (context, _) => Column(
         children: [
           _buildModelSelector(context),
+          PromptTokenUsage(config: viewmodel.payloadConfig),
           if (viewmodel.isV4) _buildLegacyUcTile(context),
           // Steps
           SliderListTile(

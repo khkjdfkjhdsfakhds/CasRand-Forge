@@ -97,15 +97,15 @@ void main() {
     test('preserves brace and bracket syntax, including mixed nesting', () {
       expect(
         weight('{tag}', 4, PromptWeightDirection.increase).value.text,
-        '{{tag}}',
+        '{1.1::tag::}',
       );
       expect(
         weight('{{tag}}', 5, PromptWeightDirection.decrease).value.text,
-        '{tag}',
+        '{{0.9::tag::}}',
       );
       expect(
         weight('[tag]', 4, PromptWeightDirection.increase).value.text,
-        'tag',
+        '[1.1::tag::]',
       );
       expect(
         weight('tag', 3, PromptWeightDirection.decrease).value.text,
@@ -113,22 +113,23 @@ void main() {
       );
       expect(
         weight('{[tag]}', 6, PromptWeightDirection.increase).value.text,
-        '{{[tag]}}',
+        '{[1.1::tag::]}',
       );
       expect(
         weight('{[tag]}', 6, PromptWeightDirection.decrease).value.text,
-        '[tag]',
+        '{[0.9::tag::]}',
       );
       expect(
         weight('[{tag}]', 6, PromptWeightDirection.increase).value.text,
-        '{tag}',
+        '[{1.1::tag::}]',
       );
     });
 
-    test('leaves malformed, comment and composing edits unchanged', () {
+    test('supports open brackets and selections but respects comments and IME',
+        () {
       final malformed = weight('{tag', 4, PromptWeightDirection.increase);
-      expect(malformed.changed, isFalse);
-      expect(malformed.value.text, '{tag');
+      expect(malformed.changed, isTrue);
+      expect(malformed.value.text, '{1.1::tag::');
       final comment = weight('# tag', 5, PromptWeightDirection.increase);
       expect(comment.changed, isFalse);
       final composing = weight(
@@ -145,7 +146,7 @@ void main() {
         ),
         direction: PromptWeightDirection.increase,
       );
-      expect(selection.changed, isFalse);
+      expect(selection.value.text, '1.1::tag::');
     });
 
     test('adjusts weight when tags are separated by Chinese comma', () {

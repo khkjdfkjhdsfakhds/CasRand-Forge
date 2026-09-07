@@ -71,6 +71,21 @@ class CharacterConfig {
     5: 0.9,
   };
 
+  /// The effective legacy grid is derived without discarding a saved V5 point.
+  List<Point<int>> get effectiveGridPositions => freeCenter == null
+      ? (positions.isEmpty ? [defaultPosition] : positions)
+      : [gridPositionFor(freeCenter!)];
+
+  static Point<int> gridPositionFor(Point<double> center) => Point(
+      (center.x * 5).floor().clamp(0, 4) + 1,
+      (center.y * 5).floor().clamp(0, 4) + 1);
+
+  static Point<double> centerForModel(Point<double> center, String model) {
+    if (model.contains('diffusion-5')) return center;
+    final grid = gridPositionFor(center);
+    return Point(gridToNormalized[grid.x]!, gridToNormalized[grid.y]!);
+  }
+
   CharacterPromptResult getPrompt({List<PromptConfig>? savedConfigs}) {
     final random = Random();
     final promptResult =

@@ -33,7 +33,7 @@ class CharacterConfigViewmodel extends ChangeNotifier {
 
   String getPositionsTexts() {
     final Point<double>? free = config.freeCenter;
-    if (free != null) {
+    if (isV5 && free != null) {
       return 'x:${free.x.toStringAsFixed(3)}, y:${free.y.toStringAsFixed(3)}';
     }
     const Map<int, String> xMapping = {
@@ -44,7 +44,7 @@ class CharacterConfigViewmodel extends ChangeNotifier {
       5: 'E',
     };
     List<String> ret = [];
-    for (final point in config.positions) {
+    for (final point in config.effectiveGridPositions) {
       String pt = '';
       pt += xMapping[point.x] ?? '';
       pt += point.y.toString();
@@ -60,7 +60,10 @@ class CharacterConfigViewmodel extends ChangeNotifier {
   }
 
   void switchPosition(Point<int> pt) {
-    if (autoPosition || config.positions.contains(pt)) return;
+    if (autoPosition ||
+        (config.freeCenter == null && config.positions.contains(pt))) {
+      return;
+    }
     // Switching to a manual grid position clears the V5 free center so the
     // two position systems never conflict.
     config.freeCenter = null;

@@ -1,3 +1,4 @@
+import 'package:nai_casrand/data/models/batch_tool_snapshot.dart';
 import 'dart:convert';
 
 import 'package:easy_localization/easy_localization.dart';
@@ -38,6 +39,13 @@ class _TestAssetLoader extends AssetLoader {
 
 class _RecordingGenerationViewmodel extends GenerationPageViewmodel {
   int enhanceRuns = 0;
+  BatchToolKind? sentTool;
+  @override
+  Future<bool> sendToolToBatch(BatchToolKind kind) async {
+    sentTool = kind;
+    return true;
+  }
+
   bool freezeSubscriptionSnapshot = false;
 
   @override
@@ -294,6 +302,39 @@ void main() {
     );
   });
 
+  testWidgets('Max displays its output and fee and follows model changes',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final config = GetIt.I<PayloadConfig>();
+    config.settings.subscriptionStatusKnown = true;
+    config.settings.subscriptionTier = 3;
+    config.settings.subscriptionActive = true;
+    config.settings.opusUsageAvailable = true;
+    (GetIt.I<GenerationPageViewmodel>() as _RecordingGenerationViewmodel)
+        .freezeSubscriptionSnapshot = true;
+    config.enhanceConfig.setImage(solidPng(1216, 832));
+    await tester.pumpWidget(
+        localizedApp(EnhancePageView(viewmodel: EnhancePageViewmodel())));
+    await tester.pumpAndSettle();
+    final maxChip = find.byKey(const Key('enhance-scale-max'));
+    expect(tester.widget<ChoiceChip>(maxChip).selected, isFalse);
+    await tester.ensureVisible(maxChip);
+    await tester.tap(maxChip);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('2144×1467 · Est. 45'), findsOneWidget);
+    expect(config.enhanceConfig.usesMax(config.paramConfig.model), isTrue);
+    config.loadParamJson({'model': 'nai-diffusion-4-5-full'});
+    await tester.pumpAndSettle();
+    expect(maxChip, findsNothing);
+    expect(find.textContaining('1856×1280'), findsWidgets);
+    expect(
+        tester
+            .widget<ChoiceChip>(find.byKey(const Key('enhance-scale-1.5')))
+            .selected,
+        isTrue);
+  });
+
   testWidgets('a typical portrait offers 1.5x but not 2x', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1200, 1400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -328,6 +369,31 @@ void main() {
     // The default 1.5x is no longer available, so the config fell back to
     // the largest option that still fits.
     expect(config.scale, 1.0);
+  });
+
+  testWidgets(
+      'Enhance batch button fits narrow screen and navigates after sending',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final config = GetIt.I<PayloadConfig>();
+    config.paramConfig.model = 'nai-diffusion-5-full';
+    config.enhanceConfig.setImage(solidPng(64, 64));
+    await tester.pumpWidget(
+        localizedApp(EnhancePageView(viewmodel: EnhancePageViewmodel())));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    final button = find.byKey(const Key('enhance-send-to-batch'));
+    expect(button.hitTestable(), findsOneWidget);
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+    expect(
+        (GetIt.I<GenerationPageViewmodel>() as _RecordingGenerationViewmodel)
+            .sentTool,
+        BatchToolKind.enhance);
+    expect(GetIt.I<NavigationRequest>().requestedDestination.value,
+        AppDestination.generation);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('running Enhance goes through its own chain, not Img2Img', (

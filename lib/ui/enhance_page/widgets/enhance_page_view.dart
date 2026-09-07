@@ -1,3 +1,5 @@
+import 'package:nai_casrand/data/models/batch_tool_snapshot.dart';
+import 'package:nai_casrand/ui/generation_page/widgets/tool_batch_send_button.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
@@ -31,6 +33,7 @@ class EnhancePageView extends StatelessWidget {
     return ListenableBuilder(
       listenable: Listenable.merge([
         viewmodel,
+        viewmodel.payloadConfig,
         viewmodel.config,
         generationViewmodel,
         if (handoff != null) handoff!,
@@ -60,17 +63,13 @@ class EnhancePageView extends StatelessWidget {
 
   Widget _buildPrimaryAction(BuildContext context) {
     generationViewmodel.refreshSubscriptionSnapshot();
-    final config = viewmodel.config;
-    final target = config.hasImage && viewmodel.availableScales.isNotEmpty
-        ? viewmodel.targetSize
-        : null;
+    final target = viewmodel.canGenerate ? viewmodel.targetSize : null;
     final cost = viewmodel.estimateCost();
     final badge = formatAnlasBadge(cost);
-    final busy = generationViewmodel.isPreparingEnhance ||
+    final busy = generationViewmodel.isBusyPreparingOrSingle ||
         generationViewmodel.commandStatus.isGenerationActive.value ||
         (generationViewmodel.currentCommand?.isExecuting.value ?? false);
-    final enabled =
-        config.hasImage && viewmodel.availableScales.isNotEmpty && !busy;
+    final enabled = viewmodel.canGenerate && !busy;
     final label = target == null
         ? tr('enhance_run')
         : badge.isEmpty
@@ -80,19 +79,30 @@ class EnhancePageView extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
       child: Align(
         alignment: Alignment.centerRight,
-        child: Tooltip(
-          message: formatEstimatedAnlasTooltip(cost),
-          child: FilledButton.icon(
-            key: const Key('enhance-run'),
-            onPressed: enabled ? () => _runEnhance(context) : null,
-            icon: busy
-                ? const SizedBox.square(
-                    dimension: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.auto_awesome),
-            label: Text(label),
-          ),
+        child: Wrap(
+          alignment: WrapAlignment.end,
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            Tooltip(
+              message: formatEstimatedAnlasTooltip(cost),
+              child: FilledButton.icon(
+                key: const Key('enhance-run'),
+                onPressed: enabled ? () => _runEnhance(context) : null,
+                icon: busy
+                    ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.auto_awesome),
+                label: Text(label),
+              ),
+            ),
+            ToolBatchSendButton(
+                kind: BatchToolKind.enhance,
+                viewmodel: generationViewmodel,
+                enabled: enabled),
+          ],
         ),
       ),
     );
@@ -229,7 +239,7 @@ class EnhancePageView extends StatelessWidget {
               leading: const Icon(Icons.info_outline),
               title: Text(tr('image_generation_requires_source')),
             )
-          else if (scales.isEmpty)
+          else if (scales.isEmpty && !viewmodel.canUseMax)
             ListTile(
               leading: const Icon(Icons.info_outline),
               title: Text(tr('enhance_too_large')),
@@ -241,21 +251,31 @@ class EnhancePageView extends StatelessWidget {
               child: Wrap(
                 spacing: 6,
                 runSpacing: 6,
-                children: (!config.hasImage ? enhanceScaleOptions : scales)
-                    .map((scale) {
-                  final size =
-                      config.hasImage ? viewmodel.targetSizeFor(scale) : null;
-                  return ChoiceChip(
-                    key: Key('enhance-scale-$scale'),
-                    selected: (config.scale - scale).abs() < 1e-6,
-                    onSelected: (_) => viewmodel.setScale(scale),
-                    label: Text(
-                      size == null
-                          ? '${scale}x'
-                          : '${scale}x  ${size.width}×${size.height}',
+                children: [
+                  ...(!config.hasImage ? enhanceScaleOptions : scales)
+                      .map((scale) {
+                    final size =
+                        config.hasImage ? viewmodel.targetSizeFor(scale) : null;
+                    return ChoiceChip(
+                      key: Key('enhance-scale-$scale'),
+                      selected: !viewmodel.usesMax &&
+                          (config.scale - scale).abs() < 1e-6,
+                      onSelected: (_) => viewmodel.setScale(scale),
+                      label: Text(
+                        size == null
+                            ? '${scale}x'
+                            : '${scale}x  ${size.width}×${size.height}',
+                      ),
+                    );
+                  }),
+                  if (viewmodel.canUseMax)
+                    ChoiceChip(
+                      key: const Key('enhance-scale-max'),
+                      selected: viewmodel.usesMax,
+                      onSelected: (_) => viewmodel.selectMax(),
+                      label: const Text('Max ✨'),
                     ),
-                  );
-                }).toList(),
+                ],
               ),
             ),
           ),

@@ -38,8 +38,17 @@ class NovelAiImg2ImgNormalizer {
       throw const FormatException('Failed to decode img2img base image.');
     }
     final oriented = img.bakeOrientation(decoded);
-    var pixels = _canvasRoundTrip(oriented);
-    if (_hasStealthPngComp(pixels)) {
+    final pngFastPath = img.PngDecoder().isValidFile(imageBytes);
+    var pixels = oriented;
+    // The website decodes PNG bytes directly before removing carrier alpha.
+    // A Canvas round-trip first can irreversibly change RGB at alpha 254.
+    if (pngFastPath &&
+        pixels.width * pixels.height <= 0x1000000 &&
+        _hasStealthPngComp(pixels)) {
+      pixels = _removeStealthCarrierAlpha(pixels);
+    }
+    pixels = _canvasRoundTrip(pixels);
+    if (!pngFastPath && _hasStealthPngComp(pixels)) {
       pixels = _removeStealthCarrierAlpha(pixels);
     }
     if (pixels.width != targetWidth || pixels.height != targetHeight) {
@@ -84,10 +93,35 @@ class NovelAiImg2ImgNormalizer {
     return output;
   }
 
-  static int _canvasChannel(int channel, int alpha) {
-    if (alpha == 0) return 0;
-    final premultiplied = (channel * alpha / 255).round();
-    return (premultiplied * 255 / alpha).round().clamp(0, 255);
+  static final Uint8List _canvasChannels = _buildCanvasChannels();
+
+  static int _canvasChannel(int channel, int alpha) =>
+      _canvasChannels[(alpha << 8) | channel];
+
+  static Uint8List _buildCanvasChannels() {
+    final result = Uint8List(256 * 256);
+    final float = Float32List(1);
+    double f32(double value) {
+      float[0] = value;
+      return float[0];
+    }
+
+    // Canvas uses normalized float32 arithmetic and nearest-even conversion.
+    // Integer division with round() disagrees at some transparent boundaries.
+    final unit = f32(1 / 255);
+    for (var alpha = 1; alpha < 256; alpha++) {
+      final reciprocal = f32(1 / f32(alpha * unit));
+      for (var channel = 0; channel < 256; channel++) {
+        final premultiplied = (channel * alpha + 127) ~/ 255;
+        final value = f32(f32(f32(premultiplied * unit) * reciprocal) * 255);
+        final lower = value.floor();
+        final rounded = value - lower == 0.5
+            ? (lower.isEven ? lower : lower + 1)
+            : value.round();
+        result[(alpha << 8) | channel] = rounded.clamp(0, 255);
+      }
+    }
+    return result;
   }
 
   static bool _hasStealthPngComp(img.Image image) {

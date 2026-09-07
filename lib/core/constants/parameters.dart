@@ -78,6 +78,10 @@ const Map<String, String> inpaintModelMapping = {
   'nai-diffusion-furry-3': 'nai-diffusion-furry-3-inpainting',
 };
 
+/// Resolve the request model before preparing pixels, captions or costs.
+String effectiveGenerationModel(String model, {required bool inpaint}) =>
+    inpaint ? inpaintModelMapping[model] ?? model : model;
+
 const Map<String, String> sourceToModel = {
   'NovelAI Diffusion V5 0ADF9AB7': 'nai-diffusion-5-full',
   'NovelAI Diffusion V5 657484A5': 'nai-diffusion-5-full',

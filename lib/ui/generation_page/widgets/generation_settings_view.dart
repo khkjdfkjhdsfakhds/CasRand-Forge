@@ -1,3 +1,5 @@
+import 'package:nai_casrand/data/models/batch_tool_snapshot.dart';
+import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:nai_casrand/core/constants/defaults.dart';
@@ -18,6 +20,10 @@ class GenerationSettingsView extends StatelessWidget {
       builder: (context, _) {
         final paramConfig = viewmodel.payloadConfig.paramConfig;
         final settings = viewmodel.payloadConfig.settings;
+        final tool = viewmodel.activeBatchTool;
+        final enhance = tool?.kind == BatchToolKind.enhance;
+        final combinationsAvailable = tool == null ||
+            enhance && viewmodel.payloadConfig.promptMode == PromptMode.random;
         final cycle = viewmodel.totalCombinationCycle;
         final oversized = viewmodel.allCombinationsTooLarge;
         final displayedGenerationCount = viewmodel.lockToAllCombinations
@@ -52,10 +58,12 @@ class GenerationSettingsView extends StatelessWidget {
                   '${context.tr('total_combinations')}${context.tr('colon')}$cycle${oversized ? '\n${context.tr('generation_count_exceeds_limit')}' : ''}',
                 ),
                 value: viewmodel.lockToAllCombinations,
-                onChanged: (value) {
-                  if (value == null) return;
-                  viewmodel.setLockToAllCombinations(value);
-                },
+                onChanged: combinationsAvailable
+                    ? (value) {
+                        if (value == null) return;
+                        viewmodel.setLockToAllCombinations(value);
+                      }
+                    : null,
               ),
               EditableListTile(
                 key: const Key('generation-settings-interval'),
@@ -70,22 +78,29 @@ class GenerationSettingsView extends StatelessWidget {
                 key: const Key('generation-settings-image-size'),
                 title: Text(context.tr('generation_image_size')),
                 subtitle: Text(
-                  paramConfig.sizes
-                      .map((size) => '${size.width} × ${size.height}')
-                      .join(' || '),
+                  tool != null
+                      ? '${tool.outputWidth} × ${tool.outputHeight}'
+                      : paramConfig.sizes
+                          .map((size) => '${size.width} × ${size.height}')
+                          .join(' || '),
                 ),
                 leading: const Icon(Icons.photo_size_select_large),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: () => _showSizeSelectionDialog(context),
+                onTap: tool == null
+                    ? () => _showSizeSelectionDialog(context)
+                    : null,
               ),
-              CheckboxListTile(
-                key: const Key('generation-settings-random-seed'),
-                secondary: const Icon(Icons.shuffle),
-                title: Text(context.tr('use_random_seed')),
-                value: paramConfig.randomSeed,
-                onChanged: viewmodel.setRandomSeedEnabled,
-              ),
-              if (!paramConfig.randomSeed)
+              if (tool == null || enhance)
+                CheckboxListTile(
+                  key: const Key('generation-settings-random-seed'),
+                  secondary: const Icon(Icons.shuffle),
+                  title: Text(context.tr('use_random_seed')),
+                  value: enhance || paramConfig.randomSeed,
+                  subtitle: enhance ? Text(tr('batch_enhance_seed')) : null,
+                  onChanged:
+                      tool == null ? viewmodel.setRandomSeedEnabled : null,
+                ),
+              if (tool == null && !paramConfig.randomSeed)
                 Padding(
                   padding: const EdgeInsets.only(left: 20),
                   child: EditableListTile(

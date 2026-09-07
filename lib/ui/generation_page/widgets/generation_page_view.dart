@@ -1,3 +1,4 @@
+import 'package:nai_casrand/data/models/batch_tool_snapshot.dart';
 import 'dart:math';
 
 import 'package:easy_localization/easy_localization.dart';
@@ -70,8 +71,23 @@ class _GenerationPageViewState extends State<GenerationPageView> {
           int? findResultIndex(Key key) => indexesByKey[key];
           final useClassicMode =
               viewmodel.payloadConfig.settings.resultDisplayMode == 'classic';
+          final tool = viewmodel.activeBatchTool;
           return Column(
             children: [
+              if (tool != null)
+                ListTile(
+                  key: const Key('active-batch-tool-summary'),
+                  leading: const Icon(Icons.auto_awesome),
+                  title: Text(tool.summary),
+                  subtitle: Text(tr(tool.usesPrompt
+                      ? 'batch_tool_same_source'
+                      : 'batch_tool_no_prompt')),
+                  trailing: IconButton(
+                    tooltip: tr('advanced_features_status'),
+                    icon: const Icon(Icons.tune),
+                    onPressed: () => _showAdvancedFeaturesDialog(context),
+                  ),
+                ),
               Expanded(
                 child: useClassicMode
                     ? GridView.builder(
@@ -243,7 +259,11 @@ class _GenerationPageViewState extends State<GenerationPageView> {
 
   bool _hasAdvancedResources() {
     final config = viewmodel.payloadConfig;
-    return config.i2iConfig.hasImage ||
+    return config.enhanceConfig.hasImage ||
+        config.directorToolConfig.hasImage ||
+        config.enhanceBatchTool != null ||
+        config.directorBatchTool != null ||
+        config.i2iConfig.hasImage ||
         config.vibeConfigList.isNotEmpty ||
         config.vibeConfigListV4.isNotEmpty ||
         config.preciseReferenceConfigList.isNotEmpty;
@@ -258,7 +278,22 @@ class _GenerationPageViewState extends State<GenerationPageView> {
           final preciseSupported = ImageImportCapabilities.forModel(
             config.paramConfig.model,
           ).supports(ImageImportAction.preciseReference);
+          final toolActive = config.activeBatchTool != null;
+          final canEdit = viewmodel.canChangeBatchTool;
+          Future<void> toggleTool(BatchToolKind kind, bool enabled) async {
+            final pending = viewmodel.setBatchToolEnabled(kind, enabled);
+            setState(() {});
+            final changed = await pending;
+            if (!context.mounted) return;
+            setState(() {});
+            if (!changed && viewmodel.toolBatchError != null) {
+              showErrorBar(context,
+                  '${tr('image_handoff_failed')}: ${viewmodel.toolBatchError}');
+            }
+          }
+
           return AlertDialog(
+            scrollable: true,
             title: Text(tr('advanced_features_status')),
             content: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 520),
@@ -266,17 +301,53 @@ class _GenerationPageViewState extends State<GenerationPageView> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   SwitchListTile(
+                    key: const Key('batch-enhance-toggle'),
+                    title: const Text('Enhance / Max'),
+                    subtitle: Text(config.enhanceBatchTool?.summary ??
+                        tr(config.enhanceConfig.hasImage
+                            ? 'resource_ready'
+                            : 'resource_missing')),
+                    value: config.batchToolKind == BatchToolKind.enhance,
+                    onChanged: canEdit &&
+                            (config.enhanceBatchTool != null ||
+                                config.enhanceConfig.hasImage)
+                        ? (value) => toggleTool(BatchToolKind.enhance, value)
+                        : null,
+                  ),
+                  SwitchListTile(
+                    key: const Key('batch-director-toggle'),
+                    title: const Text('Director Tools'),
+                    subtitle: Text(config.directorBatchTool?.summary ??
+                        tr(config.directorToolConfig.hasImage
+                            ? 'resource_ready'
+                            : 'resource_missing')),
+                    value: config.batchToolKind == BatchToolKind.director,
+                    onChanged: canEdit &&
+                            (config.directorBatchTool != null ||
+                                config.directorToolConfig.hasImage)
+                        ? (value) => toggleTool(BatchToolKind.director, value)
+                        : null,
+                  ),
+                  if (viewmodel.isSendingToolToBatch)
+                    const LinearProgressIndicator(),
+                  if (toolActive)
+                    Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Text(tr('batch_tool_resources_paused')),
+                    ),
+                  SwitchListTile(
                     title: Text(tr('i2i_inpaint')),
                     subtitle: Text(config.i2iConfig.hasImage
                         ? tr('resource_ready')
                         : tr('resource_missing')),
                     value: config.i2iEnabled,
-                    onChanged: config.i2iConfig.hasImage
-                        ? (value) => setState(() {
-                              config.setI2iEnabled(value);
-                              viewmodel.advancedFeaturesChanged();
-                            })
-                        : null,
+                    onChanged:
+                        canEdit && !toolActive && config.i2iConfig.hasImage
+                            ? (value) => setState(() {
+                                  config.setI2iEnabled(value);
+                                  viewmodel.advancedFeaturesChanged();
+                                })
+                            : null,
                   ),
                   SwitchListTile(
                     title: const Text('Vibe Transfer'),
@@ -285,8 +356,10 @@ class _GenerationPageViewState extends State<GenerationPageView> {
                         ? tr('resource_ready')
                         : tr('resource_missing')),
                     value: config.vibeEnabled,
-                    onChanged: config.vibeConfigList.isNotEmpty ||
-                            config.vibeConfigListV4.isNotEmpty
+                    onChanged: canEdit &&
+                            !toolActive &&
+                            (config.vibeConfigList.isNotEmpty ||
+                                config.vibeConfigListV4.isNotEmpty)
                         ? (value) {
                             final disabledPrecise =
                                 value && config.preciseReferenceEnabled;
@@ -317,7 +390,9 @@ class _GenerationPageViewState extends State<GenerationPageView> {
                             ? tr('resource_ready')
                             : tr('resource_missing')),
                     value: config.preciseReferenceEnabled,
-                    onChanged: preciseSupported &&
+                    onChanged: canEdit &&
+                            !toolActive &&
+                            preciseSupported &&
                             config.preciseReferenceConfigList.isNotEmpty
                         ? (value) {
                             final disabledVibe = value && config.vibeEnabled;

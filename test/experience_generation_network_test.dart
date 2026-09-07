@@ -406,7 +406,8 @@ void main() {
     vm.startGeneration();
     await _networkPump(tester);
     api.successSized(0);
-    await _networkPump(tester);
+    // The next source is now rebuilt on a worker isolate.
+    await _until(tester, () => api.requests.length == 2);
     expect(api.requests.length, 2);
     api.error(1);
     await _until(

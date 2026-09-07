@@ -134,8 +134,11 @@ class PromptTabViewmodel extends ChangeNotifier {
     notifyListeners();
   }
 
+  int get maxCharacters => paramConfig.model.contains('diffusion-5') ? 23 : 6;
+  bool get canAddCharacter => characterConfigList.length < maxCharacters;
+
   void addCharacter() {
-    if (characterConfigList.length >= 6) return;
+    if (!canAddCharacter) return;
     characterConfigList.add(CharacterConfig.fromEmpty());
     notifyListeners();
   }

@@ -1,4 +1,4 @@
-import 'dart:math';
+import 'package:nai_casrand/data/use_cases/enhance_request_options.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:nai_casrand/data/models/displayed_image_size.dart';
@@ -27,7 +27,7 @@ const List<EnhancePreset> enhancePresets = [
 
 /// Magnifications the official Enhance panel can offer. Which of them are
 /// actually available depends on the source size: an option is shown only
-/// while its 64-aligned target stays within the maximum request area, so a
+/// while its exact target is permitted by the website and its area cap, so a
 /// large image may offer 1x only, a typical portrait 1x/1.5x, and a small
 /// image all the way up to 2x.
 const List<double> enhanceScaleOptions = [1.0, 1.5, 2.0];
@@ -44,6 +44,43 @@ class EnhanceConfig with ChangeNotifier {
 
   /// Magnification applied to the source image size.
   double scale;
+  bool maxSelected = false;
+
+  bool canUseMax(String model) {
+    if (!hasImage ||
+        width <= 0 ||
+        height <= 0 ||
+        !EnhanceRequestOptions.supportsMax(model) ||
+        width * height >= 0.8 * officialEnhanceMaxPixels) {
+      return false;
+    }
+    // The website checks the source area here, before final API alignment.
+    try {
+      EnhanceRequestOptions.costSize(width, height);
+      return true;
+    } on ArgumentError {
+      return false;
+    }
+  }
+
+  bool usesMax(String model) => maxSelected && canUseMax(model);
+
+  GenerationSize outputSize(String model) => usesMax(model)
+      ? EnhanceRequestOptions.outputSize(width, height)
+      : EnhanceRequestOptions.apiSize(targetSize.width, targetSize.height);
+
+  GenerationSize requestSize(String model) => usesMax(model)
+      ? GenerationSize(width: width, height: height)
+      : targetSize;
+
+  GenerationSize costSize(String model) => usesMax(model)
+      ? EnhanceRequestOptions.costSize(width, height)
+      : EnhanceRequestOptions.apiSize(targetSize.width, targetSize.height);
+
+  void selectMax() {
+    maxSelected = true;
+    notifyListeners();
+  }
 
   /// Index into [enhancePresets] for the strength/noise pair.
   int presetIndex;
@@ -71,25 +108,28 @@ class EnhanceConfig with ChangeNotifier {
       showIndividualSettings ? individualStrength : preset.strength;
   double get noise => showIndividualSettings ? individualNoise : preset.noise;
 
-  /// Target size for a magnification: the scaled side rounded to the nearest
-  /// multiple of 64, with a 64 floor.
-  GenerationSize targetSizeFor(double magnification) {
-    int snap(int value) => max(64, (value / 64).round() * 64);
-    return GenerationSize(
-      width: snap((magnification * width).round()),
-      height: snap((magnification * height).round()),
-    );
-  }
+  /// Conditioning uses the exact scaled sides. The final API request and
+  /// displayed output use 64-pixel alignment after image normalization.
+  GenerationSize targetSizeFor(double magnification) => GenerationSize(
+        width: (magnification * width).floor(),
+        height: (magnification * height).floor(),
+      );
 
   GenerationSize get targetSize => targetSizeFor(scale);
 
-  /// Magnifications whose 64-aligned target still fits NovelAI's maximum
-  /// request area.
   List<double> get availableScales {
     if (!hasImage) return const [];
+    if ((width == 832 && height == 1216) || (width == 1216 && height == 832)) {
+      return const [1.0, 1.5];
+    }
     return enhanceScaleOptions.where((option) {
-      final size = targetSizeFor(option);
-      return size.width * size.height <= officialEnhanceMaxPixels;
+      final scaledWidth = width * option;
+      final scaledHeight = height * option;
+      return scaledWidth > 0 &&
+          scaledHeight > 0 &&
+          scaledWidth % 64 == 0 &&
+          scaledHeight % 64 == 0 &&
+          scaledWidth * scaledHeight <= officialEnhanceMaxPixels;
     }).toList(growable: false);
   }
 
@@ -103,6 +143,7 @@ class EnhanceConfig with ChangeNotifier {
     required int width,
     required int height,
   }) {
+    maxSelected = false;
     this.width = width;
     this.height = height;
     _imageBytes = bytes;
@@ -125,6 +166,7 @@ class EnhanceConfig with ChangeNotifier {
   }
 
   void setScale(double value) {
+    maxSelected = false;
     scale = value;
     notifyListeners();
   }

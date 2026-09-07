@@ -160,7 +160,7 @@ class PromptTabView extends StatelessWidget {
                 title: Text(tr('add_character')),
                 leading: const Icon(Icons.person_add),
                 onTap: () => viewmodel.addCharacter(),
-                enabled: viewmodel.characterConfigList.length < 6,
+                enabled: viewmodel.canAddCharacter,
               )),
     );
     showDialog(

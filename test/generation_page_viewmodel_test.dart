@@ -1,3 +1,7 @@
+import 'package:nai_casrand/data/models/prompt_token_snapshot.dart';
+import 'package:nai_casrand/ui/parameters_config/widgets/prompt_token_usage.dart';
+import 'package:nai_casrand/data/models/batch_tool_snapshot.dart';
+import 'package:nai_casrand/data/use_cases/enhance_request_options.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
@@ -433,6 +437,7 @@ class _WorkerRecordingViewmodel extends GenerationPageViewmodel {
   I2iRequestBatch? lastPresetBatch;
   int? lastSeedOverride;
   String? lastPromptSuffix;
+  EnhanceRequestOptions? lastEnhanceOptions;
 
   @override
   Command<void, InfoCardContent> createGenerationCommand({
@@ -440,11 +445,14 @@ class _WorkerRecordingViewmodel extends GenerationPageViewmodel {
     I2iRequestBatch? presetBatch,
     int? seedOverride,
     String promptSuffix = '',
+    EnhanceRequestOptions? enhanceOptions,
+    BatchToolSnapshot? toolSnapshot,
   }) {
     createdWorkers.add(workerIndex);
     lastPresetBatch = presetBatch;
     lastSeedOverride = seedOverride;
     lastPromptSuffix = promptSuffix;
+    lastEnhanceOptions = enhanceOptions;
     return Command.createAsyncNoParam(
       () async => InfoCardContent(
         title: 'worker-$workerIndex',
@@ -508,6 +516,141 @@ void main() {
     await GetIt.instance.reset();
   });
 
+  testWidgets('pending token count never delays actual generation submission',
+      (tester) async {
+    final config = GetIt.I<PayloadConfig>()..promptMode = PromptMode.fixed;
+    config.paramConfig.model = 'nai-diffusion-5-full';
+    config.rootPromptConfig =
+        PayloadConfig.fixedPromptConfig('a girl with blue eyes');
+    config.settings
+      ..debugApiEnabled = true
+      ..generationCount = 1
+      ..generationIntervalSec = 0;
+    final pendingCount = Completer<List<int>>();
+    var countCalls = 0;
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: PromptTokenUsage(
+                config: config,
+                counter: (_, __) {
+                  countCalls++;
+                  return pendingCount.future;
+                }))));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(countCalls, 1);
+    final bytes =
+        Uint8List.fromList(img.encodePng(img.Image(width: 64, height: 64)));
+    final api = _FakeApiService(
+        ApiResponse(status: '200', data: directorResponseZip([bytes])));
+    final vm = GenerationPageViewmodel(
+        apiService: api, fileService: _RecordingFileService());
+    vm.startGeneration();
+    await waitForCurrentCommand(tester, vm);
+    expect(api.calls, 1);
+    expect(pendingCount.isCompleted, isFalse);
+    expect(PromptTokenSnapshots.instance.latest(config)!.positive,
+        ['a girl with blue eyes']);
+    expect(vm.commandList.single.value.imageBytes, isNotNull);
+    vm.dispose();
+    await tester.pumpWidget(const SizedBox.shrink());
+    pendingCount.complete([5, 0]);
+    await tester.pump();
+  });
+
+  testWidgets(
+      'successful corrupt response is never automatically submitted again',
+      (tester) async {
+    final bytes = Uint8List.fromList([80, 75, 3, 4, 0]);
+    final api = _FakeApiService(ApiResponse(status: '200', data: bytes));
+    final vm = GenerationPageViewmodel(
+      apiService: api,
+      fileService: _RecordingFileService(),
+    );
+    final config = GetIt.I<PayloadConfig>();
+    config.paramConfig.model = 'nai-diffusion-5-full';
+    config.settings
+      ..debugApiEnabled = true
+      ..generationCount = 1
+      ..generationIntervalSec = 0;
+    vm.startGeneration();
+    await waitForCurrentCommand(tester, vm);
+    await tester.pump(const Duration(seconds: 6));
+    await waitForCurrentCommand(tester, vm);
+    await tester.pump(const Duration(seconds: 16));
+    await waitForCurrentCommand(tester, vm);
+    expect(api.calls, 1);
+    final retained = vm.commandList.single.value.receivedResponses.single;
+    expect(retained.bytes, orderedEquals(bytes));
+    expect(retained.logicalTaskId, startsWith('generation:'));
+    expect(retained.logicalTaskId, endsWith(':1'));
+    expect(retained.responseIndex, 0);
+    expect(
+        vm.commandList.single.value
+            .copyWith(anlasRemaining: 42)
+            .receivedResponses
+            .single,
+        same(retained));
+    expect(vm.commandStatus.currentGenerationCount, 0);
+    expect(vm.commandStatus.isWaitingForNextGeneration.value, isFalse);
+    expect(vm.commandList.single.value.info,
+        contains('automatic resubmission stopped'));
+    vm.dispose();
+  });
+
+  testWidgets('successful infill response survives local compositing failure',
+      (tester) async {
+    final source = img.Image(width: 64, height: 64, numChannels: 4);
+    img.fill(source, color: img.ColorRgba8(20, 100, 180, 255));
+    final mask = img.Image(width: 64, height: 64, numChannels: 3);
+    img.fill(mask, color: img.ColorRgb8(255, 255, 255));
+    final response = directorResponseZip([
+      Uint8List.fromList(img.encodePng(img.Image(width: 32, height: 32))),
+    ]);
+    final api = _FakeApiService(ApiResponse(status: '200', data: response));
+    final config = GetIt.I<PayloadConfig>();
+    config.paramConfig.model = 'nai-diffusion-5-full';
+    config.i2iConfig
+      ..setImage(Uint8List.fromList(img.encodePng(source)))
+      ..setMask(Uint8List.fromList(img.encodePng(mask)), []);
+    config.i2iEnabled = true;
+    config.settings
+      ..debugApiEnabled = true
+      ..generationCount = 1
+      ..generationIntervalSec = 0;
+    final prepared = await tester.runAsync(() =>
+        PrepareI2iRequestUseCase(config: config.i2iConfig)
+            .planBatch(targetWidth: 64, targetHeight: 64));
+    final vm = GenerationPageViewmodel(
+      apiService: api,
+      fileService: _RecordingFileService(),
+      preparationFeedbackBarrier: _skipPreparationFeedbackBarrier,
+      prepareI2iBatch: (
+              {required config,
+              required targetWidth,
+              required targetHeight,
+              required transparentBackground}) async =>
+          prepared,
+    );
+    vm.startGeneration();
+    for (var attempt = 0;
+        attempt < 100 && vm.commandList.single.value.receivedResponses.isEmpty;
+        attempt++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)));
+      await tester.pump(const Duration(milliseconds: 1));
+    }
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pump(const Duration(seconds: 16));
+    expect(api.calls, 1);
+    final content = vm.commandList.single.value;
+    expect(content.info, contains('automatic resubmission stopped'));
+    expect(content.info, contains('does not match'));
+    expect(content.receivedResponses.single.bytes, orderedEquals(response));
+    expect(
+        vm.commandStatus.outcomeUnknownFor(vm.commandList.single), isNotNull);
+    vm.dispose();
+  });
+
   test('Enhance prepares once in background and forwards website overrides',
       () async {
     final viewmodel = _WorkerRecordingViewmodel();
@@ -527,10 +670,13 @@ void main() {
     expect(viewmodel.isPreparingEnhance, isFalse);
     expect(viewmodel.createdWorkers, [0]);
     expect(viewmodel.lastSeedOverride, inInclusiveRange(0, 0xFFFFFFFF));
-    expect(viewmodel.lastPromptSuffix, '-2::upscaled, blurry::,');
+    expect(viewmodel.lastPromptSuffix, isEmpty);
     expect(viewmodel.lastPresetBatch?.plans, hasLength(1));
     final plan = viewmodel.lastPresetBatch!.plans.single;
-    expect(base64Decode(plan.imageB64), sourceBytes);
+    final prepared = img.decodePng(base64Decode(plan.imageB64))!;
+    expect(prepared.width, plan.width);
+    expect(prepared.height, plan.height);
+    expect(prepared.getPixel(0, 0).r, 60);
     expect(config.enhanceConfig.imageBytes, sourceBytes);
     expect(plan.width, config.enhanceConfig.targetSize.width);
     expect(plan.height, config.enhanceConfig.targetSize.height);
@@ -538,6 +684,24 @@ void main() {
     expect(plan.noise, config.enhanceConfig.noise);
     expect(config.rootPromptConfig.strs, originalPrompt);
     expect(config.paramConfig.seed, originalSeed);
+  });
+
+  test('Max prepares the original size and retains source transparency',
+      () async {
+    final viewmodel = _WorkerRecordingViewmodel();
+    final config = GetIt.I<PayloadConfig>();
+    final image = img.Image(width: 64, height: 64, numChannels: 4);
+    img.fill(image, color: img.ColorRgba8(60, 90, 150, 128));
+    config.enhanceConfig.setImage(Uint8List.fromList(img.encodePng(image)));
+    config.enhanceConfig.selectMax();
+    expect(await viewmodel.runEnhanceGeneration(), isTrue);
+    expect(viewmodel.lastEnhanceOptions?.upscale, isTrue);
+    final plan = viewmodel.lastPresetBatch!.plans.single;
+    expect(plan.width, 64);
+    expect(plan.height, 64);
+    final prepared = img.decodePng(base64Decode(plan.imageB64))!;
+    expect(prepared.width, 64);
+    expect(prepared.getPixel(0, 0).a, 128);
   });
 
   testWidgets('Remove Background adds Masked, Generated and Blend results', (
@@ -2021,6 +2185,129 @@ void main() {
     viewmodel.dispose();
   });
 
+  for (final model in [
+    'nai-diffusion-5-full',
+    'nai-diffusion-5-curated',
+    'nai-diffusion-4-5-full'
+  ]) {
+    for (final transparent in [false, true]) {
+      for (final inpaint in [false, true]) {
+        testWidgets(
+            '$model I2I input alpha is independent of output transparent $transparent, inpaint $inpaint',
+            (tester) async {
+          final source = img.Image(width: 64, height: 64, numChannels: 4);
+          img.fill(source, color: img.ColorRgba8(80, 120, 160, 128));
+          final bytes = Uint8List.fromList(img.encodePng(source));
+          final api = _FakeApiService(
+              ApiResponse(status: '200', data: directorResponseZip([bytes])));
+          final vm = GenerationPageViewmodel(
+              apiService: api,
+              fileService: _RecordingFileService(),
+              preparationFeedbackBarrier: () async {});
+          final config = GetIt.I<PayloadConfig>();
+          config.settings.debugApiEnabled = true;
+          config.paramConfig
+            ..model = model
+            ..transparentBackground = transparent;
+          config.i2iConfig
+            ..setImage(bytes)
+            ..setRequestSize(const GenerationSize(width: 64, height: 64),
+                mode: I2iSizeMode.manual);
+          if (inpaint) {
+            final mask = img.Image(width: 64, height: 64, numChannels: 4);
+            img.fill(mask, color: img.ColorRgba8(255, 255, 255, 255));
+            config.i2iConfig
+                .setMask(Uint8List.fromList(img.encodePng(mask)), []);
+          }
+          config.noteI2iImported(replacing: false);
+          vm.runSingleGeneration();
+          for (var i = 0;
+              i < 1000 && (vm.currentCommand?.isExecuting.value ?? true);
+              i++) {
+            await tester.runAsync(
+                () => Future<void>.delayed(const Duration(milliseconds: 2)));
+            await tester.pump(const Duration(milliseconds: 10));
+          }
+          expect(api.requests, hasLength(1),
+              reason: vm.currentCommand?.value.info);
+          final image = img.decodePng(base64Decode(
+              api.requests.single.payload['parameters']['image']))!;
+          expect(
+              image.getPixel(32, 32).a,
+              model.contains('diffusion-5') &&
+                      !(inpaint && model.endsWith('curated'))
+                  ? 128
+                  : 255);
+          expect(config.i2iConfig.imageBytes, bytes);
+          vm.dispose();
+        });
+      }
+    }
+  }
+
+  testWidgets(
+      'Curated inpaint preview uses V4.5 fee and changes back for plain I2I',
+      (tester) async {
+    final config = GetIt.I<PayloadConfig>();
+    config.paramConfig
+      ..model = 'nai-diffusion-5-curated'
+      ..steps = 28;
+    config.settings
+      ..subscriptionStatusKnown = true
+      ..subscriptionActive = false
+      ..subscriptionTier = 0;
+    final source = img.Image(width: 512, height: 512, numChannels: 4);
+    img.fill(source, color: img.ColorRgba8(10, 20, 30, 128));
+    config.i2iConfig
+      ..setImage(Uint8List.fromList(img.encodePng(source)))
+      ..setStrength(.6)
+      ..setRequestSize(const GenerationSize(width: 512, height: 512),
+          mode: I2iSizeMode.manual);
+    final mask = img.Image(width: 512, height: 512, numChannels: 4);
+    img.fill(mask, color: img.ColorRgba8(255, 255, 255, 255));
+    config.i2iConfig.setMask(Uint8List.fromList(img.encodePng(mask)), []);
+    config.noteI2iImported(replacing: false);
+    final vm = _NoSubscriptionRefreshViewmodel();
+    vm.refreshCostEstimate();
+    for (var i = 0; i < 1000 && vm.nextCostEstimate.value == null; i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 2)));
+      await tester.pump(const Duration(milliseconds: 10));
+    }
+    final expected = estimateAnlasCost(
+        width: 512,
+        height: 512,
+        steps: 28,
+        action: 'infill',
+        strength: .6,
+        tier: 0,
+        subscriptionActive: false,
+        model: 'nai-diffusion-4-5-curated-inpainting');
+    expect(vm.nextCostEstimate.value?.anlas, expected.anlas);
+    expect(config.paramConfig.model, 'nai-diffusion-5-curated');
+    config.i2iConfig.removeMask();
+    vm.refreshCostEstimate();
+    final plainExpected = estimateAnlasCost(
+        width: 512,
+        height: 512,
+        steps: 28,
+        action: 'img2img',
+        strength: .6,
+        tier: 0,
+        subscriptionActive: false,
+        model: 'nai-diffusion-5-curated');
+    expect(plainExpected.anlas, isNot(expected.anlas));
+    for (var i = 0;
+        i < 1000 && vm.nextCostEstimate.value?.anlas != plainExpected.anlas;
+        i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 2)));
+      await tester.pump(const Duration(milliseconds: 10));
+    }
+    expect(vm.nextCostEstimate.value?.anlas, plainExpected.anlas);
+    vm.dispose();
+  });
+
   testWidgets('homepage generation keeps fixed seed despite legacy I2I flag', (
     tester,
   ) async {
@@ -2046,6 +2333,7 @@ void main() {
     final config = GetIt.I<PayloadConfig>();
     config.settings.debugApiEnabled = true;
     config.paramConfig
+      ..model = 'nai-diffusion-4-5-full'
       ..randomSeed = false
       ..seed = 424242;
     final sourceBytes = stealthCarrierPng();

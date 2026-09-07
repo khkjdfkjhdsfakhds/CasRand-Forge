@@ -66,6 +66,8 @@ void main() {
         .byKey(const Key('fixed-positive-prompt'), skipOffstage: false)
         .evaluate()
         .isEmpty) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)));
       await tester.pump(const Duration(milliseconds: 500));
       await tester.pumpAndSettle();
     }
@@ -243,5 +245,34 @@ void main() {
     await tester.tap(negative);
     await tester.pump();
     expect(textField.controller!.text, '1.2::ime89 ::');
+    final structuralField = positive;
+    await tester.ensureVisible(structuralField);
+    await tester.tap(structuralField);
+    await tester.enterText(structuralField, 'one, 1.2::two, three::');
+    await tester.pump();
+    final structuralController =
+        tester.widget<TextField>(structuralField).controller!;
+    structuralController.selection =
+        const TextSelection(baseOffset: 3, extentOffset: 0);
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(structuralController.text, '1.2::one, two, three::');
+    expect(structuralController.selection,
+        const TextSelection.collapsed(offset: 6));
+    expect(
+        tester.widget<TextField>(structuralField).focusNode!.hasFocus, isTrue);
+    final structuralUndo = tester.state<UndoHistoryState<TextEditingValue>>(
+        find.descendant(
+            of: structuralField,
+            matching: find.byType(UndoHistory<TextEditingValue>)));
+    structuralUndo.undo();
+    await tester.pump();
+    expect(structuralController.text, 'one, 1.2::two, three::');
+    structuralUndo.redo();
+    await tester.pump();
+    expect(structuralController.text, '1.2::one, two, three::');
   });
 }

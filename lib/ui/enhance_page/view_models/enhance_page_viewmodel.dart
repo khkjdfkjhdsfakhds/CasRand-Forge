@@ -1,3 +1,4 @@
+import 'package:nai_casrand/data/use_cases/enhance_request_options.dart';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -115,9 +116,23 @@ class EnhancePageViewmodel extends ChangeNotifier {
 
   List<double> get availableScales => config.availableScales;
 
-  GenerationSize targetSizeFor(double scale) => config.targetSizeFor(scale);
+  GenerationSize targetSizeFor(double scale) {
+    final size = config.targetSizeFor(scale);
+    return EnhanceRequestOptions.apiSize(size.width, size.height);
+  }
 
-  GenerationSize get targetSize => config.targetSize;
+  String get model => payloadConfig.paramConfig.model;
+  bool get canUseMax => config.canUseMax(model);
+  bool get usesMax => config.usesMax(model);
+  bool get canGenerate =>
+      config.hasImage && (usesMax || availableScales.contains(config.scale));
+  GenerationSize get targetSize => config.outputSize(model);
+
+  void selectMax() {
+    if (!canUseMax) return;
+    config.selectMax();
+    notifyListeners();
+  }
 
   EnhancePreset get preset => config.preset;
 
@@ -150,20 +165,18 @@ class EnhancePageViewmodel extends ChangeNotifier {
   /// without a source image. Enhance is a plain img2img request, so the
   /// generation cost model applies as-is.
   AnlasCost? estimateCost() {
-    if (!config.hasImage) return null;
+    if (!canGenerate) return null;
     if (!payloadConfig.settings.subscriptionStatusKnown) return null;
     final paramConfig = payloadConfig.paramConfig;
-    final target = targetSize;
-    final smActive = !paramConfig.model.contains('diffusion-4') &&
-        !paramConfig.model.contains('diffusion-5');
+    final target = config.costSize(model);
     return estimateAnlasCost(
       width: target.width,
       height: target.height,
       steps: paramConfig.steps,
       action: 'img2img',
       strength: config.strength,
-      sm: smActive && paramConfig.sm,
-      smDyn: smActive && paramConfig.smDyn,
+      sm: false,
+      smDyn: false,
       tier: payloadConfig.settings.subscriptionTier,
       subscriptionActive: payloadConfig.settings.subscriptionActive,
       model: paramConfig.model,

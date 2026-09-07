@@ -29,6 +29,29 @@ class NovelAiTextRendering {
   );
   static const _quotes = {'"': '"', '“': '”', '「': '」', "'": "'", '‘': '’'};
 
+  /// The website adds transparency to the first caption chunk, before Text:.
+  /// Only the caption portion participates in deduplication; rendered words
+  /// that happen to say "transparent background" are not a prompt tag.
+  static String appendTransparentBackground(String base) {
+    final boundary = _firstChunkBoundary(base);
+    final firstChunk = base.substring(0, boundary);
+    final text = _manualBlock.firstMatch(firstChunk);
+    final textStart = text == null ? firstChunk.length : text.end - 5;
+    final caption = firstChunk.substring(0, textStart);
+    if (RegExp(r'(^|,\s*)transparent background(?=\s*,|$)',
+            caseSensitive: false)
+        .hasMatch(caption.trimRight())) {
+      return base;
+    }
+    final prefix = caption.replaceFirst(_trailingSeparators, '');
+    final tagged = prefix.isEmpty
+        ? 'transparent background'
+        : '$prefix, transparent background';
+    final textBlock = firstChunk.substring(textStart);
+    return '$tagged${textBlock.isEmpty ? '' : ', $textBlock'}'
+        '${base.substring(boundary)}';
+  }
+
   static String appendToBase(
     String base,
     List<TextRenderingCharacter> characters, {

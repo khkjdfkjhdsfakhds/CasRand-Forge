@@ -1598,6 +1598,51 @@ void main() {
         recordedEntries, ['1.1::masterpiece::', '1.2::1girl::', '0.9::solo::']);
   });
 
+  testWidgets(
+      'Control selection midpoint preserves candidates and supports undo and IME',
+      (tester) async {
+    var entries = <String>[];
+    await pumpEditor(tester,
+        entries: const ['one, two', 'three'],
+        onChanged: (value) => entries = value);
+    final field = find.byKey(const Key('prompt-entry-editor'));
+    await tester.tap(field);
+    await tester.pump();
+    final controller = controllerFor(tester);
+    // Both selection endpoints may cross a candidate boundary. Only the
+    // midpoint's candidate is editable; reversed selections resolve identically.
+    const selection = TextSelection(baseOffset: 13, extentOffset: 1);
+    controller.selection = selection;
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    expect(entries, ['one, 1.2::two::', 'three']);
+    expect(controller.selection.isCollapsed, isTrue);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pump();
+    expect(entries, ['one, 1.1::two::', 'three']);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pump();
+    expect(entries, ['one, 1.2::two::', 'three']);
+    controller.value = controller.value
+        .copyWith(composing: const TextRange(start: 10, end: 13));
+    final before = controller.text;
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    expect(controller.text, before);
+    expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
+  });
+
   testWidgets('cascade editor keeps digit-ending tags intact while typing', (
     tester,
   ) async {

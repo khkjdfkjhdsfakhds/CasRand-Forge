@@ -53,6 +53,7 @@ class _InpaintPrepareInput {
   final double noise;
   final bool addOriginalImage;
   final bool autocropEnabled;
+  final bool transparentBackground;
   final int contextPx;
   final CropRect? manualFocusFrame;
 
@@ -67,6 +68,7 @@ class _InpaintPrepareInput {
     required this.noise,
     required this.addOriginalImage,
     required this.autocropEnabled,
+    required this.transparentBackground,
     required this.contextPx,
     required this.manualFocusFrame,
   });
@@ -97,7 +99,10 @@ I2iRequestBatch _prepareInpaintBatchInBackground(_InpaintPrepareInput input) {
       focusFrame: input.manualFocusFrame,
     );
   }
-  return PrepareI2iRequestUseCase(config: snapshot)._buildInpaintBatch(
+  return PrepareI2iRequestUseCase(
+    config: snapshot,
+    transparentBackground: input.transparentBackground,
+  )._buildInpaintBatch(
     input.targetWidth,
     input.targetHeight,
   );
@@ -251,12 +256,48 @@ FocusInpaintBatch? _planFocusPreview(_FocusPreviewInput input) {
   );
 }
 
+I2iRequestPlan _rebaseFocusPlan((img.Image, I2iRequestPlan, bool) input) =>
+    PrepareI2iRequestUseCase(
+            config: I2IConfig(), transparentBackground: input.$3)
+        .rebaseFocusPlanOnCanvas(canvas: input.$1, plan: input.$2);
+
+Future<Uint8List> _compositeInpaint(
+  (Uint8List, I2iRequestPlan, String?, Uint8List?) input,
+) =>
+    PrepareI2iRequestUseCase(config: I2IConfig())._compositeInpaintResponse(
+      responseBytes: input.$1,
+      plan: input.$2,
+      compositeBaseImageB64:
+          input.$3 ?? (input.$4 == null ? null : base64Encode(input.$4!)),
+    );
+
+img.Image _blendInpaintTile((img.Image, Uint8List, I2iRequestPlan) input) {
+  PrepareI2iRequestUseCase(config: I2IConfig()).blendInpaintTileInto(
+    canvas: input.$1,
+    responseBytes: input.$2,
+    plan: input.$3,
+  );
+  return input.$1;
+}
+
+Future<Uint8List> _finishInpaintComposite(
+        (img.Image, Uint8List, List<Uint8List>) input) =>
+    PrepareI2iRequestUseCase(config: I2IConfig()).finishComposite(
+      canvas: input.$1,
+      responseBytes: input.$2,
+      metadataSources: input.$3,
+    );
+
 /// Composite instructions for pasting a focus-inpainting response back into
 /// the original image: take [contentWidth] x [contentHeight] pixels at
 /// ([contentOffsetX], [contentOffsetY]) out of the response, scale them back
 /// to the outer frame, and draw that at the frame's position.
 class AutocropCompositeInfo {
   final CropRect outer;
+
+  /// Original full image size for mapping saved character points into a tile.
+  final int? sourceWidth;
+  final int? sourceHeight;
   final int contentOffsetX;
   final int contentOffsetY;
   final int contentWidth;
@@ -265,6 +306,8 @@ class AutocropCompositeInfo {
 
   const AutocropCompositeInfo({
     required this.outer,
+    this.sourceWidth,
+    this.sourceHeight,
     required this.contentOffsetX,
     required this.contentOffsetY,
     required this.contentWidth,
@@ -460,6 +503,7 @@ class PrepareI2iRequestUseCase {
         noise: config.noise,
         addOriginalImage: config.addOriginalImage,
         autocropEnabled: config.autocropEnabled,
+        transparentBackground: transparentBackground,
         contextPx: config.contextPx,
         manualFocusFrame: config.manualFocusFrame,
       ),
@@ -685,6 +729,29 @@ class PrepareI2iRequestUseCase {
     return decoded;
   }
 
+  // Normalize only request pixels, leaving the original used for local
+  // compositing intact. This runs in the inpaint preparation isolate.
+  img.Image _inpaintRequestPixels(img.Image source) {
+    if (!source.hasAlpha) return source;
+    final artifact = NovelAiImg2ImgNormalizer.normalize(
+      imageBytes: Uint8List.fromList(img.encodePng(source)),
+      targetWidth: source.width,
+      targetHeight: source.height,
+      transparentBackground: transparentBackground,
+    );
+    return img.decodePng(base64Decode(artifact.imageB64))!;
+  }
+
+  img.Image _inpaintCanvas(int width, int height) {
+    final canvas = img.Image(
+        width: width,
+        height: height,
+        numChannels: transparentBackground ? 4 : 3);
+    // Retain the existing black context padding, while copying source alpha.
+    img.fill(canvas, color: img.ColorRgba8(0, 0, 0, 255));
+    return canvas;
+  }
+
   /// Builds one focus tile request from its plan.
   I2iRequestPlan _buildFocusTile({
     required img.Image base,
@@ -704,16 +771,13 @@ class PrepareI2iRequestUseCase {
         interpolation: img.Interpolation.cubic,
       );
     }
-    final canvas = img.Image(
-      width: plan.requestWidth,
-      height: plan.requestHeight,
-      numChannels: 3,
-    );
+    final canvas = _inpaintCanvas(plan.requestWidth, plan.requestHeight);
     img.compositeImage(
       canvas,
       content,
       dstX: plan.contentOffsetX,
       dstY: plan.contentOffsetY,
+      blend: img.BlendMode.direct,
     );
     final masks = _renderFocusMasks(
       mask: mask,
@@ -732,6 +796,8 @@ class PrepareI2iRequestUseCase {
       addOriginalImage: config.addOriginalImage,
       composite: AutocropCompositeInfo(
         outer: plan.outer,
+        sourceWidth: base.width,
+        sourceHeight: base.height,
         contentOffsetX: plan.contentOffsetX,
         contentOffsetY: plan.contentOffsetY,
         contentWidth: plan.contentWidth,
@@ -744,8 +810,9 @@ class PrepareI2iRequestUseCase {
   }
 
   I2iRequestBatch _buildInpaintBatch(int targetWidth, int targetHeight) {
-    final base = _requireBaseImage();
-    final compositeBaseImageB64 = base64Encode(_pngBytesForOriginal(base));
+    final original = _requireBaseImage();
+    final compositeBaseImageB64 = base64Encode(_pngBytesForOriginal(original));
+    final base = _inpaintRequestPixels(original);
     final mask = config.hasMask ? _requireMaskImage() : null;
     MaskCellGrid? cells;
     if (mask != null) {
@@ -957,6 +1024,24 @@ class PrepareI2iRequestUseCase {
     required Uint8List responseBytes,
     required I2iRequestPlan plan,
     String? compositeBaseImageB64,
+  }) =>
+      compute(
+        _compositeInpaint,
+        (
+          responseBytes,
+          plan,
+          compositeBaseImageB64,
+          plan.composite != null && compositeBaseImageB64 == null
+              ? config.imageBytes
+              : null,
+        ),
+        debugLabel: 'composite-inpaint-response',
+      );
+
+  Future<Uint8List> _compositeInpaintResponse({
+    required Uint8List responseBytes,
+    required I2iRequestPlan plan,
+    String? compositeBaseImageB64,
   }) async {
     if (!plan.isInpaint) {
       throw ArgumentError('The request plan is not an infill request.');
@@ -985,6 +1070,14 @@ class PrepareI2iRequestUseCase {
     );
   }
 
+  /// Keep the extra alpha normalization and PNG work off the UI isolate.
+  Future<I2iRequestPlan> rebaseFocusPlanInBackground({
+    required img.Image canvas,
+    required I2iRequestPlan plan,
+  }) =>
+      compute(_rebaseFocusPlan, (canvas, plan, transparentBackground),
+          debugLabel: 'rebase-inpaint-focus');
+
   /// Rebuilds a Focus request source from the current composite canvas. This
   /// makes a later overlapping serial tile observe earlier repaint results
   /// while preserving the batch's frozen prompt and generation parameters.
@@ -994,7 +1087,8 @@ class PrepareI2iRequestUseCase {
   }) {
     final composite = plan.composite;
     if (composite == null) return plan;
-    var content = _cropWithPadding(canvas, composite.outer);
+    var content =
+        _inpaintRequestPixels(_cropWithPadding(canvas, composite.outer));
     if (content.width != composite.contentWidth ||
         content.height != composite.contentHeight) {
       content = img.copyResize(
@@ -1004,16 +1098,13 @@ class PrepareI2iRequestUseCase {
         interpolation: img.Interpolation.cubic,
       );
     }
-    final requestCanvas = img.Image(
-      width: plan.width,
-      height: plan.height,
-      numChannels: 3,
-    );
+    final requestCanvas = _inpaintCanvas(plan.width, plan.height);
     img.compositeImage(
       requestCanvas,
       content,
       dstX: composite.contentOffsetX,
       dstY: composite.contentOffsetY,
+      blend: img.BlendMode.direct,
     );
     return I2iRequestPlan(
       imageB64: base64Encode(img.encodePng(requestCanvas)),
@@ -1028,6 +1119,25 @@ class PrepareI2iRequestUseCase {
       summary: plan.summary,
     );
   }
+
+  /// Returns an updated canvas from a worker, keeping per-pixel masking,
+  /// premultiplication and Focus resizing off the UI isolate.
+  Future<img.Image> blendInpaintTileInBackground({
+    required img.Image canvas,
+    required Uint8List responseBytes,
+    required I2iRequestPlan plan,
+  }) =>
+      compute(_blendInpaintTile, (canvas, responseBytes, plan),
+          debugLabel: 'composite-inpaint-tile');
+
+  Future<Uint8List> finishCompositeInBackground({
+    required img.Image canvas,
+    required Uint8List responseBytes,
+    Iterable<Uint8List> metadataSources = const [],
+  }) =>
+      compute(_finishInpaintComposite,
+          (canvas, responseBytes, metadataSources.toList(growable: false)),
+          debugLabel: 'encode-inpaint-composite');
 
   /// Blends one focus tile onto [canvas] in place, so a split mask accumulates
   /// all of its softly feathered tiles onto the same image.
@@ -1050,8 +1160,23 @@ class PrepareI2iRequestUseCase {
       );
     }
 
+    if (canvas.numChannels != 4 || canvas.format != img.Format.uint8) {
+      canvas.data =
+          canvas.convert(numChannels: 4, format: img.Format.uint8).data;
+    }
     final featheredMask = _buildOfficialBlendAlpha(plan);
-    var maskedResponse = _applyAlphaMask(response, featheredMask);
+    final maskedResponse = _applyAlphaMask(response, featheredMask);
+    var coverage = img.Image(
+      width: plan.width,
+      height: plan.height,
+      format: img.Format.uint16,
+      numChannels: 1,
+    );
+    for (var y = 0; y < plan.height; y++) {
+      for (var x = 0; x < plan.width; x++) {
+        coverage.setPixelR(x, y, featheredMask[y * plan.width + x] * 257);
+      }
+    }
     final composite = plan.composite;
     if (composite == null) {
       if (canvas.width != maskedResponse.width ||
@@ -1060,7 +1185,8 @@ class PrepareI2iRequestUseCase {
           'The infill source canvas does not match the response size.',
         );
       }
-      img.compositeImage(canvas, maskedResponse);
+      _pasteIntersection(canvas, maskedResponse, coverage,
+          CropRect(x: 0, y: 0, w: plan.width, h: plan.height));
       return;
     }
 
@@ -1084,6 +1210,13 @@ class PrepareI2iRequestUseCase {
       width: composite.contentWidth,
       height: composite.contentHeight,
     );
+    coverage = img.copyCrop(
+      coverage,
+      x: composite.contentOffsetX,
+      y: composite.contentOffsetY,
+      width: composite.contentWidth,
+      height: composite.contentHeight,
+    );
     if (!composite.isNativeScale) {
       content = img.copyResize(
         content,
@@ -1091,9 +1224,15 @@ class PrepareI2iRequestUseCase {
         height: outer.h,
         interpolation: img.Interpolation.cubic,
       );
+      coverage = img.copyResize(
+        coverage,
+        width: outer.w,
+        height: outer.h,
+        interpolation: img.Interpolation.cubic,
+      );
     }
 
-    _pasteIntersection(canvas, content, outer);
+    _pasteIntersection(canvas, content, coverage, outer);
   }
 
   img.Image _decodeRequestImage(I2iRequestPlan plan) {
@@ -1102,7 +1241,7 @@ class PrepareI2iRequestUseCase {
     if (decoded == null) {
       throw Exception('Failed to decode the infill request source image.');
     }
-    return img.Image.from(decoded);
+    return decoded.convert(numChannels: 4);
   }
 
   Uint8List _buildOfficialBlendAlpha(I2iRequestPlan plan) {
@@ -1201,19 +1340,26 @@ class PrepareI2iRequestUseCase {
   }
 
   img.Image _applyAlphaMask(img.Image response, Uint8List mask) {
-    final output = response.convert(numChannels: 4);
+    // Keep color premultiplied while cropping/resizing. Otherwise invisible
+    // RGB in a transparent response bleeds into Focus edges. 16-bit channels
+    // retain precision without changing the existing cubic resize kernel.
+    final output = img.Image(
+      width: response.width,
+      height: response.height,
+      format: img.Format.uint16,
+      numChannels: 4,
+    );
     for (var y = 0; y < output.height; y++) {
       for (var x = 0; x < output.width; x++) {
-        final source = output.getPixel(x, y);
-        final alpha =
-            (source.a.toInt() * mask[y * output.width + x] / 255).round();
+        final source = response.getPixel(x, y);
+        final alpha = source.aNormalized * mask[y * output.width + x] / 255;
         output.setPixelRgba(
           x,
           y,
-          source.r,
-          source.g,
-          source.b,
-          alpha,
+          (source.rNormalized * alpha * 65535).round(),
+          (source.gNormalized * alpha * 65535).round(),
+          (source.bNormalized * alpha * 65535).round(),
+          (alpha * 65535).round(),
         );
       }
     }
@@ -1224,13 +1370,15 @@ class PrepareI2iRequestUseCase {
   /// [blendInpaintTileInto]. The config fallback keeps direct use-case callers
   /// compatible, while generation always supplies the captured batch image.
   img.Image newCompositeCanvas({String? baseImageB64}) {
-    if (baseImageB64 == null) return img.Image.from(_requireBaseImage());
+    if (baseImageB64 == null) {
+      return _requireBaseImage().convert(numChannels: 4);
+    }
     final bytes = base64Decode(baseImageB64);
     final decoded = img.decodePng(bytes) ?? img.decodeImage(bytes);
     if (decoded == null) {
       throw Exception('Failed to decode the inpaint composite base image.');
     }
-    return img.Image.from(img.bakeOrientation(decoded));
+    return img.bakeOrientation(decoded).convert(numChannels: 4);
   }
 
   /// Encodes the finished canvas, re-embedding the response's stealth
@@ -1293,10 +1441,8 @@ class PrepareI2iRequestUseCase {
   /// Crop [window] out of [src]; areas outside the image are padded black.
   img.Image _cropWithPadding(img.Image src, CropRect window) {
     final canvas = img.Image(
-      width: window.w,
-      height: window.h,
-      numChannels: 3,
-    );
+        width: window.w, height: window.h, numChannels: src.hasAlpha ? 4 : 3);
+    img.fill(canvas, color: img.ColorRgba8(0, 0, 0, 255));
     final ix = max(0, window.x);
     final iy = max(0, window.y);
     final iRight = min(src.width, window.right);
@@ -1314,6 +1460,7 @@ class PrepareI2iRequestUseCase {
       cropped,
       dstX: ix - window.x,
       dstY: iy - window.y,
+      blend: img.BlendMode.direct,
     );
     return canvas;
   }
@@ -1415,25 +1562,48 @@ class PrepareI2iRequestUseCase {
     );
   }
 
-  /// Alpha-composites a tile at the window position, clipped to image bounds.
-  void _pasteIntersection(img.Image canvas, img.Image tile, CropRect window) {
+  /// NovelAI removes the old contribution with destination-out(mask), then
+  /// adds the already masked response with lighter. Source-over is incorrect
+  /// here: a transparent response must erase the selected original pixels.
+  void _pasteIntersection(
+    img.Image canvas,
+    img.Image premultipliedTile,
+    img.Image coverage,
+    CropRect window,
+  ) {
     final ix = max(0, window.x);
     final iy = max(0, window.y);
     final iRight = min(canvas.width, window.right);
     final iBottom = min(canvas.height, window.bottom);
     if (iRight <= ix || iBottom <= iy) return;
-    final srcX = ix - window.x;
-    final srcY = iy - window.y;
-    final w = min(iRight - ix, tile.width - srcX);
-    final h = min(iBottom - iy, tile.height - srcY);
-    if (w <= 0 || h <= 0) return;
-    final srcPart = img.copyCrop(
-      tile,
-      x: srcX,
-      y: srcY,
-      width: w,
-      height: h,
-    );
-    img.compositeImage(canvas, srcPart, dstX: ix, dstY: iy);
+    for (var y = iy; y < iBottom; y++) {
+      for (var x = ix; x < iRight; x++) {
+        final tx = x - window.x;
+        final ty = y - window.y;
+        final mask = coverage.getPixel(tx, ty).rNormalized;
+        if (mask == 0) continue; // Preserve every outside pixel, including RGB.
+        final old = canvas.getPixel(x, y);
+        final next = premultipliedTile.getPixel(tx, ty);
+        final oldAlpha = old.aNormalized * (1 - mask);
+        final alpha = (oldAlpha + next.aNormalized).clamp(0.0, 1.0);
+        if (alpha == 0) {
+          canvas.setPixelRgba(x, y, 0, 0, 0, 0);
+          continue;
+        }
+        int channel(num oldChannel, num nextPremultiplied) =>
+            (((oldChannel * oldAlpha + nextPremultiplied) / alpha)
+                        .clamp(0.0, 1.0) *
+                    255)
+                .round();
+        canvas.setPixelRgba(
+          x,
+          y,
+          channel(old.rNormalized, next.rNormalized),
+          channel(old.gNormalized, next.gNormalized),
+          channel(old.bNormalized, next.bNormalized),
+          (alpha * 255).round(),
+        );
+      }
+    }
   }
 }

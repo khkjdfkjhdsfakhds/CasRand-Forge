@@ -116,6 +116,35 @@ void main() {
     expect(requestBytes, isNot(same(original)));
   });
 
+  test('PNG stealth cleanup preserves RGB before Canvas alpha conversion', () {
+    final artifact = NovelAiImg2ImgNormalizer.normalize(
+      imageBytes: stealthCarrierPng(transparentTail: false),
+      targetWidth: 16,
+      targetHeight: 8,
+      transparentBackground: true,
+    );
+    final pixels = img.decodePng(base64Decode(artifact.imageB64))!;
+    expect(pixels.getPixel(0, 0).toList(), [127, 87, 85, 255]);
+  });
+
+  test('Canvas alpha conversion matches all 65536 browser channel pairs', () {
+    // Chrome Canvas putImageData/getImageData capture, 2026-09-07.
+    final source = img.Image(width: 256, height: 256, numChannels: 4);
+    for (var alpha = 0; alpha < 256; alpha++) {
+      for (var channel = 0; channel < 256; channel++) {
+        source.setPixelRgba(channel, alpha, channel, channel, channel, alpha);
+      }
+    }
+    final artifact = NovelAiImg2ImgNormalizer.normalize(
+      imageBytes: Uint8List.fromList(img.encodePng(source)),
+      targetWidth: 256,
+      targetHeight: 256,
+      transparentBackground: true,
+    );
+    expect(rgbaSha256(img.decodePng(base64Decode(artifact.imageB64))!),
+        "906f0efb4d3343ead2f1b23f94866dae85025fd21344c717e6491e90ffdbe09f");
+  });
+
   test('normalizer artifact exposes immutable dimensions and PNG identity', () {
     final artifact = NovelAiImg2ImgNormalizer.normalize(
       imageBytes: stealthCarrierPng(),
@@ -161,7 +190,7 @@ void main() {
       rgbaSha256(transparentImage),
       sameSizeTransparentRgbaSha256,
     );
-    expect(transparentImage.getPixel(0, 0).toList(), [128, 87, 85, 255]);
+    expect(transparentImage.getPixel(0, 0).toList(), [127, 87, 85, 255]);
     expect(transparentImage.getPixel(15, 0).toList(), [0, 0, 0, 0]);
     expect(transparentImage.getPixel(15, 1).toList(), [2, 4, 6, 128]);
     expect(opaqueImage.getPixel(15, 1).toList(), [128, 129, 130, 255]);
@@ -462,6 +491,49 @@ void main() {
       }
     }
   });
+
+  for (final transparent in [false, true]) {
+    test(
+        'Focus conditioning and serial rebase preserve model alpha $transparent',
+        () async {
+      final original = img.Image(width: 256, height: 256, numChannels: 4);
+      img.fill(original, color: img.ColorRgba8(80, 120, 160, 128));
+      final bytes = Uint8List.fromList(img.encodePng(original));
+      final config = I2IConfig()..setImage(bytes);
+      config.setMask(null, const [],
+          focusFrame: const CropRect(x: 64, y: 64, w: 64, h: 64),
+          minimumContextPx: 32);
+      final useCase = PrepareI2iRequestUseCase(
+          config: config, transparentBackground: transparent);
+      final batch =
+          await useCase.planBatch(targetWidth: 512, targetHeight: 512);
+      final plan = batch!.plans.single;
+      expect(plan.composite, isNotNull);
+      final input = img.decodePng(base64Decode(plan.imageB64))!;
+      final composite = plan.composite!;
+      expect(
+          input
+              .getPixel(composite.contentOffsetX + composite.contentWidth ~/ 2,
+                  composite.contentOffsetY + composite.contentHeight ~/ 2)
+              .a,
+          transparent ? 128 : 255);
+      final canvas =
+          useCase.newCompositeCanvas(baseImageB64: batch.compositeBaseImageB64);
+      expect(canvas.getPixel(128, 128).a, 128);
+      final rebased =
+          await useCase.rebaseFocusPlanInBackground(canvas: canvas, plan: plan);
+      final nextInput = img.decodePng(base64Decode(rebased.imageB64))!;
+      expect(
+          nextInput
+              .getPixel(composite.contentOffsetX + composite.contentWidth ~/ 2,
+                  composite.contentOffsetY + composite.contentHeight ~/ 2)
+              .a,
+          transparent ? 128 : 255);
+      expect(rebased.maskB64, plan.maskB64);
+      expect(rebased.blendMaskB64, plan.blendMaskB64);
+      expect(config.imageBytes, bytes);
+    });
+  }
 
   test('manual Focus frame without a mask repaints its whole inner region',
       () async {
@@ -872,6 +944,36 @@ void main() {
       ),
       throwsA(isA<Exception>()),
     );
+  });
+
+  test('infill replaces transparency instead of retaining opaque old pixels',
+      () async {
+    final config = I2IConfig(autocropEnabled: false)
+      ..setImage(solidPng(64, 64, 20, 100, 180))
+      ..setMask(maskPngWithWhiteRect(64, 64, 0, 0, 64, 64), []);
+    final useCase = PrepareI2iRequestUseCase(config: config);
+    final plan = (await useCase(targetWidth: 64, targetHeight: 64))!;
+    // Independent Chrome capture of the deployed NovelAI compositing function
+    // (1052-61d45f60b6583648, x/lEi), 2026-09-07. RGB differs by at most one
+    // due to Canvas premultiplication quantization; alpha is exact here.
+    const websitePixels = [
+      [0, 0, 0, 0],
+      [219, 30, 40, 128],
+      [220, 30, 40, 255],
+    ];
+    for (final (index, alpha) in [0, 128, 255].indexed) {
+      final response = img.Image(width: 64, height: 64, numChannels: 4);
+      img.fill(response, color: img.ColorRgba8(220, 30, 40, alpha));
+      final bytes = await useCase.compositeInpaintResponse(
+        responseBytes: Uint8List.fromList(img.encodePng(response)),
+        plan: plan,
+      );
+      final pixel = img.decodePng(bytes)!.getPixel(32, 32);
+      expect(pixel.a, websitePixels[index][3], reason: 'response alpha $alpha');
+      for (var channel = 0; channel < 3; channel++) {
+        expect(pixel[channel], closeTo(websitePixels[index][channel], 1));
+      }
+    }
   });
 
   test('whole-image infill uses the official feathered local composite',

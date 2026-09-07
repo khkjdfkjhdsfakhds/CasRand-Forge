@@ -193,7 +193,8 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
 
     final value = _controller.value;
     final selection = _safeSelection(value);
-    final entryRange = _controller.entryRangeForOffset(selection.extentOffset);
+    final midpoint = (selection.start + selection.end) ~/ 2;
+    final entryRange = _controller.entryRangeForOffset(midpoint);
     if (entryRange == null) return KeyEventResult.handled;
 
     final result = direction != null

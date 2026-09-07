@@ -1,3 +1,9 @@
+import 'package:nai_casrand/data/models/prompt_token_snapshot.dart';
+import 'package:nai_casrand/core/constants/parameters.dart';
+import 'package:nai_casrand/data/models/batch_tool_snapshot.dart';
+import 'package:nai_casrand/data/models/generation_profile.dart';
+import 'package:nai_casrand/data/models/displayed_image_size.dart';
+import 'package:nai_casrand/data/use_cases/enhance_request_options.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
@@ -72,9 +78,10 @@ Future<I2iRequestBatch?> _defaultI2iBatchPreparer({
   );
 }
 
-bool _usesTransparentI2iBackground(ParamConfig config) {
-  return config.model.contains('diffusion-5') &&
-      config.toJson()['transparent_background'] == true;
+bool _usesTransparentI2iBackground(ParamConfig config, I2IConfig i2i) {
+  return effectiveGenerationModel(config.model,
+          inpaint: i2i.hasInpaintSelection)
+      .contains('diffusion-5');
 }
 
 GeneratedImageStoragePolicy _storagePolicySnapshot(Settings settings) {
@@ -201,7 +208,215 @@ class GenerationPageViewmodel extends ChangeNotifier {
       commandStatus.commandList;
   int get colNum => payloadConfig.settings.generationPageColumnCount;
 
+  bool _isSendingToolToBatch = false;
+  Object? _toolBatchError;
+  bool get isSendingToolToBatch => _isSendingToolToBatch;
+  Object? get toolBatchError => _toolBatchError;
+  BatchToolSnapshot? get activeBatchTool => payloadConfig.activeBatchTool;
+  bool get canChangeBatchTool =>
+      !isBusyPreparingOrSingle && !commandStatus.isGenerationActive.value;
+
+  Future<bool> setBatchToolEnabled(BatchToolKind kind, bool enabled) async {
+    if (!canChangeBatchTool) return false;
+    if (!enabled) {
+      if (payloadConfig.batchToolKind == kind) {
+        payloadConfig.deactivateBatchTool();
+      }
+      advancedFeaturesChanged();
+      return true;
+    }
+    final saved = kind == BatchToolKind.enhance
+        ? payloadConfig.enhanceBatchTool
+        : payloadConfig.directorBatchTool;
+    if (saved == null) return sendToolToBatch(kind);
+    payloadConfig.activateBatchTool(saved);
+    advancedFeaturesChanged();
+    return true;
+  }
+
+  PayloadConfig _toolPromptConfig(
+      BatchToolSnapshot tool, PayloadConfig source) {
+    final profile = source.activeProfile;
+    final parameters = tool.kind == BatchToolKind.enhance
+        ? tool.parameters
+        : ParamConfig.fromJson(profile.paramConfig.toJson());
+    final toolProfile = GenerationProfile(
+      rootPromptConfig: profile.rootPromptConfig,
+      negativePromptConfig: profile.negativePromptConfig,
+      characterConfigList: profile.characterConfigList,
+      savedPromptConfigList: profile.savedPromptConfigList,
+      paramConfig: parameters,
+    );
+    return PayloadConfig(
+      rootPromptConfig: profile.rootPromptConfig,
+      negativePromptConfig: profile.negativePromptConfig,
+      characterConfigList: profile.characterConfigList,
+      savedPromptConfigList: profile.savedPromptConfigList,
+      paramConfig: parameters,
+      settings: source.settings,
+      overridePrompt: '',
+      useOverridePrompt: false,
+      useCharacterPromptWithOverride: false,
+      fixedProfile: toolProfile,
+      promptMode: source.promptMode,
+    );
+  }
+
+  Future<bool> sendToolToBatch(BatchToolKind kind) async {
+    if (!canChangeBatchTool) return false;
+    final owner = payloadConfig;
+    final enhance = owner.enhanceConfig;
+    final director = owner.directorToolConfig;
+    if (kind == BatchToolKind.enhance && !enhance.hasImage ||
+        kind == BatchToolKind.director && !director.hasImage) {
+      return false;
+    }
+    _isSendingToolToBatch = true;
+    _toolBatchError = null;
+    final stopRevision = _stopRevision;
+    notifyListeners();
+    try {
+      await _preparationFeedbackBarrier();
+      if (_disposed || stopRevision != _stopRevision) return false;
+      final fingerprint = _generationRetryFingerprint();
+      final profile = owner.activeProfile;
+      late BatchToolSnapshot snapshot;
+      Map<String, dynamic>? promptMetadata;
+      String? promptText;
+      if (kind == BatchToolKind.enhance) {
+        final model = profile.paramConfig.model;
+        final useMax = enhance.usesMax(model);
+        if (!useMax && !enhance.availableScales.contains(enhance.scale)) {
+          return false;
+        }
+        final revision = _enhancePreparationFingerprint();
+        final size = enhance.requestSize(model);
+        final output = enhance.outputSize(model);
+        final parameters = ParamConfig.fromJson(profile.paramConfig.toJson())
+          ..nSamples = 1
+          ..randomSeed = true;
+        final plan = await preparePlainImg2ImgBytesInBackground(
+          imageBytes: enhance.imageBytes!,
+          sourceWidth: enhance.width,
+          sourceHeight: enhance.height,
+          targetWidth: size.width,
+          targetHeight: size.height,
+          strength: enhance.strength,
+          noise: enhance.noise,
+          addOriginalImage: false,
+          transparentBackground: EnhanceRequestOptions.supportsMax(model),
+        );
+        if (revision != _enhancePreparationFingerprint()) return false;
+        snapshot = BatchToolSnapshot.enhance(
+          enhanceBatch: I2iRequestBatch(
+              plans: [plan], serial: true, summary: plan.summary),
+          parameters: parameters,
+          upscale: useMax,
+          outputWidth: output.width,
+          outputHeight: output.height,
+        );
+        // Resolve once when sending a random profile; thereafter fixed mode
+        // uses plain text until the user explicitly selects random prompts.
+        final resolved = GeneratePayloadUseCase(
+          payloadConfig: _toolPromptConfig(snapshot, owner),
+        )();
+        promptMetadata =
+            Map<String, dynamic>.from(resolved.payload['parameters']);
+        promptText = resolved.payload['input'] as String;
+      } else {
+        final revision = director.requestRevision;
+        final request = director.getRequestParameters();
+        final name = director.displayName;
+        final prepared = await _prepareDirectorToolRequest(
+          imageBytes: director.imageBytes!,
+          width: director.width,
+          height: director.height,
+        );
+        if (!identical(owner.directorToolConfig, director) ||
+            revision != director.requestRevision) {
+          return false;
+        }
+        snapshot = BatchToolSnapshot.director(
+          payload: {
+            ...request,
+            'image': prepared.imageB64,
+            'width': prepared.width,
+            'height': prepared.height
+          },
+          label: name,
+          outputWidth: prepared.width,
+          outputHeight: prepared.height,
+        );
+        final raw = request['prompt'] as String? ?? '';
+        promptText = director.type == 'emotion' && raw.contains(';;')
+            ? raw.substring(raw.indexOf(';;') + 2)
+            : raw;
+      }
+      if (_disposed ||
+          stopRevision != _stopRevision ||
+          !identical(payloadConfig, owner) ||
+          !identical(owner.activeProfile, profile) ||
+          fingerprint != _generationRetryFingerprint()) {
+        return false;
+      }
+      if (promptMetadata != null) {
+        final imported = _toolPromptConfig(snapshot, owner);
+        imported.importMetadataToFixedProfile(promptMetadata,
+            prompt: promptText, model: snapshot.parameters.model);
+        owner.fixedProfile = imported.fixedProfile;
+        owner.fixedProfile.paramConfig.randomSeed = true;
+      } else {
+        owner.fixedProfile.rootPromptConfig =
+            PayloadConfig.fixedPromptConfig(promptText);
+      }
+      owner.activateBatchTool(snapshot);
+      _cachedPayloadResult = null;
+      _cachedI2iBatch = null;
+      _costEstimateKey = null;
+      return true;
+    } catch (error) {
+      _toolBatchError = error;
+      return false;
+    } finally {
+      _isSendingToolToBatch = false;
+      if (!_disposed) notifyListeners();
+    }
+  }
+
+  PayloadGenerationResult _buildToolPayload(BatchToolSnapshot tool) {
+    if (tool.kind == BatchToolKind.enhance) {
+      final seed = EnhanceRequestOptions.nextSeed();
+      return GeneratePayloadUseCase(
+        payloadConfig: _toolPromptConfig(tool, payloadConfig),
+        i2iPlan: tool.enhanceBatch!.plans.first,
+        seedOverride: seed,
+        enhanceOptions: EnhanceRequestOptions(upscale: tool.upscale),
+      )();
+    }
+    final request = Map<String, dynamic>.from(tool.directorPayload);
+    if (tool.usesPrompt) {
+      final config = payloadConfig;
+      final prompt = config.rootPromptConfig
+          .getPrmpts(
+            filterEntryComments: config.promptMode != PromptMode.fixed,
+            savedConfigs: config.savedPromptConfigList,
+          )
+          .toPrompt();
+      if (tool.directorType == 'emotion') {
+        final emotion = (request['prompt'] as String).split(';;').first;
+        request['prompt'] = '$emotion;;$prompt';
+      } else {
+        request['prompt'] = prompt;
+      }
+    }
+    return PayloadGenerationResult(
+        payload: request,
+        comment: tool.summary,
+        suggestedFileName: tool.directorType);
+  }
+
   bool get isBusyPreparingOrSingle =>
+      _isSendingToolToBatch ||
       _isPreparingEnhance ||
       _isPreparingDirector ||
       (!commandStatus.isGenerationActive.value &&
@@ -285,6 +500,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
   GenerationScheduler? _scheduler;
   GenerationLease? _primaryLease;
   _BatchAccounting? _activeBatch;
+  BatchToolSnapshot? _runningBatchTool;
 
   /// Last known Anlas balance per token (updated after each generation).
   final Map<String, int> _lastAnlasBalances = {};
@@ -305,6 +521,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
   /// True when the estimate is an upper bound (several sizes configured, one
   /// picked at random per request — the estimate uses the most expensive).
   bool get nextCostIsUpperBound =>
+      activeBatchTool == null &&
       payloadConfig.paramConfig.sizes.length > 1 &&
       !(payloadConfig.i2iEnabled && payloadConfig.i2iConfig.hasImage);
 
@@ -315,6 +532,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
       !payloadConfig.paramConfig.model.contains('diffusion-5');
 
   int get _pendingVibeEncodingAnlas {
+    if (activeBatchTool != null) return 0;
     final config = payloadConfig;
     final model = config.paramConfig.model;
     final capabilities = ImageImportCapabilities.forModel(model);
@@ -334,6 +552,52 @@ class GenerationPageViewmodel extends ChangeNotifier {
   /// img2img planning that needs image decoding runs asynchronously.
   void refreshCostEstimate() {
     refreshSubscriptionSnapshot();
+    final tool = activeBatchTool;
+    if (tool != null) {
+      final settings = payloadConfig.settings;
+      final key = 'tool:${identityHashCode(tool)}:'
+          '${settings.subscriptionStatusKnown}:${settings.subscriptionTier}:'
+          '${settings.subscriptionActive}:${settings.opusUsageAvailable}';
+      if (key == _costEstimateKey) return;
+      _costEstimateKey = key;
+      final epoch = ++_costEstimateEpoch;
+      Future<void>.microtask(() {
+        if (epoch != _costEstimateEpoch) return;
+        if (tool.kind == BatchToolKind.director) {
+          final cost = estimateDirectorToolAnlas(
+            tool: tool.directorType,
+            width: tool.outputWidth,
+            height: tool.outputHeight,
+          );
+          nextCostEstimate.value = AnlasCost(
+              anlas: cost, isFreeUnderOpus: false, perImageAnlas: cost);
+          return;
+        }
+        if (!settings.subscriptionStatusKnown) {
+          nextCostEstimate.value = null;
+          return;
+        }
+        final plan = tool.enhanceBatch!.plans.first;
+        final size = tool.upscale
+            ? EnhanceRequestOptions.costSize(plan.width, plan.height)
+            : EnhanceRequestOptions.apiSize(plan.width, plan.height);
+        final parameters = tool.parameters;
+        nextCostEstimate.value = estimateAnlasCost(
+          width: size.width,
+          height: size.height,
+          steps: parameters.steps,
+          action: 'img2img',
+          strength: plan.strength,
+          sm: false,
+          smDyn: false,
+          tier: settings.subscriptionTier,
+          subscriptionActive: settings.subscriptionActive,
+          model: parameters.model,
+          opusUsageAvailable: settings.opusUsageAvailable == true,
+        );
+      });
+      return;
+    }
     final paramConfig = payloadConfig.paramConfig;
     final i2i = payloadConfig.i2iConfig;
     final sizes = payloadConfig.i2iEnabled && i2i.hasImage
@@ -427,7 +691,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
           config: i2i,
           targetWidth: largest.width,
           targetHeight: largest.height,
-          transparentBackground: _usesTransparentI2iBackground(paramConfig),
+          transparentBackground:
+              _usesTransparentI2iBackground(paramConfig, i2i),
         );
         if (batch != null) {
           final base = estimateBatchAnlasCost(
@@ -441,7 +706,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
             smDyn: smDyn,
             tier: tier,
             subscriptionActive: subscriptionActive,
-            model: paramConfig.model,
+            model: effectiveGenerationModel(paramConfig.model,
+                inpaint: batch.plans.first.isInpaint),
             opusUsageAvailable: opusUsageAvailable,
             nSamples: paramConfig.nSamples,
           );
@@ -627,7 +893,10 @@ class GenerationPageViewmodel extends ChangeNotifier {
   }
 
   bool get lockToAllCombinations =>
-      payloadConfig.settings.lockToAllCombinations;
+      payloadConfig.settings.lockToAllCombinations &&
+      (activeBatchTool == null ||
+          activeBatchTool!.kind == BatchToolKind.enhance &&
+              payloadConfig.promptMode == PromptMode.random);
 
   int get totalCombinations => payloadConfig.totalCombinations;
   BigInt get totalCombinationCycle => payloadConfig.totalCombinationCycle;
@@ -711,8 +980,12 @@ class GenerationPageViewmodel extends ChangeNotifier {
     required Map<int, Uint8List> completedTiles,
   }) async {
     const maxTileConcurrency = 4;
-    final useCase = PrepareI2iRequestUseCase(config: payloadConfig.i2iConfig);
-    final canvas = useCase.newCompositeCanvas(
+    final useCase = PrepareI2iRequestUseCase(
+      config: payloadConfig.i2iConfig,
+      transparentBackground: (basePayloadResult.payload['model'] as String)
+          .contains('diffusion-5'),
+    );
+    var canvas = useCase.newCompositeCanvas(
       baseImageB64: batch.compositeBaseImageB64,
     );
     Object? failure;
@@ -725,7 +998,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
           if (response == null) {
             final requestPlan = index == 0
                 ? plan
-                : useCase.rebaseFocusPlanOnCanvas(canvas: canvas, plan: plan);
+                : await useCase.rebaseFocusPlanInBackground(
+                    canvas: canvas, plan: plan);
             response =
                 await sendPlan(GeneratePayloadUseCase.applyI2iPlanToPayload(
               basePayloadResult.payload,
@@ -733,7 +1007,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
             ));
             completedTiles[index] = response;
           }
-          useCase.blendInpaintTileInto(
+          canvas = await useCase.blendInpaintTileInBackground(
               canvas: canvas, responseBytes: response, plan: plan);
         }
       } catch (error) {
@@ -766,7 +1040,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
       for (var index = 0; index < batch.plans.length; index++) {
         final response = completedTiles[index];
         if (response != null) {
-          useCase.blendInpaintTileInto(
+          canvas = await useCase.blendInpaintTileInBackground(
               canvas: canvas,
               responseBytes: response,
               plan: batch.plans[index]);
@@ -780,7 +1054,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
         sources.add(base64Decode(batch.compositeBaseImageB64!));
       } catch (_) {}
     }
-    final bytes = await useCase.finishComposite(
+    final bytes = await useCase.finishCompositeInBackground(
       canvas: canvas,
       responseBytes: sources.firstOrNull ?? Uint8List(0),
       metadataSources: sources,
@@ -811,7 +1085,14 @@ class GenerationPageViewmodel extends ChangeNotifier {
     I2iRequestBatch? presetBatch,
     int? seedOverride,
     String promptSuffix = '',
+    EnhanceRequestOptions? enhanceOptions,
+    BatchToolSnapshot? toolSnapshot,
   }) {
+    final promptTokenTicket =
+        PromptTokenSnapshots.instance.begin(payloadConfig);
+    final enhanceFingerprint = enhanceOptions == null || toolSnapshot != null
+        ? null
+        : _enhancePreparationFingerprint();
     final batchAccounting = _activeBatch;
     final stopRevision = _stopRevision;
     var requestSuspended = false;
@@ -845,9 +1126,12 @@ class GenerationPageViewmodel extends ChangeNotifier {
 
     commandFunc() async {
       final settings = payloadConfig.settings;
-      final endpoint = settings.debugApiEnabled
-          ? settings.debugApiPath
-          : 'https://image.novelai.net/ai/generate-image';
+      final directorBatch = toolSnapshot?.kind == BatchToolKind.director;
+      final endpoint = directorBatch
+          ? augmentImageEndpoint
+          : settings.debugApiEnabled
+              ? settings.debugApiPath
+              : 'https://image.novelai.net/ai/generate-image';
       startingBalance = _lastAnlasBalances[token];
       startingBalanceTime = _lastAnlasBalanceTimes[token];
       batchAccounting?.activeRequests++;
@@ -855,6 +1139,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
       PayloadGenerationResult? payloadResult;
       I2iRequestBatch? i2iBatch;
       GenerationDiagnosticContext? diagnosticContext;
+      final receivedResponses = <ReceivedGenerationResponse>[];
       var outcomeWasUnknown = false;
       void markOutcomeUnknown(NovelAiApiException error) {
         if (outcomeWasUnknown || _disposed) return;
@@ -867,6 +1152,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
           additionalInfo:
               payloadResult == null ? {} : digestPayloadResult(payloadResult),
           tokenLabel: tokenLabel,
+          receivedResponses: List.unmodifiable(receivedResponses),
         );
         commandStatus.setOutcomeUnknown(card, message: error.toString());
         if (scheduledLease != null) {
@@ -895,26 +1181,42 @@ class GenerationPageViewmodel extends ChangeNotifier {
       }
 
       try {
-        vibeExtractionAnlas = await ensureVibeEncodings(
-          token: token,
-          shouldContinue: shouldSend,
-          endpoint: settings.debugApiEnabled
-              ? EncodeVibeUseCase.endpointForDebugGenerationPath(endpoint)
-              : EncodeVibeUseCase.officialEndpoint,
-        );
+        vibeExtractionAnlas = toolSnapshot != null
+            ? 0
+            : await ensureVibeEncodings(
+                token: token,
+                shouldContinue: shouldSend,
+                endpoint: settings.debugApiEnabled
+                    ? EncodeVibeUseCase.endpointForDebugGenerationPath(endpoint)
+                    : EncodeVibeUseCase.officialEndpoint,
+              );
+
+        if (enhanceFingerprint != null &&
+            enhanceFingerprint != _enhancePreparationFingerprint()) {
+          throw const RequestNotSentException();
+        }
 
         // Retry the exact random prompt/seed only while every input that can
         // affect the request is still compatible with the cached payload.
         // A failed request must never pin a removed/replaced reference image,
         // I2I plan, model, prompt, seed, or generation parameter for later runs.
-        if (presetBatch != null) {
+        if (toolSnapshot != null) {
+          payloadResult = logicalTask?.cachedPayloadResult ??
+              _buildToolPayload(toolSnapshot);
+          i2iBatch = toolSnapshot.enhanceBatch;
+          if (logicalTask != null) {
+            logicalTask.cachedPayloadResult = payloadResult;
+            logicalTask.cachedI2iBatch = i2iBatch;
+          }
+        } else if (presetBatch != null) {
           i2iBatch = presetBatch;
           payloadResult = GeneratePayloadUseCase(
             payloadConfig: payloadConfig,
             i2iPlan: i2iBatch.plans.first,
             seedOverride: seedOverride,
             promptSuffix: promptSuffix,
-            applyPlainI2iCompatibilityFields: false,
+            enhanceOptions: enhanceOptions,
+            applyPlainI2iCompatibilityFields: enhanceOptions != null,
           )();
         } else {
           final currentFingerprint = _generationRetryFingerprint();
@@ -967,6 +1269,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
                     targetHeight: target.height,
                     transparentBackground: _usesTransparentI2iBackground(
                       payloadConfig.paramConfig,
+                      i2iConfig,
                     ),
                   );
                 } catch (_) {
@@ -1022,7 +1325,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
             }
           }
         }
-        _applyCurrentVibesToPayload(payloadResult);
+        if (toolSnapshot == null) _applyCurrentVibesToPayload(payloadResult);
 
         final estimatedGenerationCost = _estimateResultAnlas(
           token: token,
@@ -1045,6 +1348,10 @@ class GenerationPageViewmodel extends ChangeNotifier {
           Map<String, dynamic> payload,
         ) async {
           if (!shouldSend()) throw const RequestNotSentException();
+          if (!directorBatch) {
+            PromptTokenSnapshots.instance
+                .record(payloadConfig, promptTokenTicket, payload);
+          }
           batchAccounting?.sentRequests.update(
             token,
             (value) => value + 1,
@@ -1073,6 +1380,13 @@ class GenerationPageViewmodel extends ChangeNotifier {
             response,
             operation: 'generate the image',
           );
+          receivedResponses.add(ReceivedGenerationResponse(
+            logicalTaskId:
+                'generation:${requestTimestamp.microsecondsSinceEpoch}:'
+                '${scheduledLease?.taskNumber ?? 0}',
+            responseIndex: receivedResponses.length,
+            bytes: data,
+          ));
           final processingStopwatch = Stopwatch()..start();
           if (diagnosticContext != null) {
             _apiService.recordDiagnostic(GenerationPerformanceEvent(
@@ -1082,8 +1396,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
           }
           try {
             final parameters = payload['parameters'] as Map<String, dynamic>?;
-            final expectedSampleCount =
-                (parameters?['n_samples'] as num?)?.toInt();
+            final expectedSampleCount = directorBatch
+                ? (toolSnapshot!.directorType == 'bg-removal' ? 3 : 1)
+                : (parameters?['n_samples'] as num?)?.toInt();
             final processed = _imageService.processResponseImages(
               data,
               expectedSampleCount: expectedSampleCount,
@@ -1154,6 +1469,15 @@ class GenerationPageViewmodel extends ChangeNotifier {
             ]);
           }
         }
+        if (directorBatch) {
+          final expected = toolSnapshot!.directorType == 'bg-removal' ? 3 : 1;
+          // Preserve every returned paid image. A partial response is a
+          // completed request with a warning, never another billable retry.
+          if (imageResults.length != expected) {
+            incompleteResponseWarning =
+                'Director Tools returned ${imageResults.length}/$expected images.';
+          }
+        }
         if (scheduledLease != null &&
             schedulerContext?.reserveSuccess(scheduledLease) != true) {
           return InfoCardContent.fromEmpty();
@@ -1168,12 +1492,14 @@ class GenerationPageViewmodel extends ChangeNotifier {
           vibeExtractionAnlas: vibeExtractionAnlas,
         );
         final model = payloadResult.payload['model']?.toString() ?? '';
-        final opusPreview = _opusPreviewFor(token: token, model: model);
-        final settleOpusUsage = _shouldSettleOpusUsage(
-          token: token,
-          model: model,
-          debugApiEnabled: settings.debugApiEnabled,
-        );
+        final opusPreview =
+            directorBatch ? null : _opusPreviewFor(token: token, model: model);
+        final settleOpusUsage = !directorBatch &&
+            _shouldSettleOpusUsage(
+              token: token,
+              model: model,
+              debugApiEnabled: settings.debugApiEnabled,
+            );
         final submissions = <GeneratedImageStorageSubmission>[];
         final contents = <InfoCardContent>[];
         final logicalTaskId = scheduledLease == null
@@ -1207,6 +1533,24 @@ class GenerationPageViewmodel extends ChangeNotifier {
             info: payloadResult.comment,
             additionalInfo: {
               ...digestPayloadResult(payloadResult),
+              if (toolSnapshot != null) 'batch_tool': toolSnapshot.label,
+              if (toolSnapshot?.directorType == 'bg-removal')
+                'background_removal_variant': responseSampleIndex < 3
+                    ? const [
+                        'Masked',
+                        'Generated',
+                        'Blend'
+                      ][responseSampleIndex]
+                    : 'Image ${responseSampleIndex + 1}',
+              if (enhanceOptions?.upscale == true ||
+                  toolSnapshot?.upscale == true) ...{
+                'enhance_request_width':
+                    (payloadResult.payload['parameters'] as Map)['width'],
+                'enhance_request_height':
+                    (payloadResult.payload['parameters'] as Map)['height'],
+                'width': displayedImageSize(imageBytes).width,
+                'height': displayedImageSize(imageBytes).height,
+              },
               'sample_index': responseSampleIndex,
               'sample_count': imageResults.length,
               if (incompleteResponseWarning != null)
@@ -1275,7 +1619,21 @@ class GenerationPageViewmodel extends ChangeNotifier {
         }
         return previewContent;
       } catch (error) {
-        final e = error is _PartialInpaintFailure ? error.cause : error;
+        final cause = error is _PartialInpaintFailure ? error.cause : error;
+        // A successful response is already billable. Decoding, compositing or
+        // other local processing failures cannot put that request back in the
+        // generation queue. Server errors on a later tile keep their existing
+        // retry semantics and reuse completed tiles.
+        final e = receivedResponses.isNotEmpty &&
+                cause is! NovelAiApiException &&
+                cause is! RequestNotSentException
+            ? NovelAiApiException(
+                'The server returned a successful image response, but local '
+                'processing failed; automatic resubmission stopped. '
+                'The received response data is retained with this task. $cause',
+                isOutcomeUnknown: true,
+              )
+            : cause;
         if (error is _PartialInpaintFailure &&
             error.completedTiles > (logicalTask?.savedPartialTileCount ?? 0)) {
           if (logicalTask != null) {
@@ -1366,6 +1724,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
                   ? tr('generation_outcome_unknown')
                   : 'Error occurred in generation process.',
           info: '${e.toString()}$pauseNotice',
+          receivedResponses: List.unmodifiable(receivedResponses),
           additionalInfo:
               payloadResult != null ? digestPayloadResult(payloadResult) : {},
           anlasCost: vibeExtractionAnlas == 0 ? null : vibeExtractionAnlas,
@@ -1489,7 +1848,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
     required int workerIndex,
     required GenerationLease lease,
   }) {
-    return createGenerationCommand(workerIndex: workerIndex);
+    return createGenerationCommand(
+        workerIndex: workerIndex, toolSnapshot: _runningBatchTool);
   }
 
   int _estimateResultAnlas({
@@ -1499,10 +1859,22 @@ class GenerationPageViewmodel extends ChangeNotifier {
     required int vibeExtractionAnlas,
   }) {
     try {
+      if (payloadResult.payload['req_type'] != null) {
+        return estimateDirectorToolAnlas(
+          tool: payloadResult.payload['req_type'] as String,
+          width: payloadResult.payload['width'] as int,
+          height: payloadResult.payload['height'] as int,
+        );
+      }
       final parameters =
           payloadResult.payload['parameters'] as Map<String, dynamic>;
-      final width = (parameters['width'] as num).toInt();
-      final height = (parameters['height'] as num).toInt();
+      var width = (parameters['width'] as num).toInt();
+      var height = (parameters['height'] as num).toInt();
+      if (parameters['upscaled_enhance'] == true) {
+        final size = EnhanceRequestOptions.costSize(width, height);
+        width = size.width;
+        height = size.height;
+      }
       final steps = (parameters['steps'] as num).toInt();
       final nSamples = (parameters['n_samples'] as num?)?.toInt() ?? 1;
       final action = payloadResult.payload['action']?.toString() ?? 'generate';
@@ -2403,7 +2775,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
   /// augment-image endpoint; they are billed by pixel count, and the Opus
   /// free allowance does not apply.
   Future<bool> runDirectorTool() async {
-    if (_isPreparingDirector || _isPreparingEnhance) return false;
+    if (_isSendingToolToBatch || _isPreparingDirector || _isPreparingEnhance) {
+      return false;
+    }
     if (commandStatus.isGenerationActive.value) return false;
     if (currentCommand != null && currentCommand!.isExecuting.value) {
       return false;
@@ -2639,7 +3013,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
   /// Runs one generation outside the start/stop loop (used by the
   /// img2img page's "generate once" action).
   void runSingleGeneration() {
-    if (_isPreparingEnhance || _isPreparingDirector) return;
+    if (_isSendingToolToBatch || _isPreparingEnhance || _isPreparingDirector) {
+      return;
+    }
     if (commandStatus.isGenerationActive.value) return;
     if (currentCommand != null && currentCommand!.isExecuting.value) return;
     final cycleCount =
@@ -2653,7 +3029,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
       paramConfig.seed = 0;
     }
     commandStatus.generationTimestamp = DateTime.now();
-    final command = createGenerationCommand(workerIndex: 0);
+    final command =
+        createGenerationCommand(workerIndex: 0, toolSnapshot: activeBatchTool);
     command.isExecuting.addListener(notifyListeners);
     currentCommand = command;
     addAndRunCommand(command);
@@ -2663,7 +3040,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
   /// destination's own source image, at the preset strength/noise and the
   /// magnified size. Returns false when busy or without a source image.
   Future<bool> runEnhanceGeneration() async {
-    if (_isPreparingEnhance ||
+    if (_isSendingToolToBatch ||
+        _isPreparingEnhance ||
         _isPreparingDirector ||
         commandStatus.isGenerationActive.value) {
       return false;
@@ -2682,7 +3060,10 @@ class GenerationPageViewmodel extends ChangeNotifier {
     final showIndividualSettings = enhance.showIndividualSettings;
     final strength = enhance.strength;
     final noise = enhance.noise;
-    final target = enhance.targetSize;
+    final model = payloadConfig.paramConfig.model;
+    final useMax = enhance.usesMax(model);
+    if (!useMax && !enhance.availableScales.contains(scale)) return false;
+    final target = enhance.requestSize(model);
     final generationFingerprint = _enhancePreparationFingerprint();
 
     _isPreparingEnhance = true;
@@ -2700,7 +3081,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
         strength: strength,
         noise: noise,
         addOriginalImage: false,
-        normalizeToTarget: false,
+        transparentBackground: EnhanceRequestOptions.supportsMax(model),
       );
       final currentEnhance = payloadConfig.enhanceConfig;
       if (!shouldSend() ||
@@ -2714,13 +3095,12 @@ class GenerationPageViewmodel extends ChangeNotifier {
           currentEnhance.showIndividualSettings != showIndividualSettings ||
           currentEnhance.strength != strength ||
           currentEnhance.noise != noise ||
-          currentEnhance.targetSize != target ||
+          currentEnhance.requestSize(model) != target ||
           _enhancePreparationFingerprint() != generationFingerprint) {
         return false;
       }
 
-      final random = Random.secure();
-      final seed = (random.nextInt(1 << 16) << 16) | random.nextInt(1 << 16);
+      final seed = EnhanceRequestOptions.nextSeed();
       commandStatus.generationTimestamp = DateTime.now();
       final command = createGenerationCommand(
         workerIndex: 0,
@@ -2730,7 +3110,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
           summary: plan.summary,
         ),
         seedOverride: seed,
-        promptSuffix: '-2::upscaled, blurry::,',
+        enhanceOptions: EnhanceRequestOptions(upscale: useMax),
       );
       command.isExecuting.addListener(notifyListeners);
       lastEnhanceCommand = command;
@@ -2758,6 +3138,11 @@ class GenerationPageViewmodel extends ChangeNotifier {
     final settings = payloadConfig.settings;
     return jsonEncode({
       'generation': _generationRetryFingerprint(),
+      'enhance_revision': payloadConfig.enhanceConfig.imageRevision,
+      'enhance_max': payloadConfig.enhanceConfig.maxSelected,
+      'enhance_scale': payloadConfig.enhanceConfig.scale,
+      'enhance_strength': payloadConfig.enhanceConfig.strength,
+      'enhance_noise': payloadConfig.enhanceConfig.noise,
       'api_key': settings.apiKey,
       'proxy': settings.proxy,
       'debug_api_enabled': settings.debugApiEnabled,
@@ -2894,7 +3279,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
   }
 
   void startGeneration() {
-    if (_isPreparingEnhance || _isPreparingDirector) return;
+    if (_isSendingToolToBatch || _isPreparingEnhance || _isPreparingDirector) {
+      return;
+    }
     if (commandStatus.isGenerationActive.value ||
         (currentCommand?.isExecuting.value ?? false)) {
       return;
@@ -2916,7 +3303,11 @@ class GenerationPageViewmodel extends ChangeNotifier {
     _workerRetryDelays.clear();
     _primaryWorkerPaused = false;
     if (!payloadConfig.settings.rememberSequentialProgress) {
-      payloadConfig.resetSequentialState();
+      if (activeBatchTool == null ||
+          activeBatchTool!.usesPrompt &&
+              payloadConfig.promptMode == PromptMode.random) {
+        payloadConfig.resetSequentialState();
+      }
       _cachedPayloadResult = null;
       _cachedI2iBatch = null;
       _cachedRetryFingerprint = null;
@@ -2950,6 +3341,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
       if (knownBalance != null) batch.startingBalances[token] = knownBalance;
     }
     _activeBatch = batch;
+    _runningBatchTool = activeBatchTool;
     if (batch.reconcileBalances) {
       for (final token in _activeTokens) {
         batch.baselineFutures[token] =
@@ -2998,6 +3390,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
     commandStatus.isStopping.value = false;
     final batch = _activeBatch;
     _activeBatch = null;
+    _runningBatchTool = null;
     if (batch != null) {
       batch.stopped = true;
       if (batch.reconcileBalances) _tryFinalizeBatch(batch);
@@ -3083,6 +3476,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
   ) {
     // 明确将 payload 转换为可空动态类型
     final additionalInfo = Map<String, dynamic>.from(payloadResult.payload);
+    if (additionalInfo.containsKey('req_type')) {
+      return additionalInfo..remove('image');
+    }
 
     // 使用 Map.from 确保 parameters 的类型为 Map<String, dynamic>
     final additionalInfoParam = Map<String, dynamic>.from(

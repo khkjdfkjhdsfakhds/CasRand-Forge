@@ -1,5 +1,7 @@
 import 'dart:math';
 
+import 'package:nai_casrand/data/models/batch_tool_snapshot.dart';
+
 import 'package:flutter/foundation.dart';
 import 'package:nai_casrand/core/constants/defaults.dart';
 import 'package:nai_casrand/data/models/api_token_config.dart';
@@ -132,6 +134,33 @@ class PayloadConfig extends ChangeNotifier {
   List<VibeConfig> vibeConfigList = [];
   List<VibeConfigV4> vibeConfigListV4 = [];
   List<PreciseReferenceConfig> preciseReferenceConfigList = [];
+  // Prepared tool resources are transient, just like their source images.
+  BatchToolSnapshot? enhanceBatchTool;
+  BatchToolSnapshot? directorBatchTool;
+  BatchToolKind? batchToolKind;
+  BatchToolSnapshot? get activeBatchTool => switch (batchToolKind) {
+        BatchToolKind.enhance => enhanceBatchTool,
+        BatchToolKind.director => directorBatchTool,
+        null => null,
+      };
+
+  void activateBatchTool(BatchToolSnapshot tool) {
+    if (tool.kind == BatchToolKind.enhance) {
+      enhanceBatchTool = tool;
+    } else {
+      directorBatchTool = tool;
+    }
+    batchToolKind = tool.kind;
+    promptMode = PromptMode.fixed;
+    notifyListeners();
+  }
+
+  void deactivateBatchTool() {
+    batchToolKind = null;
+    promptMode = PromptMode.random;
+    notifyListeners();
+  }
+
   bool i2iEnabled = false;
   bool vibeEnabled = false;
   bool preciseReferenceEnabled = false;
@@ -347,6 +376,9 @@ class PayloadConfig extends ChangeNotifier {
   }
 
   void resetTransientConfigs() {
+    enhanceBatchTool = null;
+    directorBatchTool = null;
+    batchToolKind = null;
     i2iConfig = I2IConfig(
       requestSize: i2iConfig.requestSize,
       sizeMode: i2iConfig.sizeMode,
@@ -464,6 +496,9 @@ class PayloadConfig extends ChangeNotifier {
   }
 
   void loadJson(Map<String, dynamic> jsonData) {
+    enhanceBatchTool = null;
+    directorBatchTool = null;
+    batchToolKind = null;
     final jsonCharacterList = jsonData.containsKey('character_config')
         ? jsonData['character_config'] as List<dynamic>
         : [];

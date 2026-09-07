@@ -1,3 +1,5 @@
+import 'package:nai_casrand/data/models/batch_tool_snapshot.dart';
+import 'package:nai_casrand/data/use_cases/enhance_request_options.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -260,6 +262,8 @@ class _EnhanceRecordingViewmodel extends GenerationPageViewmodel {
     I2iRequestBatch? presetBatch,
     int? seedOverride,
     String promptSuffix = '',
+    EnhanceRequestOptions? enhanceOptions,
+    BatchToolSnapshot? toolSnapshot,
   }) {
     capturedBatch = presetBatch;
     return Command.createAsyncNoParam(
@@ -409,6 +413,192 @@ void main() {
 
   tearDown(() async {
     await GetIt.instance.reset();
+  });
+
+  testWidgets(
+      'sending Enhance waits for feedback and imports fixed prompts without starting API',
+      (tester) async {
+    final config = GetIt.I<PayloadConfig>();
+    config.paramConfig.model = 'nai-diffusion-5-full';
+    config.rootPromptConfig.strs = ['a teapot'];
+    config.enhanceConfig
+        .setPreparedImage(_solidPng(20, 60, 180), width: 64, height: 64);
+    config.enhanceConfig.selectMax();
+    config.i2iEnabled = true;
+    config.vibeEnabled = true;
+    final randomBefore = jsonEncode(config.randomProfile.toJson());
+    final gate = Completer<void>();
+    final api = _RecordingFailureApiService();
+    final vm = _testGenerationViewmodel(
+        apiService: api, preparationFeedbackBarrier: () => gate.future);
+    final sent = await tester.runAsync(() async {
+      final sending = vm.sendToolToBatch(BatchToolKind.enhance);
+      expect(vm.isSendingToolToBatch, isTrue);
+      expect(config.activeBatchTool, isNull);
+      expect(api.payloads, isEmpty);
+      gate.complete();
+      return sending;
+    });
+    expect(sent, isTrue);
+    expect(config.promptMode, PromptMode.fixed);
+    expect(config.rootPromptConfig.strs, ['a teapot']);
+    expect(config.activeBatchTool!.upscale, isTrue);
+    expect(config.paramConfig.randomSeed, isTrue);
+    expect(config.paramConfig.nSamples, 1);
+    expect(api.payloads, isEmpty);
+    expect(await vm.setBatchToolEnabled(BatchToolKind.enhance, false), isTrue);
+    expect(config.promptMode, PromptMode.random);
+    expect(config.i2iEnabled && config.vibeEnabled, isTrue);
+    expect(jsonEncode(config.randomProfile.toJson()), randomBefore);
+    vm.dispose();
+  });
+
+  testWidgets(
+      'Enhance batch reuses frozen source and parameters with new seeds and random prompts',
+      (tester) async {
+    final config = GetIt.I<PayloadConfig>();
+    config.paramConfig.model = 'nai-diffusion-5-full';
+    config.rootPromptConfig
+      ..selectionMethod = 'single_sequential'
+      ..shuffled = false
+      ..strs = ['prompt-A', 'prompt-B'];
+    config.enhanceConfig
+        .setPreparedImage(_solidPng(10, 20, 30), width: 64, height: 64);
+    config.enhanceConfig.selectMax();
+    final api = _SequenceApiService([_successResponse()]);
+    final vm = _testGenerationViewmodel(
+        apiService: api, fileService: _NoopFileService());
+    expect(
+        await tester.runAsync(() => vm.sendToolToBatch(BatchToolKind.enhance)),
+        isTrue);
+    final sent = config.activeBatchTool!;
+    config.promptMode = PromptMode.random;
+    config.paramConfig.model = 'nai-diffusion-4-5-full';
+    config.paramConfig.steps = 50;
+    config.enhanceConfig.removeImage();
+    config.settings
+      ..generationCount = 2
+      ..generationIntervalSec = 0;
+    vm.startGeneration();
+    for (var i = 0; i < 100 && vm.commandStatus.isGenerationActive.value; i++) {
+      await tester.pump(const Duration(milliseconds: 20));
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)));
+    }
+    expect(api.payloads, hasLength(2));
+    expect(vm.commandStatus.currentGenerationCount, 2);
+    expect(
+        api.payloads.map((p) => p['input']).toList(), ['prompt-A', 'prompt-B']);
+    for (final payload in api.payloads) {
+      final parameters = _parameters(payload);
+      expect(payload['model'], 'nai-diffusion-5-full');
+      expect(parameters['steps'], sent.parameters.steps);
+      expect(parameters['image'], sent.enhanceBatch!.plans.single.imageB64);
+      expect(parameters['upscaled_enhance'], isTrue);
+      expect(parameters['extra_noise_seed'], (parameters['seed'] as int) - 1);
+    }
+    expect(_parameters(api.payloads[0])['seed'],
+        isNot(_parameters(api.payloads[1])['seed']));
+    vm.dispose();
+  });
+
+  testWidgets(
+      'Director three response variants count and charge one logical task',
+      (tester) async {
+    final config = GetIt.I<PayloadConfig>();
+    final png = _solidPng(10, 20, 30);
+    final archive = Archive();
+    for (var i = 0; i < 3; i++) {
+      archive.addFile(ArchiveFile('image_$i.png', png.length, png));
+    }
+    final api = _SequenceApiService([
+      ApiResponse(
+          status: '200',
+          data: Uint8List.fromList(ZipEncoder().encode(archive)!))
+    ]);
+    final vm = _testGenerationViewmodel(
+        apiService: api, fileService: _NoopFileService());
+    config.activateBatchTool(BatchToolSnapshot.director(payload: {
+      'req_type': 'bg-removal',
+      'image': base64Encode(png),
+      'width': 1024,
+      'height': 1024,
+    }, label: 'Remove Background', outputWidth: 1024, outputHeight: 1024));
+    config.settings
+      ..generationCount = 2
+      ..generationIntervalSec = 0;
+    vm.startGeneration();
+    for (var i = 0; i < 100 && vm.commandStatus.isGenerationActive.value; i++) {
+      await tester.pump(const Duration(milliseconds: 20));
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)));
+    }
+    expect(api.payloads, hasLength(2));
+    expect(vm.commandStatus.currentGenerationCount, 2);
+    expect(vm.commandList, hasLength(6));
+    expect(
+        vm.commandList
+            .where((c) => c.value.anlasCost != null)
+            .map((c) => c.value.anlasCost),
+        [65, 65]);
+    expect(
+        vm.commandList
+            .map((c) => c.value.additionalInfo['background_removal_variant'])
+            .toList(),
+        ['Masked', 'Generated', 'Blend', 'Masked', 'Generated', 'Blend']);
+    for (final payload in api.payloads) {
+      expect(payload, isNot(contains('seed')));
+      expect(payload, isNot(contains('prompt')));
+      expect(payload, isNot(contains('parameters')));
+    }
+    vm.dispose();
+  });
+
+  testWidgets(
+      'Enhance scheduled retry keeps complete payload despite prompt edits',
+      (tester) async {
+    final config = GetIt.I<PayloadConfig>();
+    config.paramConfig.model = 'nai-diffusion-5-full';
+    config.rootPromptConfig.strs = ['prompt-A'];
+    config.enhanceConfig
+        .setPreparedImage(_solidPng(10, 20, 30), width: 64, height: 64);
+    final api = _SequenceApiService([
+      ApiResponse(
+          status: '503',
+          data: Uint8List.fromList(
+              utf8.encode('{"statusCode":503,"message":"unavailable"}'))),
+      _successResponse(),
+    ]);
+    final vm = _testGenerationViewmodel(
+        apiService: api, fileService: _NoopFileService());
+    expect(
+        await tester.runAsync(() => vm.sendToolToBatch(BatchToolKind.enhance)),
+        isTrue);
+    config.settings
+      ..generationCount = 1
+      ..generationIntervalSec = 0;
+    vm.startGeneration();
+    for (var i = 0; i < 50 && api.payloads.isEmpty; i++) {
+      await tester.pump(const Duration(milliseconds: 20));
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)));
+    }
+    await tester
+        .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+    await tester.pump();
+    expect(api.payloads, hasLength(1),
+        reason: vm.commandList.map((c) => c.value.info).join(' | '));
+    config.rootPromptConfig.strs = ['edited after failure'];
+    await tester.pump(const Duration(seconds: 6));
+    for (var i = 0; i < 100 && vm.commandStatus.isGenerationActive.value; i++) {
+      await tester.pump(const Duration(milliseconds: 20));
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)));
+    }
+    expect(api.payloads, hasLength(2));
+    expect(api.payloads.last, api.payloads.first);
+    expect(vm.commandStatus.currentGenerationCount, 1);
+    vm.dispose();
   });
 
   testWidgets('unchanged failed retry preserves the same sequential prompt',
