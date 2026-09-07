@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:archive/archive.dart';
 import 'package:flutter/foundation.dart';
@@ -18,14 +19,17 @@ import 'package:nai_casrand/data/models/generation_performance_diagnostics.dart'
 import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
+import 'package:nai_casrand/data/models/precise_reference_config.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
+import 'package:nai_casrand/data/models/vibe_config.dart';
 import 'package:nai_casrand/data/models/vibe_config_v4.dart';
 import 'package:nai_casrand/data/services/account_service.dart';
 import 'package:nai_casrand/data/services/api_service.dart';
 import 'package:nai_casrand/data/services/file_service.dart';
 import 'package:nai_casrand/data/services/generated_image_storage.dart';
 import 'package:nai_casrand/data/services/image_service.dart';
+import 'package:nai_casrand/data/use_cases/anlas_cost.dart';
 import 'package:nai_casrand/data/use_cases/encode_vibe_use_case.dart';
 import 'package:nai_casrand/data/use_cases/generate_payload_use_case.dart';
 import 'package:nai_casrand/data/use_cases/i2i_request_size.dart';
@@ -55,6 +59,7 @@ class _FakeEncodeVibeUseCase extends EncodeVibeUseCase {
     required String token,
     required String proxy,
     String endpoint = EncodeVibeUseCase.officialEndpoint,
+    bool Function()? shouldSend,
   }) async {
     calls++;
     informationValues.add(informationExtracted);
@@ -269,6 +274,7 @@ class _TokenSequenceAccountService extends AccountService {
 
 class _RecordingFileService extends FileService {
   final List<String> savedNames = [];
+  final List<Uint8List> savedBytes = [];
 
   @override
   Future<String?> savePictureToFile(
@@ -277,6 +283,7 @@ class _RecordingFileService extends FileService {
     String saveDir,
   ) async {
     savedNames.add(fileName);
+    savedBytes.add(Uint8List.fromList(bytes));
     return '/test/$fileName';
   }
 
@@ -299,6 +306,16 @@ class _FailOnceFileService extends _RecordingFileService {
       throw StateError('simulated storage failure');
     }
     return '/test/$fileName';
+  }
+}
+
+class _FailingMetadataImageService extends ImageService {
+  @override
+  Future<Uint8List> embedMetadata(
+    Uint8List imageBytes,
+    String metadataString,
+  ) async {
+    throw StateError('simulated metadata persistence failure');
   }
 }
 
@@ -352,6 +369,18 @@ Uint8List directorResponseZip(List<Uint8List> images) {
   final archive = Archive();
   for (final (index, bytes) in images.indexed) {
     archive.addFile(ArchiveFile('image_$index.png', bytes.length, bytes));
+  }
+  return Uint8List.fromList(ZipEncoder().encode(archive)!);
+}
+
+Uint8List indexedResponseZip(Map<int, Uint8List> images) {
+  final archive = Archive();
+  for (final entry in images.entries) {
+    archive.addFile(ArchiveFile(
+      'image_${entry.key}.png',
+      entry.value.length,
+      entry.value,
+    ));
   }
   return Uint8List.fromList(ZipEncoder().encode(archive)!);
 }
@@ -559,6 +588,53 @@ void main() {
     expect(results[0].anlasCostIsEstimated, isTrue);
     expect(results[1].title, contains('generated'));
     expect(results[2].title, contains('blend'));
+  });
+
+  testWidgets(
+      'Director storage failure keeps its paid result and retries only storage',
+      (tester) async {
+    final outputImage = img.Image(width: 32, height: 32, numChannels: 3);
+    final outputBytes = Uint8List.fromList(img.encodePng(outputImage));
+    final api = _FakeApiService(ApiResponse(
+      status: '200',
+      data: directorResponseZip([outputBytes, outputBytes, outputBytes]),
+    ));
+    final files = _FailOnceFileService();
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      fileService: files,
+      prepareDirectorToolRequest:
+          const _PassthroughPrepareDirectorToolRequestUseCase(),
+      preparationFeedbackBarrier: _skipPreparationFeedbackBarrier,
+    );
+    final payload = GetIt.I<PayloadConfig>();
+    payload.settings.debugApiEnabled = true;
+    payload.directorToolConfig.setImage(outputBytes);
+
+    expect(await viewmodel.runDirectorTool(), isTrue);
+    for (var attempt = 0;
+        attempt < 100 &&
+            viewmodel.currentCommand?.value.imageArtifact?.status !=
+                GeneratedImageStorageStatus.failed;
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 1));
+    }
+
+    expect(api.calls, 1);
+    expect(viewmodel.currentCommand?.value.imageBytes, outputBytes);
+    expect(
+      viewmodel.currentCommand?.value.imageArtifact?.status,
+      GeneratedImageStorageStatus.failed,
+    );
+
+    await viewmodel.currentCommand!.value.retryImageStorage!();
+
+    expect(api.calls, 1);
+    expect(
+      viewmodel.currentCommand?.value.imageArtifact?.status,
+      GeneratedImageStorageStatus.saved,
+    );
+    viewmodel.dispose();
   });
 
   testWidgets('Director Tools reports HTTP JSON errors before ZIP decoding', (
@@ -880,7 +956,10 @@ void main() {
     ));
     final files = _RecordingFileService();
     final storage = _RecordingGeneratedImageStorage(
-      PngGeneratedImageStorage(fileService: files),
+      PngGeneratedImageStorage(
+        fileService: files,
+        metadataProcessor: ImageService().embedMetadataWithOutcome,
+      ),
     );
     final viewmodel = GenerationPageViewmodel(
       apiService: api,
@@ -936,7 +1015,10 @@ void main() {
     final api = _BlockingApiService();
     final files = _RecordingFileService();
     final storage = _RecordingGeneratedImageStorage(
-      PngGeneratedImageStorage(fileService: files),
+      PngGeneratedImageStorage(
+        fileService: files,
+        metadataProcessor: ImageService().embedMetadataWithOutcome,
+      ),
     );
     final viewmodel = GenerationPageViewmodel(
       apiService: api,
@@ -975,8 +1057,11 @@ void main() {
     expect(request.metadataPolicy.eraseMetadata, isTrue);
     expect(request.metadataPolicy.customMetadataEnabled, isTrue);
     expect(request.metadataPolicy.customMetadataContent, 'accepted metadata');
+    await tester.runAsync(() => storage.submissions.single.completed);
+    await tester.pump();
     expect(
-      await ImageService().extractMetadata(img.decodePng(request.pngBytes)!),
+      await ImageService()
+          .extractMetadata(img.decodePng(files.savedBytes.single)!),
       'accepted metadata',
     );
     viewmodel.dispose();
@@ -1106,7 +1191,7 @@ void main() {
       command.value.imageArtifact?.status,
       GeneratedImageStorageStatus.saving,
     );
-    expect(viewmodel.commandStatus.currentGenerationCount, 0);
+    expect(viewmodel.commandStatus.currentGenerationCount, 1);
 
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(body: InfoCard(command: command)),
@@ -1121,7 +1206,9 @@ void main() {
       isPermanent: true,
     ));
     for (var attempt = 0;
-        attempt < 100 && viewmodel.commandStatus.currentGenerationCount < 1;
+        attempt < 100 &&
+            command.value.imageArtifact?.status !=
+                GeneratedImageStorageStatus.saved;
         attempt++) {
       await tester.pump(const Duration(milliseconds: 1));
     }
@@ -1166,7 +1253,7 @@ void main() {
 
     expect(api.requests, hasLength(2));
     expect(storage.submissions, hasLength(2));
-    expect(viewmodel.commandStatus.currentGenerationCount, 0);
+    expect(viewmodel.commandStatus.currentGenerationCount, 2);
     expect(
       storage.submissions.map((submission) => submission.artifact.status),
       everyElement(GeneratedImageStorageStatus.saving),
@@ -1180,7 +1267,10 @@ void main() {
       ));
     }
     for (var attempt = 0;
-        attempt < 100 && viewmodel.commandStatus.currentGenerationCount < 2;
+        attempt < 100 &&
+            storage.submissions.any((submission) =>
+                submission.artifact.status !=
+                GeneratedImageStorageStatus.saved);
         attempt++) {
       await tester.pump(const Duration(milliseconds: 1));
     }
@@ -1190,7 +1280,7 @@ void main() {
     viewmodel.dispose();
   });
 
-  testWidgets('storage failure releases the logical task for one retry',
+  testWidgets('storage retry reuses paid bytes without a second API request',
       (tester) async {
     final outputImage = img.Image(width: 64, height: 64, numChannels: 3);
     final response = ApiResponse(
@@ -1217,26 +1307,44 @@ void main() {
 
     viewmodel.startGeneration();
     for (var attempt = 0;
-        attempt < 100 && storage.submissions.length < 2;
+        attempt < 100 &&
+            (storage.submissions.isEmpty ||
+                storage.submissions.first.artifact.status !=
+                    GeneratedImageStorageStatus.failed);
         attempt++) {
       await tester.pump(const Duration(milliseconds: 1));
     }
 
-    expect(storage.submissions, hasLength(2));
+    expect(api.requests, hasLength(1));
+    expect(storage.submissions, hasLength(1));
     expect(
       storage.submissions.first.artifact.status,
       GeneratedImageStorageStatus.failed,
     );
+    expect(viewmodel.commandList.single.value.imageBytes, isNotNull);
+
+    await viewmodel.commandList.single.value.retryImageStorage!();
     for (var attempt = 0;
         attempt < 100 && viewmodel.commandStatus.currentGenerationCount < 1;
         attempt++) {
       await tester.pump(const Duration(milliseconds: 1));
     }
 
-    expect(api.requests, hasLength(2));
+    expect(api.requests, hasLength(1));
     expect(storage.submissions, hasLength(2));
     expect(
       storage.requests.map((request) => request.logicalTaskId).toSet(),
+      hasLength(1),
+    );
+    expect(
+      identical(
+        storage.requests.first.pngBytes,
+        storage.requests.last.pngBytes,
+      ),
+      isTrue,
+    );
+    expect(
+      storage.requests.map((request) => request.fileName).toSet(),
       hasLength(1),
     );
     expect(
@@ -1246,6 +1354,179 @@ void main() {
     expect(viewmodel.commandStatus.currentGenerationCount, 1);
     expect(viewmodel.commandList, hasLength(1));
     expect(viewmodel.commandList.single.value.imageArtifact, isNotNull);
+    viewmodel.dispose();
+  });
+
+  testWidgets(
+      'metadata failure still saves the paid response without retrying the API',
+      (tester) async {
+    final outputImage = img.Image(width: 64, height: 64, numChannels: 3);
+    final response = ApiResponse(
+      status: '200',
+      data: directorResponseZip([
+        Uint8List.fromList(img.encodePng(outputImage)),
+      ]),
+    );
+    final api = _SequenceApiService([response, response]);
+    final files = _RecordingFileService();
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      fileService: files,
+      imageService: _FailingMetadataImageService(),
+    );
+    final settings = GetIt.I<PayloadConfig>().settings;
+    settings
+      ..debugApiEnabled = true
+      ..generationCount = 1
+      ..generationIntervalSec = 0
+      ..metadataEraseEnabled = true;
+
+    viewmodel.startGeneration();
+    for (var attempt = 0;
+        attempt < 100 &&
+            (viewmodel.commandList.isEmpty ||
+                viewmodel.commandList.single.value.imageArtifact?.status !=
+                    GeneratedImageStorageStatus.saved);
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 1));
+    }
+
+    expect(api.requests, hasLength(1));
+    expect(viewmodel.commandStatus.currentGenerationCount, 1);
+    expect(viewmodel.commandList, hasLength(1));
+    expect(viewmodel.commandList.single.value.imageBytes, isNotNull);
+    expect(
+      viewmodel.commandList.single.value.imageArtifact?.status,
+      GeneratedImageStorageStatus.saved,
+    );
+    expect(
+      viewmodel.commandList.single.value.imageArtifact?.metadataFailure,
+      isA<StateError>(),
+    );
+    expect(files.savedNames, hasLength(1));
+    viewmodel.dispose();
+  });
+
+  testWidgets('one paid response publishes every ordered sample once',
+      (tester) async {
+    final images = List.generate(3, (index) {
+      final image = img.Image(width: 32, height: 32, numChannels: 3);
+      img.fill(image, color: img.ColorRgb8(index * 40, 20, 30));
+      return Uint8List.fromList(img.encodePng(image));
+    });
+    final api = _SequenceApiService([
+      ApiResponse(status: '200', data: directorResponseZip(images)),
+    ]);
+    final files = _RecordingFileService();
+    final storage = _RecordingGeneratedImageStorage(
+      PngGeneratedImageStorage(fileService: files),
+    );
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      fileService: files,
+      generatedImageStorage: storage,
+    );
+    final payload = GetIt.I<PayloadConfig>();
+    payload.paramConfig.nSamples = 3;
+    payload.settings
+      ..debugApiEnabled = true
+      ..generationCount = 1
+      ..generationIntervalSec = 0;
+
+    viewmodel.startGeneration();
+    for (var attempt = 0;
+        attempt < 100 && viewmodel.commandList.length < 3;
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 1));
+    }
+
+    expect(api.requests, hasLength(1));
+    expect(storage.requests, hasLength(3));
+    expect(viewmodel.commandList, hasLength(3));
+    expect(
+      storage.requests.map((request) => request.logicalTaskId),
+      containsAllInOrder([
+        contains(':sample:0'),
+        contains(':sample:1'),
+        contains(':sample:2'),
+      ]),
+    );
+    expect(
+      viewmodel.commandList.map((command) => command.value.imageBytes),
+      hasLength(3),
+    );
+    expect(
+      viewmodel.commandList.where((command) => command.value.anlasCost != null),
+      hasLength(1),
+    );
+    viewmodel.dispose();
+  });
+
+  testWidgets(
+      'a damaged multi-sample member keeps valid original sample identities',
+      (tester) async {
+    Uint8List sample(int red) {
+      final image = img.Image(width: 32, height: 32, numChannels: 3);
+      img.fill(image, color: img.ColorRgb8(red, 20, 30));
+      return Uint8List.fromList(img.encodePng(image));
+    }
+
+    final api = _SequenceApiService([
+      ApiResponse(
+        status: '200',
+        data: indexedResponseZip({
+          0: sample(10),
+          1: Uint8List.fromList(utf8.encode('damaged sample')),
+          2: sample(30),
+        }),
+      ),
+    ]);
+    final files = _RecordingFileService();
+    final storage = _RecordingGeneratedImageStorage(
+      PngGeneratedImageStorage(fileService: files),
+    );
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      fileService: files,
+      generatedImageStorage: storage,
+    );
+    final payload = GetIt.I<PayloadConfig>();
+    payload.paramConfig.nSamples = 3;
+    payload.settings
+      ..debugApiEnabled = true
+      ..generationCount = 1
+      ..generationIntervalSec = 0;
+
+    viewmodel.startGeneration();
+    for (var attempt = 0;
+        attempt < 100 && viewmodel.commandList.length < 2;
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 1));
+    }
+
+    expect(api.requests, hasLength(1));
+    expect(storage.requests, hasLength(2));
+    expect(
+      storage.requests.map((request) => request.logicalTaskId),
+      containsAllInOrder([
+        contains(':sample:0'),
+        contains(':sample:2'),
+      ]),
+    );
+    expect(
+      viewmodel.commandList.map(
+        (command) => command.value.additionalInfo['sample_index'],
+      ),
+      containsAllInOrder([0, 2]),
+    );
+    expect(
+      viewmodel.commandList.first.value.additionalInfo['response_warning'],
+      contains('sample 2'),
+    );
+    expect(
+      viewmodel.commandList.where((command) => command.value.anlasCost != null),
+      hasLength(1),
+    );
     viewmodel.dispose();
   });
 
@@ -1271,6 +1552,86 @@ void main() {
 
     expect(viewmodel.nextCostEstimate.value?.anlas, 2);
     expect(viewmodel.nextCostEstimate.value?.isFreeUnderOpus, isFalse);
+    viewmodel.dispose();
+  });
+
+  testWidgets(
+      'displayed reference cost matches payload capabilities for every model family',
+      (tester) async {
+    final config = GetIt.I<PayloadConfig>();
+    config.paramConfig
+      ..sizes = const [GenerationSize(width: 1024, height: 1024)]
+      ..steps = 28
+      ..nSamples = 1;
+    config.settings
+      ..subscriptionTier = 0
+      ..subscriptionActive = false
+      ..subscriptionStatusKnown = true;
+    config.vibeConfigList.addAll(List.generate(
+      6,
+      (index) => VibeConfig(
+        imageB64: 'legacy-$index',
+        fileName: 'legacy-$index.png',
+        infoExtracted: 1,
+        referenceStrength: 0.3,
+      ),
+    ));
+    config.vibeConfigListV4.addAll(List.generate(
+      6,
+      (index) => VibeConfigV4(
+        fileName: 'modern-$index.naiv4vibe',
+        vibeB64: 'modern-$index',
+        referenceStrength: 0.3,
+      ),
+    ));
+    config.preciseReferenceConfigList.addAll(List.generate(
+      2,
+      (index) => PreciseReferenceConfig(
+        imageB64: 'precise-$index',
+        fileName: 'precise-$index.png',
+      ),
+    ));
+    // Exercise imported residual state too: capability resolution, not these
+    // booleans alone, decides which resources enter the request and estimate.
+    config
+      ..vibeEnabled = true
+      ..preciseReferenceEnabled = true;
+    final viewmodel = _NoSubscriptionRefreshViewmodel();
+
+    for (final model in [
+      'nai-diffusion-3',
+      'nai-diffusion-4-full',
+      'nai-diffusion-4-5-full',
+      'nai-diffusion-5-full',
+    ]) {
+      config.paramConfig.model = model;
+      final payload = GeneratePayloadUseCase(payloadConfig: config)().payload;
+      final parameters = payload['parameters'] as Map<String, dynamic>;
+      final actualVibes =
+          (parameters['reference_image_multiple'] as List?)?.length ?? 0;
+      final actualPrecise =
+          (parameters['director_reference_images'] as List?)?.length ?? 0;
+      final base = estimateAnlasCost(
+        width: 1024,
+        height: 1024,
+        steps: 28,
+        model: model,
+        sm: parameters['sm'] == true,
+        smDyn: parameters['sm_dyn'] == true,
+      );
+      final expected = base.anlas +
+          actualPrecise * preciseReferenceAnlas +
+          max(0, actualVibes - freeVibeCount) * extraVibeAnlas;
+
+      viewmodel.refreshCostEstimate();
+      await tester.pump();
+
+      expect(
+        viewmodel.nextCostEstimate.value?.anlas,
+        expected,
+        reason: '$model estimate must represent only payload resources',
+      );
+    }
     viewmodel.dispose();
   });
 
@@ -1418,13 +1779,14 @@ void main() {
     viewmodel.dispose();
   });
 
-  testWidgets('all API errors back off and pause an account after five', (
+  testWidgets(
+      'retryable service errors back off and pause an account after five', (
     tester,
   ) async {
     final api = _FakeApiService(ApiResponse(
-      status: '401',
+      status: '503',
       data: Uint8List.fromList(utf8.encode(
-        '{"statusCode":401,"message":"invalid token"}',
+        '{"statusCode":503,"message":"service unavailable"}',
       )),
     ));
     final viewmodel = GenerationPageViewmodel(apiService: api);
@@ -1482,7 +1844,17 @@ void main() {
       apiService: api,
       fileService: files,
     );
-    final settings = GetIt.I<PayloadConfig>().settings;
+    final config = GetIt.I<PayloadConfig>();
+    config.rootPromptConfig =
+        PromptConfig(strs: ['__A__ + __A__'], prompts: [], shuffled: false);
+    config.savedPromptConfigList = [
+      PromptConfig(
+          comment: 'A',
+          selectionMethod: 'single_sequential',
+          strs: ['A1', 'A2', 'A3'],
+          prompts: [])
+    ];
+    final settings = config.settings;
     settings
       ..debugApiEnabled = true
       ..generationCount = 1
@@ -1505,6 +1877,10 @@ void main() {
       api.requests[1].payload['parameters']['seed'],
       api.requests[0].payload['parameters']['seed'],
     );
+    expect(api.requests.map((request) => request.payload['input']),
+        ['A1 + A1', 'A1 + A1']);
+    expect(GeneratePayloadUseCase(payloadConfig: config)().payload['input'],
+        'A2 + A2');
     viewmodel.dispose();
   });
 
@@ -2208,6 +2584,21 @@ void main() {
     expect(paramConfig.sizes, hasLength(2));
   });
 
+  test('manual size input rejects values outside the generation boundary', () {
+    final viewmodel = GenerationPageViewmodel();
+    final paramConfig = GetIt.I<PayloadConfig>().paramConfig;
+    final initialSizes = List<GenerationSize>.of(paramConfig.sizes);
+
+    expect(viewmodel.addManualSize('0', '1024').isValid, isFalse);
+    expect(viewmodel.addManualSize('-64', '1024').isValid, isFalse);
+    expect(viewmodel.addManualSize('2048', '2048').isValid, isFalse);
+    expect(
+      viewmodel.addManualSize('999999999999999999999999', '64').isValid,
+      isFalse,
+    );
+    expect(paramConfig.sizes, initialSizes);
+  });
+
   testWidgets('generation waits for the configured interval between images', (
     tester,
   ) async {
@@ -2522,4 +2913,85 @@ void main() {
     expect(viewmodel.nextCommandCalls, 1);
     viewmodel.dispose();
   });
+  for (final remember in [true, false]) {
+    testWidgets(
+        'locked full cycle with parallel APIs starts a fresh complete batch remember=$remember',
+        (tester) async {
+      final config = GetIt.I<PayloadConfig>();
+      config.rootPromptConfig =
+          PromptConfig(strs: ['__A__ + __A__'], prompts: [], shuffled: false);
+      config.savedPromptConfigList = [
+        PromptConfig(
+            comment: 'A',
+            selectionMethod: 'single_sequential',
+            strs: ['A1', 'A2', 'A3', 'A4', 'A5', 'A6'],
+            prompts: [])
+      ];
+      final generate = GeneratePayloadUseCase(payloadConfig: config);
+      generate();
+      generate();
+      final api = _FakeApiService(ApiResponse(
+          status: '200',
+          data: directorResponseZip([
+            Uint8List.fromList(img.encodePng(img.Image(width: 64, height: 64)))
+          ])));
+      final viewmodel = GenerationPageViewmodel(
+          apiService: api,
+          fileService: _RecordingFileService(),
+          accountService: _FakeAccountService());
+      addTearDown(viewmodel.dispose);
+      config.settings
+        ..debugApiEnabled = true
+        ..generationCount = 999
+        ..generationIntervalSec = 0
+        ..lockToAllCombinations = true
+        ..rememberSequentialProgress = remember
+        ..parallelApiEnabled = true
+        ..apiTokens
+            .add(ApiTokenConfig(label: 'Second', token: 'local-test-second'));
+      expect(viewmodel.totalCombinations, 6);
+      viewmodel.startGeneration();
+      for (var attempt = 0;
+          attempt < 500 && viewmodel.commandStatus.isGenerationActive.value;
+          attempt++) {
+        await tester.pump(const Duration(milliseconds: 10));
+      }
+      await tester.pump();
+      expect(config.settings.generationCount, 6);
+      expect(viewmodel.commandStatus.isGenerationActive.value, isFalse);
+      expect(api.calls, 6);
+      expect(
+          api.requests.map((r) => r.payload['input']).toList(),
+          remember
+              ? [
+                  'A3 + A3',
+                  'A4 + A4',
+                  'A5 + A5',
+                  'A6 + A6',
+                  'A1 + A1',
+                  'A2 + A2'
+                ]
+              : [
+                  'A1 + A1',
+                  'A2 + A2',
+                  'A3 + A3',
+                  'A4 + A4',
+                  'A5 + A5',
+                  'A6 + A6'
+                ]);
+      expect(api.requests.map((r) => r.headers['authorization']).toSet(),
+          hasLength(2));
+      viewmodel.startGeneration();
+      for (var attempt = 0;
+          attempt < 500 && viewmodel.commandStatus.isGenerationActive.value;
+          attempt++) {
+        await tester.pump(const Duration(milliseconds: 10));
+      }
+      await tester.pump();
+      expect(api.calls, 12);
+      expect(config.settings.generationCount, 6);
+      expect(api.requests.skip(6).map((r) => r.payload['input']),
+          api.requests.take(6).map((r) => r.payload['input']));
+    });
+  }
 }

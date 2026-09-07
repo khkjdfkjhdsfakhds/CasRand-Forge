@@ -150,17 +150,17 @@ void main() {
     await tester.pump();
 
     final textField = tester.widget<TextField>(positive);
-    expect(textField.controller!.text, '1.2::haku89 ::');
-    expect(payload.fixedProfile.rootPromptConfig.strs, ['1.2::haku89 ::']);
-    final rendered = textField.controller!.buildTextSpan(
+    expect(textField.controller!.text, '1.2::haku89::');
+    expect(payload.fixedProfile.rootPromptConfig.strs, ['1.2::haku89::']);
+    var rendered = textField.controller!.buildTextSpan(
       context: tester.element(positive),
       withComposing: false,
     );
-    final spans = leafTextSpans(rendered);
+    var spans = leafTextSpans(rendered);
     expect(
       spans.any(
         (span) =>
-            span.text == '1.2::haku89 ' &&
+            span.text == '1.2::haku89::' &&
             span.style?.backgroundColor ==
                 PromptWeightSyntax.increaseBackground,
       ),
@@ -173,9 +173,31 @@ void main() {
             span.style?.backgroundColor ==
                 PromptWeightSyntax.delimiterBackground,
       ),
+      isFalse,
+    );
+
+    await tester.ensureVisible(negative);
+    await tester.tap(negative);
+    await tester.pump();
+    expect(textField.controller!.text, '1.2::haku89 ::');
+    expect(payload.fixedProfile.rootPromptConfig.strs, ['1.2::haku89 ::']);
+    rendered = textField.controller!.buildTextSpan(
+      context: tester.element(positive),
+      withComposing: false,
+    );
+    spans = leafTextSpans(rendered);
+    expect(
+      spans.any(
+        (span) =>
+            span.text == '::' &&
+            span.style?.backgroundColor ==
+                PromptWeightSyntax.delimiterBackground,
+      ),
       isTrue,
     );
 
+    await tester.ensureVisible(positive);
+    await tester.tap(positive);
     await tester.enterText(positive, 'before');
     await tester.pump(const Duration(milliseconds: 600));
     tester.testTextInput.updateEditingValue(
@@ -185,7 +207,7 @@ void main() {
       ),
     );
     await tester.pump(const Duration(milliseconds: 600));
-    expect(textField.controller!.text, '1.2::paste89 ::');
+    expect(textField.controller!.text, '1.2::paste89::');
 
     final undoHistory = tester.state<UndoHistoryState<TextEditingValue>>(
       find.descendant(
@@ -201,7 +223,7 @@ void main() {
     expect(undoHistory.canRedo, isTrue);
     undoHistory.redo();
     await tester.pump();
-    expect(textField.controller!.text, '1.2::paste89 ::');
+    expect(textField.controller!.text, '1.2::paste89::');
 
     textField.controller!.value = const TextEditingValue(
       text: '1.2::ime89::',
@@ -214,6 +236,11 @@ void main() {
       text: '1.2::ime89::',
       selection: TextSelection.collapsed(offset: 12),
     );
+    await tester.pump();
+    expect(textField.controller!.text, '1.2::ime89::');
+
+    await tester.ensureVisible(negative);
+    await tester.tap(negative);
     await tester.pump();
     expect(textField.controller!.text, '1.2::ime89 ::');
   });

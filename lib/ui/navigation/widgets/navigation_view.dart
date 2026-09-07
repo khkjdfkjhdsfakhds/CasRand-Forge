@@ -27,6 +27,7 @@ import 'package:nai_casrand/ui/settings_page/widgets/settings_page_view.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../data/models/payload_config.dart';
+import '../../../data/services/account_service.dart';
 import '../../../data/services/config_service.dart';
 import '../../../data/services/generated_image_storage.dart';
 
@@ -127,10 +128,23 @@ class NavigationViewState extends State<NavigationView>
 
   Future<bool> _prepareGeneratedImageStorageForExit() async {
     if (_exitInProgress || !mounted) return false;
-    if (!GetIt.I.isRegistered<GeneratedImageStorageService>()) return true;
-    final storage = GetIt.I<GeneratedImageStorageService>();
     _exitInProgress = true;
     try {
+      if (GetIt.I.isRegistered<ConfigService>()) {
+        final configs = GetIt.I<ConfigService>();
+        // Flush only drains previously accepted writes; prompt edits may still
+        // exist only in memory until a page change. Accept the exit snapshot
+        // before draining so a successful exit always includes the latest edit.
+        try {
+          await configs.saveConfig(GetIt.I<PayloadConfig>().toJson());
+        } finally {
+          // Also consume a queued persistence failure before a user retries.
+          await configs.flush();
+        }
+      }
+      if (!mounted) return false;
+      if (!GetIt.I.isRegistered<GeneratedImageStorageService>()) return true;
+      final storage = GetIt.I<GeneratedImageStorageService>();
       var abandon = false;
       if (storage.hasPendingWork) {
         final choice = await showDialog<_StorageExitChoice>(
@@ -189,6 +203,7 @@ class NavigationViewState extends State<NavigationView>
         ));
       }
       await closeFuture;
+      AccountService.shared.invalidate();
       if (mounted && Navigator.of(context, rootNavigator: true).canPop()) {
         Navigator.of(context, rootNavigator: true).pop();
       }

@@ -38,7 +38,7 @@ class VibeConfigListView extends StatelessWidget {
     );
 
     return ListenableBuilder(
-      listenable: viewmodel,
+      listenable: Listenable.merge([viewmodel, viewmodel.payloadConfig]),
       builder: (context, child) {
         return ListView.builder(
           itemCount: viewmodel.vibeList.length + 1,
@@ -57,7 +57,8 @@ class VibeConfigListView extends StatelessWidget {
               return DropRegion(
                 formats: Formats.standardFormats,
                 onDropOver: (_) => DropOperation.copy,
-                onPerformDrop: (event) => viewmodel.handleVibeDropEvent(event),
+                onPerformDrop: (event) =>
+                    viewmodel.handleVibeDropEvent(context, event),
                 child: addVibeDropArea,
               );
             }

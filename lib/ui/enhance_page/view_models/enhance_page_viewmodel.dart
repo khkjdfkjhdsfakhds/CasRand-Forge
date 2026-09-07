@@ -15,6 +15,7 @@ class EnhancePageViewmodel extends ChangeNotifier {
   PayloadConfig get payloadConfig => GetIt.I<PayloadConfig>();
   EnhanceConfig get config => payloadConfig.enhanceConfig;
   bool _lastImportActivatedFixedMode = false;
+  bool _disposed = false;
 
   bool takeLastImportActivatedFixedMode() {
     final value = _lastImportActivatedFixedMode;
@@ -31,12 +32,16 @@ class EnhancePageViewmodel extends ChangeNotifier {
 
   Future<bool> loadImageBytes(Uint8List bytes) async {
     try {
-      config.setImage(bytes);
+      final source = config;
+      source.setImage(bytes);
+      final revision = source.imageRevision;
       _lastImportActivatedFixedMode = false;
-      await _tryImportMetadata(bytes);
       if (GetIt.I.isRegistered<GenerationPageViewmodel>()) {
         GetIt.I<GenerationPageViewmodel>().clearEnhanceResult();
       }
+      notifyListeners();
+      await _tryImportMetadata(bytes, source: source, revision: revision);
+      if (!_isCurrentSource(source, revision)) return false;
       notifyListeners();
       return true;
     } catch (_) {
@@ -44,11 +49,20 @@ class EnhancePageViewmodel extends ChangeNotifier {
     }
   }
 
-  Future<void> _tryImportMetadata(Uint8List bytes) async {
+  bool _isCurrentSource(EnhanceConfig source, int revision) =>
+      !_disposed &&
+      identical(config, source) &&
+      source.imageRevision == revision;
+
+  Future<void> _tryImportMetadata(
+    Uint8List bytes, {
+    required EnhanceConfig source,
+    required int revision,
+  }) async {
     try {
       final metadataString =
           await ImageService().extractMetadataFromBytes(bytes);
-      if (metadataString == null) return;
+      if (metadataString == null || !_isCurrentSource(source, revision)) return;
       final decodedOuter = json.decode(metadataString);
       if (decodedOuter is! Map<String, dynamic>) return;
       final rawComment = decodedOuter['Comment'];
@@ -62,12 +76,12 @@ class EnhancePageViewmodel extends ChangeNotifier {
         comment = rawComment;
       }
       final rawDescription = decodedOuter['Description'];
-      final source = decodedOuter['Source']?.toString() ?? '';
+      final modelSource = decodedOuter['Source']?.toString() ?? '';
       if (comment.isEmpty && rawDescription is! String) return;
       payloadConfig.importMetadataToFixedProfile(
         comment,
         prompt: rawDescription is String ? rawDescription : null,
-        model: sourceToModel[source],
+        model: modelFromSource(modelSource),
       );
       _lastImportActivatedFixedMode = true;
     } catch (_) {
@@ -75,7 +89,14 @@ class EnhancePageViewmodel extends ChangeNotifier {
     }
   }
 
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+
   void removeImage() {
+    _lastImportActivatedFixedMode = false;
     config.removeImage();
     if (GetIt.I.isRegistered<GenerationPageViewmodel>()) {
       GetIt.I<GenerationPageViewmodel>().clearEnhanceResult();

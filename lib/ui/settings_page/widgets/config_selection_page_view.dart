@@ -4,7 +4,7 @@ import 'package:nai_casrand/ui/settings_page/view_models/config_selection_page_v
 
 class ConfigSelectionPageView extends StatelessWidget {
   final ConfigSelectionPageViewmodel viewmodel = ConfigSelectionPageViewmodel();
-  final Function notificationCallback;
+  final VoidCallback notificationCallback;
 
   ConfigSelectionPageView({super.key, required this.notificationCallback});
 
@@ -30,18 +30,22 @@ class ConfigSelectionPageView extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           IconButton(
+              tooltip: tr('edit'),
               onPressed: () => _showTitleEditDialog(context, uuid),
               icon: const Icon(Icons.edit)),
           const SizedBox(
             width: 8.0,
           ),
           IconButton(
+              tooltip:
+                  '${tr('export_settings_to_file')}\n${tr('config_export_credentials_removed')}',
               onPressed: () => viewmodel.saveConfigAsFile(context, uuid),
               icon: const Icon(Icons.file_download_outlined)),
           const SizedBox(
             width: 8.0,
           ),
           IconButton(
+              tooltip: tr('delete'),
               onPressed:
                   isActive ? null : () => viewmodel.deleteConfig(context, uuid),
               icon: const Icon(Icons.delete_outline)),
@@ -59,8 +63,8 @@ class ConfigSelectionPageView extends StatelessWidget {
               ? const Icon(Icons.edit_outlined)
               : const SizedBox.shrink(),
         ),
-        onLongPress: () {
-          viewmodel.loadSavedConfig(context, uuid);
+        onLongPress: () async {
+          await viewmodel.loadSavedConfig(context, uuid);
           notificationCallback();
         },
       );
@@ -68,6 +72,7 @@ class ConfigSelectionPageView extends StatelessWidget {
     final currentConfigButton = ListTile(
       title: Text(tr('copy_current_config')),
       trailing: IconButton(
+        tooltip: tr('copy_current_config'),
         onPressed: () => viewmodel.saveCopyOfCurrentConfig(context),
         icon: const Icon(Icons.copy),
       ),
@@ -76,6 +81,7 @@ class ConfigSelectionPageView extends StatelessWidget {
     final importButton = ListTile(
       title: Text(tr('import_from_file')),
       trailing: IconButton(
+        tooltip: tr('import_from_file'),
         onPressed: () => viewmodel.importConfigFromFile(context),
         icon: const Icon(Icons.file_open_outlined),
       ),

@@ -3,8 +3,10 @@ import 'dart:collection';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:crypto/crypto.dart';
 import 'package:nai_casrand/data/services/file_service.dart';
 import 'package:nai_casrand/data/services/generated_image_jpeg_encoder.dart';
+import 'package:nai_casrand/data/services/image_service.dart';
 import 'package:path_provider/path_provider.dart';
 
 enum GeneratedImageStorageStatus {
@@ -60,6 +62,9 @@ class GeneratedImageArtifact extends ChangeNotifier {
   GeneratedImageFile? _originalPngFile;
   List<GeneratedImageFile> _permanentFiles;
   Object? _failure;
+  GeneratedImageSaveDestination? _saveDestination;
+  ImageMetadataEmbeddingMode? _metadataEmbeddingMode;
+  Object? _metadataFailure;
 
   GeneratedImageArtifact._({
     required this.previewBytes,
@@ -73,6 +78,14 @@ class GeneratedImageArtifact extends ChangeNotifier {
   List<GeneratedImageFile> get permanentFiles =>
       List.unmodifiable(_permanentFiles);
   Object? get failure => _failure;
+  GeneratedImageSaveDestination? get saveDestination => _saveDestination;
+  ImageMetadataEmbeddingMode? get metadataEmbeddingMode =>
+      _metadataEmbeddingMode;
+  Object? get metadataFailure => _metadataFailure;
+
+  bool get isDurablySaved =>
+      _permanentFiles.isNotEmpty ||
+      _saveDestination == GeneratedImageSaveDestination.androidGallery;
 
   bool get isTerminal => _isTerminalStatus(_status);
 
@@ -99,6 +112,17 @@ class GeneratedImageArtifact extends ChangeNotifier {
     _currentFile = file;
     if (file?.mediaType == 'image/png') _originalPngFile = file;
     _permanentFiles = file == null ? const [] : [file];
+    _saveDestination =
+        file == null ? null : GeneratedImageSaveDestination.fileSystem;
+    _status = GeneratedImageStorageStatus.saved;
+    notifyListeners();
+  }
+
+  void _completeWithPathlessPublication(
+    GeneratedImageSaveDestination destination,
+  ) {
+    if (isTerminal) return;
+    _saveDestination = destination;
     _status = GeneratedImageStorageStatus.saved;
     notifyListeners();
   }
@@ -107,6 +131,18 @@ class GeneratedImageArtifact extends ChangeNotifier {
     if (isTerminal) return;
     _failure = error;
     _status = GeneratedImageStorageStatus.failed;
+    notifyListeners();
+  }
+
+  void _setMetadataEmbeddingMode(ImageMetadataEmbeddingMode mode) {
+    if (isTerminal) return;
+    _metadataEmbeddingMode = mode;
+    notifyListeners();
+  }
+
+  void _setMetadataFailure(Object error) {
+    if (isTerminal) return;
+    _metadataFailure = error;
     notifyListeners();
   }
 
@@ -140,12 +176,6 @@ class GeneratedImageArtifact extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _completeSkipped() {
-    if (isTerminal) return;
-    _status = GeneratedImageStorageStatus.skippedNotSmaller;
-    notifyListeners();
-  }
-
   void _completeWithPngFallback(GeneratedImageFile png) {
     if (isTerminal) return;
     _currentFile = png;
@@ -170,13 +200,13 @@ class GeneratedImageStorageRequest {
   final GeneratedImageStoragePolicy storagePolicy;
   final GeneratedImageMetadataPolicy metadataPolicy;
 
-  const GeneratedImageStorageRequest({
+  GeneratedImageStorageRequest({
     required this.logicalTaskId,
-    required this.pngBytes,
+    required Uint8List pngBytes,
     required this.fileName,
     required this.storagePolicy,
     required this.metadataPolicy,
-  });
+  }) : pngBytes = Uint8List.fromList(pngBytes).asUnmodifiableView();
 }
 
 class GeneratedImageStoragePolicy {
@@ -243,7 +273,8 @@ class GeneratedImageStorageSubmission {
   ///
   /// The terminal future resolves only for a saved outcome. Publication
   /// failures update the artifact to [GeneratedImageStorageStatus.failed] and
-  /// are rethrown so generation scheduling can release its success claim.
+  /// are rethrown so callers can offer a storage-only retry for the same paid
+  /// response bytes.
   factory GeneratedImageStorageSubmission.start({
     required Uint8List previewBytes,
     required Future<GeneratedImageFile?> Function() publish,
@@ -328,34 +359,140 @@ abstract interface class GeneratedImageStorage {
   GeneratedImageStorageSubmission submit(GeneratedImageStorageRequest request);
 }
 
+typedef GeneratedImageMetadataProcessor = Future<ImageMetadataEmbeddingResult>
+    Function(
+  Uint8List imageBytes,
+  String metadata,
+);
+
+Future<ImageMetadataEmbeddingResult> _embedGeneratedImageMetadata(
+  (Uint8List, String) input,
+) {
+  return ImageService().embedMetadataWithOutcome(input.$1, input.$2);
+}
+
+Future<ImageMetadataEmbeddingResult> _defaultGeneratedImageMetadataProcessor(
+  Uint8List imageBytes,
+  String metadata,
+) {
+  return compute(_embedGeneratedImageMetadata, (imageBytes, metadata));
+}
+
+Future<Uint8List> _prepareGeneratedImageBytes(
+  GeneratedImageStorageRequest request,
+  GeneratedImageMetadataProcessor metadataProcessor,
+  GeneratedImageArtifact artifact,
+) async {
+  if (!request.metadataPolicy.eraseMetadata) {
+    return request.pngBytes;
+  }
+  final metadata = request.metadataPolicy.customMetadataEnabled
+      ? request.metadataPolicy.customMetadataContent
+      : '';
+  try {
+    final result = await metadataProcessor(request.pngBytes, metadata);
+    artifact._setMetadataEmbeddingMode(result.mode);
+    return result.bytes;
+  } catch (error) {
+    // Preserving the paid image is the primary invariant. A metadata failure
+    // is retained as a visible warning while the unmodified response is still
+    // published durably.
+    artifact._setMetadataFailure(error);
+    return request.pngBytes;
+  }
+}
+
 /// Current PNG-only behavior behind the shared generated-image storage seam.
 class PngGeneratedImageStorage implements GeneratedImageStorage {
   final FileService _fileService;
+  final GeneratedImageMetadataProcessor _metadataProcessor;
+  final Expando<({GeneratedImageSaveResult result, Future<String> digest})>
+      _publications = Expando();
 
-  PngGeneratedImageStorage({FileService? fileService})
-      : _fileService = fileService ?? FileService();
+  PngGeneratedImageStorage({
+    FileService? fileService,
+    GeneratedImageMetadataProcessor? metadataProcessor,
+  })  : _fileService = fileService ?? FileService(),
+        _metadataProcessor =
+            metadataProcessor ?? _defaultGeneratedImageMetadataProcessor;
 
   @override
-  GeneratedImageStorageSubmission submit(GeneratedImageStorageRequest request) {
-    return GeneratedImageStorageSubmission.start(
+  GeneratedImageStorageSubmission submit(
+    GeneratedImageStorageRequest request, {
+    GeneratedImageStorageCancellationToken? cancellationToken,
+  }) {
+    return GeneratedImageStorageSubmission.run(
       previewBytes: request.pngBytes,
-      publish: () async {
-        final path = await _fileService.savePictureToFile(
-          request.pngBytes,
+      cancellationToken: cancellationToken,
+      initialStatus: GeneratedImageStorageStatus.saving,
+      store: (artifact) async {
+        final storageBytes = await _prepareGeneratedImageBytes(
+          request,
+          _metadataProcessor,
+          artifact,
+        );
+        if (cancellationToken?.isAbandoned ?? false) {
+          throw cancellationToken!.error ??
+              const GeneratedImageStorageAbandonedException();
+        }
+        final previous = _publications[request];
+        GeneratedImageSaveResult? result;
+        if (previous != null) {
+          final path = previous.result.path;
+          if (path == null) {
+            result = previous.result;
+          } else {
+            final type = await FileSystemEntity.type(path, followLinks: false);
+            if (type != FileSystemEntityType.notFound) {
+              final digest = await compute(_generatedImageDigest, storageBytes);
+              if (type != FileSystemEntityType.file ||
+                  await previous.digest != digest ||
+                  await compute(_generatedImageDigest,
+                          await File(path).readAsBytes()) !=
+                      digest) {
+                throw FileSystemException(
+                    'A previously saved image was changed; preserving the existing file.',
+                    path);
+              }
+              result = previous.result;
+            }
+          }
+        }
+        if (cancellationToken?.isAbandoned ?? false) {
+          throw cancellationToken!.error ??
+              const GeneratedImageStorageAbandonedException();
+        }
+        result ??= await _fileService.saveGeneratedImage(
+          storageBytes,
           request.fileName,
           request.storagePolicy.pngOutputDirectory,
         );
-        return path == null
-            ? null
-            : GeneratedImageFile(
-                path: path,
-                mediaType: 'image/png',
-                isPermanent: true,
-              );
+        final path = result.path;
+        if (previous == null || !identical(previous.result, result)) {
+          // Receipt hashing is background bookkeeping, not part of the first
+          // publication's completion boundary. A retry awaits this exact digest.
+          final digest = path == null
+              ? Future<String>.value('')
+              : compute(_generatedImageDigest, storageBytes);
+          unawaited(digest.then<void>((_) {}, onError: (Object _) {}));
+          _publications[request] = (result: result, digest: digest);
+        }
+        if (path == null) {
+          artifact._completeWithPathlessPublication(result.destination);
+          return;
+        }
+        artifact._completeWithFile(GeneratedImageFile(
+          path: path,
+          mediaType: 'image/png',
+          isPermanent: true,
+        ));
       },
     );
   }
 }
+
+String _generatedImageDigest(Uint8List bytes) =>
+    sha256.convert(bytes).toString();
 
 typedef GeneratedImageSessionDirectoryProvider = Future<Directory> Function();
 typedef GeneratedImageSessionRootDirectoryProvider = Future<Directory>
@@ -372,6 +509,7 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
     GeneratedImageSessionDirectoryProvider? sessionDirectoryProvider,
     GeneratedImageSessionRootDirectoryProvider? sessionRootDirectoryProvider,
     FileService? fileService,
+    GeneratedImageMetadataProcessor? metadataProcessor,
     int maxConcurrentJpegJobs = 2,
     int maxPendingJpegJobs = 16,
   })  : _desktopJpegSupported =
@@ -384,7 +522,12 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
                       sessionRootDirectoryProvider,
                     )),
         _sessionRootDirectoryProvider = sessionRootDirectoryProvider,
-        _pngStorage = PngGeneratedImageStorage(fileService: fileService),
+        _metadataProcessor =
+            metadataProcessor ?? _defaultGeneratedImageMetadataProcessor,
+        _pngStorage = PngGeneratedImageStorage(
+          fileService: fileService,
+          metadataProcessor: metadataProcessor,
+        ),
         _queue = _GeneratedImageJpegQueue(
           maxConcurrent: maxConcurrentJpegJobs,
           maxPending: maxPendingJpegJobs,
@@ -396,13 +539,18 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
   final GeneratedImageSessionRootDirectoryProvider?
       _sessionRootDirectoryProvider;
   final PngGeneratedImageStorage _pngStorage;
+  final GeneratedImageMetadataProcessor _metadataProcessor;
   final _GeneratedImageJpegQueue _queue;
   final Set<String> _reservedOutputPaths = {};
+  // Receipts belong to the immutable paid response request. Expando avoids
+  // keeping completed requests/images alive solely for storage retry support.
+  final Expando<Map<String, String>> _publishedDigests = Expando();
   final Set<_GeneratedImageStorageJob> _jobs = {};
   final List<Object> _cleanupFailures = [];
   Future<Directory>? _sessionDirectory;
   Future<void>? _initializeFuture;
   Future<void>? _closeFuture;
+  Future<void> _jpegEnqueueTail = Future<void>.value();
   bool _closeCompleted = false;
   bool _acceptingSubmissions = true;
 
@@ -411,7 +559,7 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
   bool get hasPendingWork =>
       _jobs.any((job) => !job.completed) || _queue.hasPendingWork;
   bool get hasPending => hasPendingWork;
-  int get pendingJobCount => _queue.pendingCount + _queue.activeCount;
+  int get pendingJobCount => _jobs.where((job) => !job.completed).length;
   int get pendingCount => pendingJobCount;
   List<Object> get cleanupFailures => List.unmodifiable(_cleanupFailures);
 
@@ -427,15 +575,26 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
         previewBytes: request.pngBytes,
       );
     }
-    if (!_desktopJpegSupported || !request.storagePolicy.jpegEnabled) {
-      return _pngStorage.submit(request);
-    }
     final job = _GeneratedImageStorageJob();
+    if (!_desktopJpegSupported || !request.storagePolicy.jpegEnabled) {
+      return _trackSubmission(
+        job,
+        _pngStorage.submit(request, cancellationToken: job.cancellationToken),
+      );
+    }
+    final enqueueTurn = _reserveJpegEnqueueTurn();
     final submission = GeneratedImageStorageSubmission.run(
       previewBytes: request.pngBytes,
       cancellationToken: job.cancellationToken,
-      store: (artifact) => _storeJpegMode(request, artifact, job),
+      store: (artifact) => _storeJpegMode(request, artifact, job, enqueueTurn),
     );
+    return _trackSubmission(job, submission);
+  }
+
+  GeneratedImageStorageSubmission _trackSubmission(
+    _GeneratedImageStorageJob job,
+    GeneratedImageStorageSubmission submission,
+  ) {
     job.artifact = submission.artifact;
     job.future = submission.completed;
     _jobs.add(job);
@@ -450,6 +609,12 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
       },
     );
     return submission;
+  }
+
+  _GeneratedImageJpegEnqueueTurn _reserveJpegEnqueueTurn() {
+    final turn = _GeneratedImageJpegEnqueueTurn(_jpegEnqueueTail);
+    _jpegEnqueueTail = turn.released;
+    return turn;
   }
 
   /// Prepare the current session and clean marked sessions from prior runs.
@@ -578,130 +743,178 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
     GeneratedImageStorageRequest request,
     GeneratedImageArtifact artifact,
     _GeneratedImageStorageJob job,
+    _GeneratedImageJpegEnqueueTurn enqueueTurn,
   ) async {
-    job.throwIfAbandoned();
-    if (request.storagePolicy.jpegOutputDirectory.trim().isEmpty) {
-      throw ArgumentError.value(
-        request.storagePolicy.jpegOutputDirectory,
-        'jpegOutputDirectory',
-        'must be selected before JPEG storage is enabled',
+    var enqueueTurnReleased = false;
+    final ownedDigests = _publishedDigests[request] ??= <String, String>{};
+    try {
+      job.throwIfAbandoned();
+      final storagePngBytes = await _prepareGeneratedImageBytes(
+        request,
+        _metadataProcessor,
+        artifact,
       );
-    }
-    final policy = request.storagePolicy;
-    final File sourcePng;
-    final bool sourceIsPermanent;
-    if (policy.retainOriginalPng) {
-      if (policy.pngOutputDirectory.trim().isEmpty) {
+      job.throwIfAbandoned();
+      if (request.storagePolicy.jpegOutputDirectory.trim().isEmpty) {
         throw ArgumentError.value(
-          policy.pngOutputDirectory,
-          'pngOutputDirectory',
-          'must be selected when retaining original PNG files',
+          request.storagePolicy.jpegOutputDirectory,
+          'jpegOutputDirectory',
+          'must be selected before JPEG storage is enabled',
         );
       }
-      sourcePng = File(
-        '${policy.pngOutputDirectory}${Platform.pathSeparator}'
-        '${request.fileName}',
-      );
-      sourceIsPermanent = true;
-    } else {
-      artifact._setStatus(GeneratedImageStorageStatus.savingSessionPng);
-      await initialize();
-      job.throwIfAbandoned();
-      final session = await _sessionDirectory;
-      if (session == null) {
-        throw StateError('Generated-image session was not initialized.');
-      }
-      sourcePng = File(
-        '${session.path}${Platform.pathSeparator}${request.fileName}',
-      );
-      sourceIsPermanent = false;
-    }
-    await _writeNewFileAtomically(
-      sourcePng,
-      request.pngBytes,
-      cancellationToken: job.cancellationToken,
-    );
-    job.throwIfAbandoned();
-    final sourceArtifact = GeneratedImageFile(
-      path: sourcePng.absolute.path,
-      mediaType: 'image/png',
-      isPermanent: sourceIsPermanent,
-    );
-    artifact._setCurrentFile(
-      sourceArtifact,
-      status: GeneratedImageStorageStatus.queued,
-      permanentFiles: sourceIsPermanent ? [sourceArtifact] : const [],
-    );
-
-    await _queue.schedule(() async {
-      job.throwIfAbandoned();
-      artifact._setStatus(GeneratedImageStorageStatus.encoding);
-      final result = await _jpegEncoder.encode(request.pngBytes);
-      job.throwIfAbandoned();
-      if (result.status ==
-          GeneratedImageJpegEncodingStatus.transparencyUnsupported) {
-        if (sourceIsPermanent) {
-          artifact._completeWithPngFallback(sourceArtifact);
-          return;
+      final policy = request.storagePolicy;
+      final File sourcePng;
+      final bool sourceIsPermanent;
+      if (policy.retainOriginalPng) {
+        if (policy.pngOutputDirectory.trim().isEmpty) {
+          throw ArgumentError.value(
+            policy.pngOutputDirectory,
+            'pngOutputDirectory',
+            'must be selected when retaining original PNG files',
+          );
         }
-        final fallbackPng = File(
-          '${policy.jpegOutputDirectory}${Platform.pathSeparator}'
+        sourcePng = File(
+          '${policy.pngOutputDirectory}${Platform.pathSeparator}'
           '${request.fileName}',
         );
-        await _writeNewFileAtomically(
-          fallbackPng,
-          request.pngBytes,
-          cancellationToken: job.cancellationToken,
-        );
+        sourceIsPermanent = true;
+      } else {
+        artifact._setStatus(GeneratedImageStorageStatus.savingSessionPng);
+        await initialize();
         job.throwIfAbandoned();
-        artifact._completeWithPngFallback(GeneratedImageFile(
-          path: fallbackPng.absolute.path,
-          mediaType: 'image/png',
-          isPermanent: true,
-        ));
-        return;
-      }
-      if (!result.isSuccess) {
-        throw StateError(
-          result.errorMessage ??
-              'JPEG conversion ended with ${result.status.name}.',
+        final session = await _sessionDirectory;
+        if (session == null) {
+          throw StateError('Generated-image session was not initialized.');
+        }
+        sourcePng = File(
+          '${session.path}${Platform.pathSeparator}${request.fileName}',
         );
+        sourceIsPermanent = false;
       }
-      final jpegBytes = result.jpegBytes!;
-      job.throwIfAbandoned();
-      if (jpegBytes.length >= request.pngBytes.length) {
-        artifact._completeSkipped();
-        return;
-      }
-
-      artifact._setStatus(GeneratedImageStorageStatus.publishing);
-      final jpegName = _replaceExtension(request.fileName, '.jpg');
-      final jpegFile = File(
-        '${request.storagePolicy.jpegOutputDirectory}'
-        '${Platform.pathSeparator}$jpegName',
-      );
       await _writeNewFileAtomically(
-        jpegFile,
-        jpegBytes,
+        sourcePng,
+        storagePngBytes,
         cancellationToken: job.cancellationToken,
+        ownedDigests: ownedDigests,
       );
       job.throwIfAbandoned();
-      final reopened = await jpegFile.readAsBytes();
+      final sourceArtifact = GeneratedImageFile(
+        path: sourcePng.absolute.path,
+        mediaType: 'image/png',
+        isPermanent: sourceIsPermanent,
+      );
+      artifact._setCurrentFile(
+        sourceArtifact,
+        status: GeneratedImageStorageStatus.queued,
+        permanentFiles: sourceIsPermanent ? [sourceArtifact] : const [],
+      );
+
+      // submit() order is the public FIFO contract. Source PNG preparation
+      // happens asynchronously, so reserve the enqueue turn up front rather
+      // than letting whichever write finishes first reorder conversions.
+      await enqueueTurn.previous;
       job.throwIfAbandoned();
-      if (!listEquals(reopened, jpegBytes)) {
-        await jpegFile.delete();
-        throw const FileSystemException(
-          'Published JPEG did not match the verified candidate.',
-        );
+      late final Future<void> scheduled;
+      try {
+        scheduled = _queue.schedule(() async {
+          job.throwIfAbandoned();
+          artifact._setStatus(GeneratedImageStorageStatus.encoding);
+          final result = await _jpegEncoder.encode(storagePngBytes);
+          job.throwIfAbandoned();
+          if (result.status ==
+              GeneratedImageJpegEncodingStatus.transparencyUnsupported) {
+            if (sourceIsPermanent) {
+              artifact._completeWithPngFallback(sourceArtifact);
+              return;
+            }
+            final fallbackPng = File(
+              '${policy.jpegOutputDirectory}${Platform.pathSeparator}'
+              '${request.fileName}',
+            );
+            await _writeNewFileAtomically(
+              fallbackPng,
+              storagePngBytes,
+              cancellationToken: job.cancellationToken,
+              ownedDigests: ownedDigests,
+            );
+            job.throwIfAbandoned();
+            artifact._completeWithPngFallback(GeneratedImageFile(
+              path: fallbackPng.absolute.path,
+              mediaType: 'image/png',
+              isPermanent: true,
+            ));
+            return;
+          }
+          if (!result.isSuccess) {
+            throw StateError(
+              result.errorMessage ??
+                  'JPEG conversion ended with ${result.status.name}.',
+            );
+          }
+          final jpegBytes = result.jpegBytes!;
+          job.throwIfAbandoned();
+          if (jpegBytes.length >= storagePngBytes.length) {
+            if (sourceIsPermanent) {
+              artifact._completeWithPngFallback(sourceArtifact);
+              return;
+            }
+            final fallbackPng = File(
+              '${policy.jpegOutputDirectory}${Platform.pathSeparator}'
+              '${request.fileName}',
+            );
+            await _writeNewFileAtomically(
+              fallbackPng,
+              storagePngBytes,
+              cancellationToken: job.cancellationToken,
+              ownedDigests: ownedDigests,
+            );
+            job.throwIfAbandoned();
+            artifact._completeWithPngFallback(GeneratedImageFile(
+              path: fallbackPng.absolute.path,
+              mediaType: 'image/png',
+              isPermanent: true,
+            ));
+            return;
+          }
+
+          artifact._setStatus(GeneratedImageStorageStatus.publishing);
+          final jpegName = _replaceExtension(request.fileName, '.jpg');
+          final jpegFile = File(
+            '${request.storagePolicy.jpegOutputDirectory}'
+            '${Platform.pathSeparator}$jpegName',
+          );
+          await _writeNewFileAtomically(
+            jpegFile,
+            jpegBytes,
+            cancellationToken: job.cancellationToken,
+            ownedDigests: ownedDigests,
+          );
+          job.throwIfAbandoned();
+          final reopened = await jpegFile.readAsBytes();
+          job.throwIfAbandoned();
+          if (!listEquals(reopened, jpegBytes)) {
+            await jpegFile.delete();
+            throw const FileSystemException(
+              'Published JPEG did not match the verified candidate.',
+            );
+          }
+          artifact._completeWithJpeg(
+              GeneratedImageFile(
+                path: jpegFile.absolute.path,
+                mediaType: 'image/jpeg',
+                isPermanent: true,
+              ),
+              otherPermanentFiles:
+                  sourceIsPermanent ? [sourceArtifact] : const []);
+        }, cancellationToken: job.cancellationToken);
+      } finally {
+        enqueueTurn.release();
+        enqueueTurnReleased = true;
       }
-      artifact._completeWithJpeg(
-          GeneratedImageFile(
-            path: jpegFile.absolute.path,
-            mediaType: 'image/jpeg',
-            isPermanent: true,
-          ),
-          otherPermanentFiles: sourceIsPermanent ? [sourceArtifact] : const []);
-    }, cancellationToken: job.cancellationToken);
+      await scheduled;
+    } finally {
+      if (!enqueueTurnReleased) enqueueTurn.release();
+    }
   }
 
   Future<Directory> _sessionRootFor(Directory session) async {
@@ -869,6 +1082,7 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
     File finalFile,
     Uint8List bytes, {
     GeneratedImageStorageCancellationToken? cancellationToken,
+    Map<String, String>? ownedDigests,
   }) async {
     final reservation = finalFile.absolute.path;
     if (!_reservedOutputPaths.add(reservation)) {
@@ -878,11 +1092,35 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
       );
     }
     try {
+      final digest = ownedDigests == null
+          ? null
+          : await compute(_generatedImageDigest, bytes);
+      final existingType = await FileSystemEntity.type(
+        finalFile.path,
+        followLinks: false,
+      );
+      if (existingType != FileSystemEntityType.notFound &&
+          ownedDigests?[reservation] != null) {
+        // Never infer ownership just from a matching name/task ID. Only a
+        // successful write by this request plus unchanged bytes is resumable.
+        if (existingType != FileSystemEntityType.file ||
+            ownedDigests![reservation] != digest ||
+            await compute(
+                    _generatedImageDigest, await finalFile.readAsBytes()) !=
+                digest) {
+          throw FileSystemException(
+            'A previously saved image was changed; preserving the existing file.',
+            finalFile.path,
+          );
+        }
+        return;
+      }
       await _writeReservedFileAtomically(
         finalFile,
         bytes,
         cancellationToken: cancellationToken,
       );
+      if (digest != null) ownedDigests![reservation] = digest;
     } finally {
       _reservedOutputPaths.remove(reservation);
     }
@@ -893,41 +1131,16 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
     Uint8List bytes, {
     GeneratedImageStorageCancellationToken? cancellationToken,
   }) async {
-    final parent = finalFile.parent;
-    if (!await parent.exists()) await parent.create(recursive: true);
-    if (await finalFile.exists()) {
-      throw FileSystemException(
-        'Refusing to overwrite an existing generated image.',
-        finalFile.path,
-      );
-    }
-    final tempFile = File(
-      '${parent.path}${Platform.pathSeparator}.${finalFile.uri.pathSegments.last}'
-      '.${DateTime.now().microsecondsSinceEpoch}.$pid.tmp',
+    return FileService.writeNewImageFileAtomically(
+      finalFile,
+      bytes,
+      beforePublish: () {
+        if (cancellationToken?.isAbandoned ?? false) {
+          throw cancellationToken!.error ??
+              const GeneratedImageStorageAbandonedException();
+        }
+      },
     );
-    RandomAccessFile? handle;
-    try {
-      handle = await tempFile.open(mode: FileMode.writeOnly);
-      await handle.writeFrom(bytes);
-      await handle.flush();
-      await handle.close();
-      handle = null;
-      if (cancellationToken?.isAbandoned ?? false) {
-        throw cancellationToken!.error ??
-            const GeneratedImageStorageAbandonedException();
-      }
-      if (await finalFile.exists()) {
-        throw FileSystemException(
-          'Refusing to overwrite an existing generated image.',
-          finalFile.path,
-        );
-      }
-      await tempFile.rename(finalFile.path);
-    } catch (_) {
-      await handle?.close();
-      if (await tempFile.exists()) await tempFile.delete();
-      rethrow;
-    }
   }
 
   static Future<Directory> _createDefaultSessionDirectory() async {
@@ -995,6 +1208,19 @@ class _GeneratedImageStorageJob {
     if (current != null && !current.isTerminal) {
       current._completeWithAbandoned(reason);
     }
+  }
+}
+
+class _GeneratedImageJpegEnqueueTurn {
+  _GeneratedImageJpegEnqueueTurn(this.previous);
+
+  final Future<void> previous;
+  final Completer<void> _released = Completer<void>();
+
+  Future<void> get released => _released.future;
+
+  void release() {
+    if (!_released.isCompleted) _released.complete();
   }
 }
 

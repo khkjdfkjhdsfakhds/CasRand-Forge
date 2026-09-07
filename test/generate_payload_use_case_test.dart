@@ -11,6 +11,22 @@ import 'package:nai_casrand/data/models/vibe_config_v4.dart';
 import 'package:nai_casrand/data/use_cases/generate_payload_use_case.dart';
 import 'package:nai_casrand/data/use_cases/prepare_i2i_request_use_case.dart';
 
+class _UpperBoundRandom implements Random {
+  int? requestedMax;
+
+  @override
+  bool nextBool() => true;
+
+  @override
+  double nextDouble() => 1;
+
+  @override
+  int nextInt(int max) {
+    requestedMax = max;
+    return max - 1;
+  }
+}
+
 void main() {
   test('override prompt replaces generated root prompt when enabled', () {
     final config = PayloadConfig(
@@ -607,6 +623,33 @@ void main() {
     }
   });
 
+  test('random generation can use the complete unsigned 32-bit seed range', () {
+    final config = buildPlainConfig()..paramConfig.randomSeed = true;
+    final random = _UpperBoundRandom();
+    const plan = I2iRequestPlan(
+      imageB64: 'aW1hZ2U=',
+      maskB64: null,
+      width: 640,
+      height: 960,
+      strength: 0.55,
+      noise: 0.1,
+      addOriginalImage: true,
+      composite: null,
+      summary: 'full seed range',
+    );
+
+    final parameters = GeneratePayloadUseCase(
+      payloadConfig: config,
+      i2iPlan: plan,
+      random: random,
+    )()
+        .payload['parameters'] as Map<String, dynamic>;
+
+    expect(random.requestedMax, 0x100000000);
+    expect(parameters['seed'], 0xFFFFFFFF);
+    expect(parameters['extra_noise_seed'], 0xFFFFFFFE);
+  });
+
   test('Enhance prompt suffix does not duplicate a trailing comma', () {
     final config = buildPlainConfig();
     config.rootPromptConfig.strs = ['positive prompt,'];
@@ -869,5 +912,21 @@ void main() {
 
     expect(parameters['v4_prompt']['use_coords'], isTrue);
     expect(result.comment, contains('Character 1 at x:0.244, y:0.541'));
+  });
+
+  test('transparent background appends prompt suffix and sends V5 tag hint',
+      () {
+    final config = buildPlainConfig(model: 'nai-diffusion-5-full');
+    config.paramConfig.transparentBackground = true;
+
+    final result = GeneratePayloadUseCase(payloadConfig: config)();
+    final parameters = result.payload['parameters'] as Map<String, dynamic>;
+
+    expect(result.payload['input'], 'positive prompt, transparent background');
+    expect(
+      parameters['v4_prompt']['caption']['base_caption'],
+      'positive prompt, transparent background',
+    );
+    expect(parameters['tag_hint_transparent_background'], isTrue);
   });
 }

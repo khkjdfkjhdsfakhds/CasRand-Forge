@@ -55,6 +55,12 @@ class NovelAiImageCache {
     _sessions[sessionKey]?.knownKeys.removeAll(keys);
   }
 
+  void removeSessionsWhere(bool Function(String sessionKey) test) {
+    _sessions.removeWhere((sessionKey, _) => test(sessionKey));
+  }
+
+  int get sessionCount => _sessions.length;
+
   void clear() => _sessions.clear();
 }
 

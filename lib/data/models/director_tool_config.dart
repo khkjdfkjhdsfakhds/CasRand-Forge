@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
-import 'package:image_size_getter/image_size_getter.dart';
+import 'package:nai_casrand/data/models/displayed_image_size.dart';
 
 /// Director Tools offered by the current NovelAI site.
 /// `declutter-keep-bubbles` is newer than the 0.5.x line, which had six tools.
@@ -109,7 +109,7 @@ class DirectorToolConfig with ChangeNotifier {
       .name;
 
   void setImage(Uint8List bytes) {
-    final size = ImageSizeGetter.getSize(MemoryInput(bytes));
+    final size = displayedImageSize(bytes);
     setPreparedImage(bytes, width: size.width, height: size.height);
   }
 

@@ -35,7 +35,12 @@ class PromptConfigView extends StatelessWidget {
           return Padding(
             padding: EdgeInsets.only(left: viewModel.isRoot ? 0 : 20),
             child: ExpansionTile(
+              // Navigation and collapsed ancestors unmount these tiles. Keep
+              // expansion in the route's PageStorage, keyed by the config
+              // itself so reordering and same-title imports cannot mix states.
+              key: PageStorageKey(viewModel.config),
               title: SingleChildScrollView(
+                key: const PageStorageKey('prompt-title-scroll'),
                 scrollDirection: Axis.horizontal,
                 child: Row(children: [
                   Text(viewModel.config.comment),

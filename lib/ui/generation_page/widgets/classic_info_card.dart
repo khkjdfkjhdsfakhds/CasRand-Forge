@@ -27,15 +27,29 @@ class ClassicInfoCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final body = ListenableBuilder(
-      listenable: command.isExecuting,
+      listenable:
+          Listenable.merge([command, command.isExecuting, commandStatus]),
       builder: (context, child) {
-        if (command.isExecuting.value && command.value.imageBytes == null) {
+        final waiting = commandStatus.waitingFor(command);
+        final unknown = commandStatus.outcomeUnknownFor(command);
+        if ((waiting != null || unknown != null) &&
+            command.value.imageBytes == null) {
+          return GenerationCardStatusView(
+            waiting: waiting,
+            unknown: unknown,
+            tokenLabel: commandStatus.tokenLabelFor(command),
+          );
+        }
+        if (commandStatus.isExecuting(command) &&
+            command.value.imageBytes == null) {
           return Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 const CircularProgressIndicator(),
                 const SizedBox(height: 12),
+                if (commandStatus.tokenLabelFor(command) case final label?)
+                  Text(label),
                 Text(commandStatus.requestingLabel(
                   command,
                   configuredTotal: settings.generationCount,
@@ -62,7 +76,7 @@ class ClassicInfoCard extends StatelessWidget {
   }
 
   void _showDetail(BuildContext context) {
-    if (command.isExecuting.value) return;
+    if (commandStatus.isExecuting(command)) return;
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -93,6 +107,10 @@ class ClassicInfoCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 4),
+            if (content.tokenLabel != null) ...[
+              Text(content.tokenLabel!),
+              const SizedBox(height: 4),
+            ],
             Expanded(
               child: Text(
                 content.info,

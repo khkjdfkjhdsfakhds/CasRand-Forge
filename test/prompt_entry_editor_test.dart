@@ -1598,7 +1598,7 @@ void main() {
         recordedEntries, ['1.1::masterpiece::', '1.2::1girl::', '0.9::solo::']);
   });
 
-  testWidgets('cascade editor makes a digit-ending weight safe while typing', (
+  testWidgets('cascade editor keeps digit-ending tags intact while typing', (
     tester,
   ) async {
     List<String>? recordedEntries;
@@ -1610,11 +1610,11 @@ void main() {
 
     final field = find.byKey(const Key('prompt-entry-editor'));
     await tester.tap(field);
-    await tester.enterText(field, '1.2::haku89::');
+    await tester.enterText(field, '0.6::ame929::');
     await tester.pump();
 
-    expect(controllerFor(tester).text, '1.2::haku89 ::');
-    expect(recordedEntries, ['1.2::haku89 ::']);
+    expect(controllerFor(tester).text, '0.6::ame929::');
+    expect(recordedEntries, ['0.6::ame929::']);
     final controller = controllerFor(tester);
     final rendered = controller.buildTextSpan(
       context: tester.element(field),
@@ -1625,7 +1625,7 @@ void main() {
       spans.any(
         (span) =>
             span.style?.backgroundColor ==
-            PromptWeightSyntax.increaseBackground,
+            PromptWeightSyntax.decreaseBackground,
       ),
       isTrue,
     );
@@ -1635,7 +1635,7 @@ void main() {
             span.style?.backgroundColor ==
             PromptWeightSyntax.delimiterBackground,
       ),
-      isTrue,
+      isFalse,
     );
   });
 }

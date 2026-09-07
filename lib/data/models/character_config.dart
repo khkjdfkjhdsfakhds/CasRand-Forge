@@ -41,10 +41,14 @@ class CharacterConfig {
 
   PromptConfig positivePromptConfig;
   PromptConfig negativePromptConfig;
+
+  /// Optional display label; never included in generated prompt text.
+  String name;
   String gender;
   bool enabled;
 
   CharacterConfig({
+    this.name = '',
     required this.positions,
     this.freeCenter,
     required this.positivePromptConfig,
@@ -67,9 +71,10 @@ class CharacterConfig {
     5: 0.9,
   };
 
-  CharacterPromptResult getPrompt() {
+  CharacterPromptResult getPrompt({List<PromptConfig>? savedConfigs}) {
     final random = Random();
-    final promptResult = positivePromptConfig.getPrmpts();
+    final promptResult =
+        positivePromptConfig.getPrmpts(savedConfigs: savedConfigs);
     final Point<double> center;
     final bool isFreePosition;
     final Point<int> positionAsInt;
@@ -92,7 +97,7 @@ class CharacterConfig {
     return CharacterPromptResult(
       center: center,
       prompt: promptResult,
-      uc: negativePromptConfig.getPrmpts(),
+      uc: negativePromptConfig.getPrmpts(savedConfigs: savedConfigs),
       isFreePosition: isFreePosition,
       gridLabel: isFreePosition ? null : _gridLabel(positionAsInt),
     );
@@ -146,6 +151,7 @@ class CharacterConfig {
       positivePromptConfig: positivePromptConfig,
       negativePromptConfig: negativePromptConfig,
       gender: gender,
+      name: json['name'] is String ? json['name'] as String : '',
       enabled: json['enabled'] ?? true,
       freeCenter: _freeCenterFromJson(json['freeCenter']),
     );
@@ -276,6 +282,7 @@ class CharacterConfig {
           freeCenter == null ? null : {'x': freeCenter!.x, 'y': freeCenter!.y},
       'positivePromptConfig': positivePromptConfig.toJson(),
       'negativePromptConfig': negativePromptConfig.toJson(),
+      if (name.isNotEmpty) 'name': name,
       'gender': gender,
       'enabled': enabled,
     };

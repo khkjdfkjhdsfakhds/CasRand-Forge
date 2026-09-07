@@ -1,6 +1,7 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:nai_casrand/core/constants/defaults.dart';
+import 'package:nai_casrand/data/models/user_input_validation.dart';
 import 'package:nai_casrand/ui/core/widgets/editable_list_tile.dart';
 import 'package:nai_casrand/ui/core/widgets/slider_list_tile.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
@@ -13,13 +14,17 @@ class GenerationSettingsView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: viewmodel,
+      listenable: Listenable.merge([viewmodel, viewmodel.payloadConfig]),
       builder: (context, _) {
         final paramConfig = viewmodel.payloadConfig.paramConfig;
         final settings = viewmodel.payloadConfig.settings;
-        final displayedGenerationCount = settings.generationCount == 0
-            ? '∞'
-            : settings.generationCount.toString();
+        final cycle = viewmodel.totalCombinationCycle;
+        final oversized = viewmodel.allCombinationsTooLarge;
+        final displayedGenerationCount = viewmodel.lockToAllCombinations
+            ? cycle.toString()
+            : settings.generationCount == 0
+                ? '∞'
+                : settings.generationCount.toString();
 
         return SingleChildScrollView(
           child: Column(
@@ -44,7 +49,7 @@ class GenerationSettingsView extends StatelessWidget {
                 secondary: const Icon(Icons.auto_awesome),
                 title: Text(context.tr('run_all_combinations')),
                 subtitle: Text(
-                  '${context.tr('total_combinations')}${context.tr('colon')}${viewmodel.totalCombinations}',
+                  '${context.tr('total_combinations')}${context.tr('colon')}$cycle${oversized ? '\n${context.tr('generation_count_exceeds_limit')}' : ''}',
                 ),
                 value: viewmodel.lockToAllCombinations,
                 onChanged: (value) {
@@ -177,6 +182,7 @@ class SizeSelectionView extends StatefulWidget {
 class _SizeSelectionViewState extends State<SizeSelectionView> {
   final widthController = TextEditingController();
   final heightController = TextEditingController();
+  UserInputError? validationError;
 
   @override
   void dispose() {
@@ -252,17 +258,43 @@ class _SizeSelectionViewState extends State<SizeSelectionView> {
                 const SizedBox(width: 16),
                 IconButton(
                   key: const Key('manual-size-add'),
-                  onPressed: () => widget.viewmodel.addManualSize(
-                    widthController.text,
-                    heightController.text,
-                  ),
+                  onPressed: () {
+                    final result = widget.viewmodel.addManualSize(
+                      widthController.text,
+                      heightController.text,
+                    );
+                    setState(() => validationError = result.error);
+                  },
                   icon: const Icon(Icons.add),
                 ),
               ],
             ),
+            if (validationError != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  _validationMessage(context, validationError!),
+                  key: const Key('manual-size-error'),
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
           ],
         ),
       ),
     );
+  }
+
+  String _validationMessage(BuildContext context, UserInputError error) {
+    switch (error) {
+      case UserInputError.nonPositiveDimension:
+        return context.tr('manual_size_non_positive');
+      case UserInputError.dimensionOutOfRange:
+        return context.tr('manual_size_out_of_range');
+      case UserInputError.invalidDimension:
+      case UserInputError.invalidProxyAddress:
+      case UserInputError.invalidProxyHost:
+      case UserInputError.invalidProxyPort:
+        return context.tr('manual_size_invalid');
+    }
   }
 }

@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
@@ -73,12 +74,18 @@ class VibeConfigV4ListViewmodel extends ChangeNotifier {
       showInfoBar(
         context,
         count == 1
-            ? 'Added ${file.name} as a Vibe reference.'
-            : 'Added $count Vibes from ${file.name}.',
+            ? tr('vibe_import_single', namedArgs: {'name': file.name})
+            : tr('vibe_import_multiple_from', namedArgs: {
+                'count': '$count',
+                'name': file.name,
+              }),
       );
     } catch (error) {
       if (!context.mounted) return;
-      showErrorBar(context, 'Could not add Vibe reference: $error');
+      showErrorBar(
+        context,
+        tr('vibe_import_failed', namedArgs: {'error': '$error'}),
+      );
     }
   }
 
@@ -160,9 +167,16 @@ class VibeConfigV4ListViewmodel extends ChangeNotifier {
     BuildContext context,
     PerformDropEvent event,
   ) async {
+    if (event.session.items.isEmpty) return;
     final item = event.session.items.first;
     final reader = item.dataReader;
-    if (reader == null) return;
+    if (reader == null) {
+      showErrorBar(
+        context,
+        tr('vibe_import_failed', namedArgs: {'error': ''}),
+      );
+      return;
+    }
     reader.getFile(null, (file) async {
       try {
         final bytes = await file.readAll();
@@ -172,12 +186,22 @@ class VibeConfigV4ListViewmodel extends ChangeNotifier {
         showInfoBar(
           context,
           count == 1
-              ? 'Added $fileName as a Vibe reference.'
-              : 'Added $count Vibes.',
+              ? tr('vibe_import_single', namedArgs: {'name': fileName})
+              : tr('vibe_import_multiple', namedArgs: {'count': '$count'}),
         );
       } catch (error) {
         if (!context.mounted) return;
-        showErrorBar(context, 'Could not add Vibe reference: $error');
+        showErrorBar(
+          context,
+          tr('vibe_import_failed', namedArgs: {'error': '$error'}),
+        );
+      }
+    }, onError: (error) {
+      if (context.mounted) {
+        showErrorBar(
+          context,
+          tr('vibe_import_failed', namedArgs: {'error': '$error'}),
+        );
       }
     });
   }

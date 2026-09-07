@@ -630,6 +630,21 @@ DanbooruTagIndex _decodeBundledIndex(Map<String, Uint8List> assetBytes) {
   return index;
 }
 
+/// Absorbs leftover mouse-wheel events from a focused prompt editor so a
+/// nested field that is already at its scroll extent does not chain the
+/// wheel to a parent page. Unfocused fields must not register, or the
+/// outer page cannot be scrolled while the pointer is over the editor.
+void _absorbFocusedPointerScroll(PointerSignalEvent event) {
+  if (event is! PointerScrollEvent) {
+    return;
+  }
+  GestureBinding.instance.pointerSignalResolver.register(event, (resolved) {
+    if (resolved is PointerScrollEvent) {
+      resolved.respond(allowPlatformDefault: false);
+    }
+  });
+}
+
 /// A text field adapter for the shared completion seam.
 class PromptAssistedTextField extends StatefulWidget {
   const PromptAssistedTextField({
@@ -713,7 +728,6 @@ class PromptAssistedTextField extends StatefulWidget {
 
 class PromptAssistedTextFieldState extends State<PromptAssistedTextField> {
   late final TextEditingController _controller;
-  late TextEditingValue _lastControllerValue;
   late final FocusNode _focusNode;
   late final bool _ownsController;
   late final bool _ownsFocusNode;
@@ -767,7 +781,6 @@ class PromptAssistedTextFieldState extends State<PromptAssistedTextField> {
     _ownsController = suppliedController == null;
     _controller = suppliedController ??
         _PromptTextEditingController(text: widget.initialValue);
-    _lastControllerValue = _controller.value;
     final suppliedFocusNode = widget.focusNode;
     _ownsFocusNode = suppliedFocusNode == null;
     _focusNode = suppliedFocusNode ?? FocusNode(onKeyEvent: _handleKeyEvent);
@@ -836,6 +849,9 @@ class PromptAssistedTextFieldState extends State<PromptAssistedTextField> {
   }
 
   void _handleFocusChanged() {
+    if (mounted) {
+      setState(() {});
+    }
     if (!_focusNode.hasFocus) {
       if (widget.normalizeWeightOnFocusLoss) {
         final normalized = PromptWeightSyntax.normalizeAll(_controller.value);
@@ -853,26 +869,7 @@ class PromptAssistedTextFieldState extends State<PromptAssistedTextField> {
   }
 
   void _handleControllerChanged() {
-    final previousValue = _lastControllerValue;
-    final currentValue = _controller.value;
-    _lastControllerValue = currentValue;
     if (_accepting) return;
-    if (previousValue.composing.isValid &&
-        !previousValue.composing.isCollapsed &&
-        (!currentValue.composing.isValid ||
-            currentValue.composing.isCollapsed)) {
-      final normalized = PromptWeightSyntax.normalizeEdit(
-        previousValue,
-        currentValue,
-      );
-      if (normalized != currentValue) {
-        _accepting = true;
-        _controller.value = normalized;
-        _accepting = false;
-        widget.onChanged(normalized.text);
-        return;
-      }
-    }
     final result = _result;
     if (result != null && !result.matches(_controller.value)) {
       final sameText = _controller.text == result.sourceText;
@@ -1176,8 +1173,10 @@ class PromptAssistedTextFieldState extends State<PromptAssistedTextField> {
             enabled: widget.enabled,
             minLines: widget.minLines,
             maxLines: widget.maxLines,
+            scrollPhysics: focusNode.hasFocus
+                ? null
+                : const NeverScrollableScrollPhysics(),
             keyboardType: TextInputType.multiline,
-            inputFormatters: const [PromptWeightSafetyFormatter()],
             decoration: InputDecoration(
               hintText: widget.hintText,
               border: const OutlineInputBorder(),
@@ -1198,12 +1197,16 @@ class PromptAssistedTextFieldState extends State<PromptAssistedTextField> {
           );
     return KeyedSubtree(
       key: _fieldLayoutKey,
-      child: NotificationListener<ScrollNotification>(
-        onNotification: (_) {
-          _scheduleOptionsLayout();
-          return false;
-        },
-        child: field,
+      child: Listener(
+        onPointerSignal:
+            focusNode.hasFocus ? _absorbFocusedPointerScroll : null,
+        child: NotificationListener<ScrollNotification>(
+          onNotification: (_) {
+            _scheduleOptionsLayout();
+            return false;
+          },
+          child: field,
+        ),
       ),
     );
   }

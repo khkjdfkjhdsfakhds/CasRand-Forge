@@ -29,6 +29,35 @@ class ImageImportCandidate {
   });
 
   bool get hasMetadata => metadata != null;
+  bool get hasUnrecognizedModel => metadata != null && model == null;
+
+  bool get hasUnrecoverableGenerationInputs {
+    final value = metadata;
+    if (value == null) return false;
+    const referenceFields = {
+      'reference_strength_multiple',
+      'reference_information_extracted_multiple',
+      'director_reference_descriptions',
+      'director_reference_information_extracted',
+      'director_reference_strengths',
+      'director_reference_strength_values',
+      'director_reference_secondary_strengths',
+      'director_reference_secondary_strength_values',
+    };
+    for (final field in referenceFields) {
+      final item = value[field];
+      if (item is List && item.isNotEmpty) return true;
+    }
+    if (value['strength'] is num ||
+        value['noise'] is num ||
+        value['inpaintImg2ImgStrength'] is num) {
+      return true;
+    }
+    final requestType = value['request_type']?.toString().toLowerCase() ?? '';
+    return requestType.contains('img2img') ||
+        requestType.contains('image2image') ||
+        requestType.contains('inpaint');
+  }
 
   static Future<ImageImportCandidate> fromImageBytes({
     required Uint8List bytes,
@@ -63,7 +92,7 @@ class ImageImportCandidate {
         fileName: fileName,
         metadata: metadata,
         prompt: description is String ? description : null,
-        model: sourceToModel[source],
+        model: modelFromSource(source),
         metadataError: _metadataShapeError(
           metadata,
           description: description,
@@ -452,6 +481,52 @@ class _ImageImportDialogState extends State<ImageImportDialog> {
                 ],
               ),
             ),
+            if (_candidate.hasUnrecoverableGenerationInputs) ...[
+              const SizedBox(height: 8),
+              Container(
+                key: const Key('image-import-unrecoverable-input-warning'),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.errorContainer,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.warning_amber_outlined, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        context.tr('image_import_unrecoverable_input_warning'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            if (_candidate.hasUnrecognizedModel) ...[
+              const SizedBox(height: 8),
+              Container(
+                key: const Key('image-import-unknown-model-warning'),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.errorContainer,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.warning_amber_outlined, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        context.tr('image_import_unknown_model_warning'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             if (_metadataAvailability.prompt)
               _metadataCheckbox(
                 key: const Key('metadata-import-prompt'),

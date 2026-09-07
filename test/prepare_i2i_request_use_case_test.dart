@@ -1,9 +1,11 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show Uint8List;
+import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:nai_casrand/data/models/i2i_config.dart';
+import 'package:nai_casrand/data/services/image_service.dart';
 import 'package:nai_casrand/data/use_cases/autocrop_planner.dart';
 import 'package:nai_casrand/data/use_cases/import_inpaint_mask.dart';
 import 'package:nai_casrand/data/use_cases/novelai_img2img_normalizer.dart';
@@ -714,6 +716,48 @@ void main() {
     expect(repainted, batch.tileCount);
   });
 
+  test('finishComposite preserves PNG iTXt metadata from the response',
+      () async {
+    const metadata = <String, String>{
+      'Description': 'composite prompt',
+      'Software': 'NovelAI',
+      'Comment': '{"prompt":"composite prompt","steps":28}',
+    };
+    final responseBytes = _pngWithNovelAiITXt(metadata);
+    final config = I2IConfig()..setImage(solidPng(64, 64, 20, 40, 60));
+    final canvas = img.decodePng(solidPng(64, 64, 80, 100, 120))!;
+
+    final output =
+        await PrepareI2iRequestUseCase(config: config).finishComposite(
+      canvas: canvas,
+      responseBytes: responseBytes,
+    );
+
+    final extracted = await ImageService().extractMetadataFromBytes(output);
+    expect(extracted, isNotNull);
+    expect(jsonDecode(extracted!), metadata);
+  });
+
+  test('finishComposite falls back to another tile metadata source', () async {
+    const metadata = <String, String>{
+      'Description': 'earlier tile prompt',
+      'Software': 'NovelAI',
+      'Comment': '{"prompt":"earlier tile prompt","steps":28}',
+    };
+    final earlierTile = _pngWithNovelAiITXt(metadata);
+    final output = await PrepareI2iRequestUseCase(
+      config: I2IConfig()..setImage(solidPng(64, 64, 20, 40, 60)),
+    ).finishComposite(
+      canvas: img.decodePng(solidPng(64, 64, 80, 100, 120))!,
+      responseBytes: solidPng(64, 64, 1, 2, 3),
+      metadataSources: [earlierTile],
+    );
+
+    final extracted = await ImageService().extractMetadataFromBytes(output);
+    expect(extracted, isNotNull);
+    expect(jsonDecode(extracted!), metadata);
+  });
+
   test('autocrop off always uses the whole-image path', () async {
     final config = I2IConfig()..setImage(solidPng(1600, 2400, 90, 90, 90));
     config.setMask(maskPngWithWhiteRect(1600, 2400, 700, 1100, 120, 160), []);
@@ -908,4 +952,41 @@ void main() {
     expect(large!.width * large.height, lessThanOrEqualTo(areaCapNormal));
     expect(large.width * large.height, normal.width * normal.height);
   });
+}
+
+Uint8List _pngWithNovelAiITXt(Map<String, String> fields) {
+  final image = img.Image(width: 64, height: 64, numChannels: 4);
+  img.fill(image, color: img.ColorRgba8(80, 120, 160, 255));
+  final png = Uint8List.fromList(img.encodePng(image));
+  final chunks = fields.entries
+      .map((entry) => _pngITXtChunk(entry.key, entry.value))
+      .expand((chunk) => chunk);
+  final iendOffset = png.length - 12;
+  return Uint8List.fromList([
+    ...png.sublist(0, iendOffset),
+    ...chunks,
+    ...png.sublist(iendOffset),
+  ]);
+}
+
+List<int> _pngITXtChunk(String keyword, String text) {
+  final type = ascii.encode('iTXt');
+  final data = <int>[
+    ...ascii.encode(keyword),
+    0,
+    0,
+    0,
+    0,
+    0,
+    ...utf8.encode(text),
+  ];
+  final bytes = ByteData(4)..setUint32(0, data.length, Endian.big);
+  final crc = ByteData(4)
+    ..setUint32(0, getCrc32([...type, ...data]), Endian.big);
+  return [
+    ...bytes.buffer.asUint8List(),
+    ...type,
+    ...data,
+    ...crc.buffer.asUint8List(),
+  ];
 }

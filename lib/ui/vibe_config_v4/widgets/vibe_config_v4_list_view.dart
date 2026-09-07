@@ -48,7 +48,7 @@ class VibeConfigV4ListView extends StatelessWidget {
     );
 
     return ListenableBuilder(
-      listenable: viewmodel,
+      listenable: Listenable.merge([viewmodel, viewmodel.payloadConfig]),
       builder: (context, child) {
         return ListView(
           padding: const EdgeInsets.only(bottom: 24.0),

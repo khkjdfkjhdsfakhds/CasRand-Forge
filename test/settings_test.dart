@@ -31,6 +31,23 @@ void main() {
     expect(restored.retainOriginalPng, isTrue);
   });
 
+  test('metadata retention is the default and metadata settings round-trip',
+      () {
+    final settings = Settings.fromJson({});
+    expect(settings.metadataEraseEnabled, isFalse);
+    expect(settings.customMetadataEnabled, isFalse);
+
+    settings
+      ..metadataEraseEnabled = true
+      ..customMetadataEnabled = true
+      ..customMetadataContent = '{"Description":"custom"}';
+    final restored = Settings.fromJson(settings.toJson());
+
+    expect(restored.metadataEraseEnabled, isTrue);
+    expect(restored.customMetadataEnabled, isTrue);
+    expect(restored.customMetadataContent, '{"Description":"custom"}');
+  });
+
   test('prompt autocomplete defaults to enabled and persists its switch', () {
     final settings = Settings.fromJson({});
     expect(settings.promptAutocompleteEnabled, isTrue);
@@ -100,6 +117,21 @@ void main() {
           ),
       isFalse,
     );
+  });
+
+  test('metadata settings labels describe erasure rather than watermarking',
+      () async {
+    final chinese = jsonDecode(
+      await rootBundle.loadString('assets/l10n/zh-CN.json'),
+    ) as Map<String, dynamic>;
+    final english = jsonDecode(
+      await rootBundle.loadString('assets/l10n/en.json'),
+    ) as Map<String, dynamic>;
+
+    expect(chinese['metadata_erase_enabled'], '清除生成图片中的元数据');
+    expect(chinese['metadata_erase_enabled_hint'], contains('PNG'));
+    expect(chinese['custom_metadata_enabled'], '添加伪造元数据信息');
+    expect(english['metadata_erase_enabled_hint'], contains('omit'));
   });
 
   test('legacy batch settings migrate to per-image generation settings', () {
@@ -322,5 +354,12 @@ void main() {
     final token = ApiTokenConfig(label: 'A', token: 'pst-abcdefghijklmnop');
     expect(token.maskedToken, 'pst-ab···mnop');
     expect(token.maskedToken.contains('cdefgh'), isFalse);
+  });
+
+  test('masked token is total for empty and short legacy values', () {
+    expect(ApiTokenConfig(label: 'empty', token: '').maskedToken, '');
+    expect(ApiTokenConfig(label: 'one', token: 'x').maskedToken, 'x···');
+    expect(ApiTokenConfig(label: 'two', token: 'xy').maskedToken, 'xy···');
+    expect(ApiTokenConfig(label: 'short', token: 'pst').maskedToken, 'ps···');
   });
 }

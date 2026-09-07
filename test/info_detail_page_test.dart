@@ -207,6 +207,38 @@ void main() {
     expect(find.textContaining('Actual'), findsWidgets);
   });
 
+  testWidgets('Opus usage keeps boosted percentages above 100%',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final boosted = InfoCardContent(
+      title: 'v5-boosted.png',
+      info: 'prompt',
+      additionalInfo: const {
+        'width': 832,
+        'height': 1216,
+        'model': 'nai-diffusion-5-full',
+      },
+      imageBytes: solidPng(64, 96),
+      opusUsage: OpusUsage(
+        percent: 170,
+        isNegative: false,
+        secondsPerPercent: 6048,
+        observedAt: DateTime(2026, 8, 21),
+      ),
+    );
+
+    await tester.pumpWidget(localizedApp(InfoDetailPage(content: boosted)));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('170%'), findsOneWidget);
+    final progress = tester.widget<LinearProgressIndicator>(
+      find.byType(LinearProgressIndicator),
+    );
+    expect(progress.value, 1);
+  });
+
   testWidgets('a narrow window keeps the stacked layout', (tester) async {
     await tester.binding.setSurfaceSize(const Size(500, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));

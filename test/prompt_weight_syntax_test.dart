@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nai_casrand/ui/prompt_assistance/prompt_weight_syntax.dart';
 
@@ -48,25 +47,6 @@ void main() {
       expect(result.text, source);
     });
 
-    test('does not migrate an untouched legacy ambiguity during another edit',
-        () {
-      const oldText = '1.2::legacy2::, ta';
-      const newText = '1.2::legacy2::, tag';
-
-      final result = PromptWeightSyntax.normalizeEdit(
-        const TextEditingValue(
-          text: oldText,
-          selection: TextSelection.collapsed(offset: oldText.length),
-        ),
-        const TextEditingValue(
-          text: newText,
-          selection: TextSelection.collapsed(offset: newText.length),
-        ),
-      );
-
-      expect(result.text, newText);
-    });
-
     test('leaves comment lines unchanged', () {
       const source = '# note 1.2::haku89::\n1.2::model2::';
       final result = PromptWeightSyntax.normalizeAll(
@@ -76,15 +56,11 @@ void main() {
       expect(result.text, '# note 1.2::haku89::\n1.2::model2 ::');
     });
 
-    test('normalizes touched edits but preserves safe and nested syntax', () {
-      const oldText = '1.2::haku89:';
-      const newText = '1.2::haku89::';
-      final edited = PromptWeightSyntax.normalizeEdit(
-        const TextEditingValue(text: oldText),
-        const TextEditingValue(text: newText),
+    test('normalizes final values but preserves safe and nested syntax', () {
+      expect(
+        PromptWeightSyntax.normalizeText('1.2::haku89::'),
+        '1.2::haku89 ::',
       );
-
-      expect(edited.text, '1.2::haku89 ::');
       expect(
         PromptWeightSyntax.normalizeText(
           '1.2::haku89 ::, 0.7::inner::, outer::',
@@ -109,22 +85,6 @@ void main() {
       );
 
       expect(PromptWeightSyntax.normalizeAll(value), value);
-    });
-
-    test('normalizes the composing range when IME commits unchanged text', () {
-      const source = '1.2::haku89::';
-      final result = PromptWeightSyntax.normalizeEdit(
-        const TextEditingValue(
-          text: source,
-          composing: TextRange(start: 5, end: 11),
-        ),
-        const TextEditingValue(
-          text: source,
-          selection: TextSelection.collapsed(offset: source.length),
-        ),
-      );
-
-      expect(result.text, '1.2::haku89 ::');
     });
 
     test('normalizes every ambiguous occurrence and leaves incomplete syntax',
@@ -205,6 +165,36 @@ void main() {
       expect(kinds.where((kind) => kind == PromptWeightKind.decrease),
           hasLength(2));
     });
+  });
+
+  test('uses one official color per region regardless of weight', () {
+    const source = '1.1::a ::, 2::b ::, 0.9::c ::, 0::d ::';
+    final rendered = PromptWeightSyntax.applyHighlights(
+      const TextSpan(text: source),
+      source,
+    );
+    final backgroundsByText = {
+      for (final span in _leafSpans(rendered))
+        if (span.style?.backgroundColor != null)
+          span.text: span.style!.backgroundColor,
+    };
+
+    expect(backgroundsByText['1.1::a '], PromptWeightSyntax.increaseBackground);
+    expect(backgroundsByText['2::b '], PromptWeightSyntax.increaseBackground);
+    expect(backgroundsByText['0.9::c '], PromptWeightSyntax.decreaseBackground);
+    expect(backgroundsByText['0::d '], PromptWeightSyntax.decreaseBackground);
+    expect(
+      PromptWeightSyntax.increaseBackground,
+      const Color.fromRGBO(184, 55, 0, 0.275),
+    );
+    expect(
+      PromptWeightSyntax.decreaseBackground,
+      const Color.fromRGBO(4, 102, 206, 0.325),
+    );
+    expect(
+      PromptWeightSyntax.delimiterBackground,
+      const Color.fromRGBO(0, 151, 7, 0.5),
+    );
   });
 
   testWidgets(

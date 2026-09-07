@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:math';
+
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -24,12 +27,27 @@ class InfoCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cardBody = ListenableBuilder(
-      listenable: command.isExecuting,
+      listenable:
+          Listenable.merge([command, command.isExecuting, commandStatus]),
       builder: (context, child) {
-        if (command.isExecuting.value && command.value.imageBytes == null) {
+        final waiting = commandStatus.waitingFor(command);
+        final unknown = commandStatus.outcomeUnknownFor(command);
+        if ((waiting != null || unknown != null) &&
+            command.value.imageBytes == null) {
+          return GenerationCardStatusView(
+            waiting: waiting,
+            unknown: unknown,
+            tokenLabel: commandStatus.tokenLabelFor(command),
+          );
+        }
+        if (commandStatus.isExecuting(command) &&
+            command.value.imageBytes == null) {
           // Loading
           return ListTile(
             leading: const CircularProgressIndicator(),
+            subtitle: commandStatus.tokenLabelFor(command) == null
+                ? null
+                : Text(commandStatus.tokenLabelFor(command)!),
             title: Text(commandStatus.requestingLabel(
               command,
               configuredTotal: settings.generationCount,
@@ -52,7 +70,7 @@ class InfoCard extends StatelessWidget {
   }
 
   void _showDetailedInfoDialog(BuildContext context) {
-    if (command.isExecuting.value) return;
+    if (commandStatus.isExecuting(command)) return;
     final content = command.value;
 
     // 跳转到新页面
@@ -93,6 +111,9 @@ class InfoCard extends StatelessWidget {
               ListTile(
                 leading: const Icon(Icons.info_outline),
                 title: Text(content.title),
+                subtitle: content.tokenLabel == null
+                    ? null
+                    : Text(content.tokenLabel!),
               ),
               ListTile(
                 subtitle: Text(
@@ -164,6 +185,110 @@ class InfoCard extends StatelessWidget {
       parts.join(' · '),
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
+    );
+  }
+}
+
+/// A lightweight status view shared by both card layouts. Its timer lives only
+/// while a cooldown is visible, never in the long-lived generation model.
+class GenerationCardStatusView extends StatefulWidget {
+  const GenerationCardStatusView({
+    super.key,
+    this.waiting,
+    this.unknown,
+    this.tokenLabel,
+  });
+
+  final GenerationCardWaiting? waiting;
+  final GenerationCardOutcomeUnknown? unknown;
+  final String? tokenLabel;
+
+  @override
+  State<GenerationCardStatusView> createState() =>
+      _GenerationCardStatusViewState();
+}
+
+class _GenerationCardStatusViewState extends State<GenerationCardStatusView> {
+  Timer? _timer;
+  int _seconds = 0;
+
+  int _wallClockSeconds() => max(
+      0,
+      ((widget.waiting?.retryAt.difference(DateTime.now()).inMilliseconds ??
+                  0) /
+              1000)
+          .ceil());
+
+  @override
+  void initState() {
+    super.initState();
+    _startCountdown();
+  }
+
+  @override
+  void didUpdateWidget(covariant GenerationCardStatusView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.waiting?.retryAt != widget.waiting?.retryAt) {
+      _startCountdown();
+    }
+  }
+
+  void _startCountdown() {
+    _timer?.cancel();
+    _seconds = _wallClockSeconds();
+    if (_seconds == 0) return;
+    final initialSeconds = _seconds;
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      // Timer ticks also account for delayed callbacks; wall time catches an
+      // OS clock advancing. Neither makes a visible countdown run backwards.
+      setState(() {
+        _seconds =
+            max(0, min(initialSeconds - timer.tick, _wallClockSeconds()));
+      });
+      if (_seconds == 0) timer.cancel();
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final unknown = widget.unknown;
+    final title = unknown != null
+        ? tr('generation_outcome_unknown')
+        : tr('generation_retry_waiting', namedArgs: {
+            'message': widget.waiting?.message ?? '',
+            'seconds': '$_seconds',
+          });
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Icon(unknown == null ? Icons.hourglass_empty : Icons.help_outline),
+            const SizedBox(width: 8),
+            Expanded(child: Text(title)),
+          ]),
+          if (widget.tokenLabel case final label?) ...[
+            const SizedBox(height: 6),
+            Text(label),
+          ],
+          if (unknown != null) ...[
+            const SizedBox(height: 6),
+            Text(tr('generation_outcome_unknown_detail')),
+            if (unknown.message != null) ...[
+              const SizedBox(height: 6),
+              Text(unknown.message!),
+            ],
+          ],
+        ],
+      ),
     );
   }
 }
@@ -629,6 +754,10 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
     final usage = content.opusUsage;
     final percent = usage?.visiblePercent;
     final percentLabel = percent == null ? '—' : '${percent.round()}%';
+    // Flutter's progress indicator accepts only a 0-1 value. Keep the
+    // numeric label above 100% while rendering boosted usage as a full bar.
+    final progressValue =
+        percent == null ? null : (percent / 100).clamp(0, 1).toDouble();
     final stateLabel = content.opusUsageIsEstimated
         ? tr('opus_usage_estimated')
         : tr('opus_usage_actual');
@@ -662,7 +791,7 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
           ),
           const SizedBox(height: 8),
           LinearProgressIndicator(
-            value: percent == null ? null : percent / 100,
+            value: progressValue,
             minHeight: 8,
             borderRadius: BorderRadius.circular(8),
           ),

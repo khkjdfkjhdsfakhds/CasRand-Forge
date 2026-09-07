@@ -39,7 +39,9 @@ Future<I2iRequestBatch?> _prepareI2iBatchWithoutIsolate({
 }) async {
   if (!config.hasImage) return null;
   if (config.hasInpaintSelection) {
-    return PrepareI2iRequestUseCase(config: config).planBatch(
+    // This intentionally stays on the test isolate; production uses compute.
+    return PrepareI2iRequestUseCase(config: config)
+        .planInpaintBatchInCurrentIsolate(
       targetWidth: targetWidth,
       targetHeight: targetHeight,
     );
@@ -166,6 +168,7 @@ class _BlockingEncodeVibeUseCase extends EncodeVibeUseCase {
     required String token,
     required String proxy,
     String endpoint = EncodeVibeUseCase.officialEndpoint,
+    bool Function()? shouldSend,
   }) {
     calls++;
     return release.future;
@@ -219,6 +222,7 @@ class _FirstVibeEncodingBlockingUseCase extends EncodeVibeUseCase {
     required String token,
     required String proxy,
     String endpoint = EncodeVibeUseCase.officialEndpoint,
+    bool Function()? shouldSend,
   }) {
     requestedImages.add(Uint8List.fromList(imageBytes));
     if (requestedImages.length == 1) {
@@ -323,8 +327,8 @@ Future<void> _runCommand(
   WidgetTester tester,
   Command<void, InfoCardContent> command,
 ) async {
-  command();
-  await tester.pumpAndSettle();
+  await tester.runAsync(command.executeWithFuture);
+  await tester.pump();
   expect(command.isExecuting.value, isFalse);
 }
 
@@ -580,6 +584,8 @@ void main() {
     final viewmodel = GenerationPageViewmodel(
       apiService: api,
       fileService: _NoopFileService(),
+      preparationFeedbackBarrier: _skipPreparationFeedbackBarrier,
+      prepareI2iBatch: _prepareI2iBatchWithoutIsolate,
     );
     final config = GetIt.I<PayloadConfig>();
     config.preciseReferenceConfigList.add(
@@ -1189,22 +1195,27 @@ void main() {
 
     expect(api.payloads.single['req_type'], 'lineart');
     expect(api.payloads.single['image'], base64Encode(a));
-    expect(viewmodel.lastDirectorCommand!.value.imageBytes, isNotNull);
-    expect(viewmodel.lastDirectorCommand!.value.additionalInfo['req_type'],
+    expect(viewmodel.lastDirectorCommand, isNull,
+        reason: 'A new source must not display the previous source result.');
+    expect(viewmodel.commandList.single.value.imageBytes, isNotNull);
+    expect(viewmodel.commandList.single.value.additionalInfo['req_type'],
         'lineart');
     viewmodel.dispose();
   });
 
-  testWidgets(
+  test(
       'Focus inpaint response composites onto initiating A after source becomes B',
-      (tester) async {
+      () async {
     final api = _FirstRequestBlockingImageApiService();
     final viewmodel = GenerationPageViewmodel(
       apiService: api,
       fileService: _NoopFileService(),
+      preparationFeedbackBarrier: _skipPreparationFeedbackBarrier,
+      prepareI2iBatch: _prepareI2iBatchWithoutIsolate,
     );
     final config = GetIt.I<PayloadConfig>();
-    config.i2iConfig.setImage(_solidPng(240, 20, 20));
+    final initiatingImage = _solidPng(240, 20, 20);
+    config.i2iConfig.setImage(initiatingImage);
     config.i2iConfig.setMask(
       _maskPng(left: true),
       const [],
@@ -1212,15 +1223,16 @@ void main() {
     );
     config.setI2iEnabled(true);
 
-    final command = viewmodel.createGenerationCommand(workerIndex: 0);
-    command();
-    for (var attempt = 0; attempt < 100 && api.payloads.isEmpty; attempt++) {
-      await tester.pump(const Duration(milliseconds: 10));
-    }
+    final command = viewmodel.createGenerationCommand(
+      workerIndex: 0,
+      presetBatch: _smallSerialSplitBatch(initiatingImage),
+    );
+    final completion = command.executeWithFuture();
+    await api.firstRequestStarted.future.timeout(const Duration(seconds: 5));
     expect(api.payloads, hasLength(1), reason: command.value.info);
     config.i2iConfig.setImage(_solidPng(20, 20, 240));
     api.releaseFirstRequest.complete();
-    await tester.pumpAndSettle();
+    await completion.timeout(const Duration(seconds: 5));
 
     expect(command.isExecuting.value, isFalse);
     final output = img.decodePng(command.value.imageBytes!)!;
@@ -1230,9 +1242,9 @@ void main() {
     viewmodel.dispose();
   });
 
-  testWidgets(
+  test(
       'split inpaint freezes prompt model references and seed before first await',
-      (tester) async {
+      () async {
     final api = _FirstRequestBlockingImageApiService();
     final viewmodel = GenerationPageViewmodel(
       apiService: api,
@@ -1254,10 +1266,8 @@ void main() {
       workerIndex: 0,
       presetBatch: batch,
     );
-    command();
-    for (var attempt = 0; attempt < 100 && api.payloads.isEmpty; attempt++) {
-      await tester.pump(const Duration(milliseconds: 10));
-    }
+    final completion = command.executeWithFuture();
+    await api.firstRequestStarted.future.timeout(const Duration(seconds: 5));
     expect(api.payloads, hasLength(1), reason: command.value.info);
 
     config.rootPromptConfig.strs = ['prompt-B'];
@@ -1270,7 +1280,7 @@ void main() {
       );
     config.i2iConfig.setImage(_solidPng(20, 20, 240));
     api.releaseFirstRequest.complete();
-    await tester.pumpAndSettle();
+    await completion.timeout(const Duration(seconds: 5));
 
     expect(command.isExecuting.value, isFalse);
     expect(api.payloads, hasLength(2));

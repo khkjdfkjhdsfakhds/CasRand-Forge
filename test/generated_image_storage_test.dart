@@ -1,14 +1,17 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/services/file_service.dart';
 import 'package:nai_casrand/data/services/generated_image_jpeg_encoder.dart';
 import 'package:nai_casrand/data/services/generated_image_storage.dart';
+import 'package:nai_casrand/data/services/image_service.dart';
 
 class _LocalFileService extends FileService {
   @override
@@ -27,12 +30,14 @@ class _LocalFileService extends FileService {
 
 class _NoLocalFileService extends FileService {
   @override
-  Future<String?> savePictureToFile(
+  Future<GeneratedImageSaveResult> saveGeneratedImage(
     Uint8List bytes,
     String fileName,
     String saveDir,
   ) async {
-    return null;
+    return const GeneratedImageSaveResult(
+      destination: GeneratedImageSaveDestination.androidGallery,
+    );
   }
 }
 
@@ -77,6 +82,84 @@ Uint8List _noisyOpaquePng({int width = 128, int height = 128}) {
   return img.encodePng(image);
 }
 
+Uint8List _novelAiOpaquePng({int width = 128, int height = 128}) {
+  final random = Random(42);
+  final image = img.Image(width: width, height: height, numChannels: 3);
+  for (var y = 0; y < height; y++) {
+    for (var x = 0; x < width; x++) {
+      image.setPixelRgb(
+        x,
+        y,
+        random.nextInt(256),
+        random.nextInt(256),
+        random.nextInt(256),
+      );
+    }
+  }
+  image.addTextData({
+    'Title': 'AI generated image',
+    'Description': 'metadata prompt',
+    'Software': 'NovelAI',
+    'Source': 'NovelAI Diffusion V5 fixture',
+    'Comment':
+        '{"prompt":"metadata prompt","negative_prompt":"metadata negative","steps":28}',
+  });
+  return img.encodePng(image);
+}
+
+Uint8List _novelAiITXtPng() {
+  final random = Random(42);
+  final image = img.Image(width: 128, height: 128, numChannels: 3);
+  for (final pixel in image) {
+    pixel
+      ..r = random.nextInt(256)
+      ..g = random.nextInt(256)
+      ..b = random.nextInt(256);
+  }
+  final png = img.encodePng(image);
+  final fields = <String, String>{
+    'Title': 'AI generated image',
+    'Description': 'iTXt storage prompt',
+    'Software': 'NovelAI',
+    'Source': 'NovelAI Diffusion V5 fixture',
+    'Comment':
+        '{"prompt":"iTXt storage prompt","negative_prompt":"iTXt storage negative","steps":28}',
+  };
+  final chunks = fields.entries
+      .map((entry) => _pngITXtChunk(entry.key, entry.value))
+      .expand((chunk) => chunk);
+  final iendOffset = png.length - 12;
+  return Uint8List.fromList([
+    ...png.sublist(0, iendOffset),
+    ...chunks,
+    ...png.sublist(iendOffset),
+  ]);
+}
+
+List<int> _pngITXtChunk(String keyword, String text) {
+  final data = <int>[
+    ...utf8.encode(keyword),
+    0,
+    0,
+    0,
+    0,
+    0,
+    ...utf8.encode(text),
+  ];
+  final type = ascii.encode('iTXt');
+  return [
+    ..._pngUint32(data.length),
+    ...type,
+    ...data,
+    ..._pngUint32(getCrc32([...type, ...data])),
+  ];
+}
+
+List<int> _pngUint32(int value) {
+  final bytes = ByteData(4)..setUint32(0, value, Endian.big);
+  return bytes.buffer.asUint8List();
+}
+
 GeneratedImageJpegEncodingResult _jpegResult(
   Uint8List jpegBytes, {
   int width = 64,
@@ -114,6 +197,28 @@ GeneratedImageStorageRequest _jpegRequest(
 }
 
 void main() {
+  test('storage request owns an immutable snapshot of paid response bytes', () {
+    final source = Uint8List.fromList([1, 2, 3]);
+    final request = GeneratedImageStorageRequest(
+      logicalTaskId: 'immutable-result',
+      pngBytes: source,
+      fileName: 'immutable.png',
+      storagePolicy: const GeneratedImageStoragePolicy.pngOnly(
+        outputDirectory: '/test',
+      ),
+      metadataPolicy: const GeneratedImageMetadataPolicy(
+        eraseMetadata: false,
+        customMetadataEnabled: false,
+        customMetadataContent: '',
+      ),
+    );
+
+    source[0] = 9;
+
+    expect(request.pngBytes, [1, 2, 3]);
+    expect(() => request.pngBytes[0] = 7, throwsUnsupportedError);
+  });
+
   test('PNG submission exposes preview bytes before publishing its artifact',
       () async {
     final outputDirectory = await Directory.systemTemp.createTemp(
@@ -123,7 +228,7 @@ void main() {
     final pngBytes = Uint8List.fromList([137, 80, 78, 71, 1, 2, 3, 4]);
     final storage = PngGeneratedImageStorage(fileService: _LocalFileService());
 
-    final submission = storage.submit(GeneratedImageStorageRequest(
+    final request = GeneratedImageStorageRequest(
       logicalTaskId: 'test:generated',
       pngBytes: pngBytes,
       fileName: 'generated.png',
@@ -135,9 +240,11 @@ void main() {
         customMetadataEnabled: false,
         customMetadataContent: '',
       ),
-    ));
+    );
+    final submission = storage.submit(request);
 
-    expect(identical(submission.artifact.previewBytes, pngBytes), isTrue);
+    expect(
+        identical(submission.artifact.previewBytes, request.pngBytes), isTrue);
     expect(submission.artifact.status, GeneratedImageStorageStatus.saving);
     expect(submission.artifact.currentFile, isNull);
     expect(submission.artifact.permanentFiles, isEmpty);
@@ -154,6 +261,78 @@ void main() {
     expect(await outputFile.readAsBytes(), pngBytes);
   });
 
+  test('metadata capacity fallback is visible and remains recoverable',
+      () async {
+    final outputDirectory = await Directory.systemTemp.createTemp(
+      'casrand-generated-image-metadata-fallback-',
+    );
+    addTearDown(() => outputDirectory.delete(recursive: true));
+    final source = Uint8List.fromList(img.encodePng(
+      img.Image(width: 8, height: 8, numChannels: 4),
+    ));
+    const metadata =
+        '{"Description":"超长提示词 portrait portrait portrait portrait",'
+        '"Software":"NovelAI",'
+        '"Comment":"{\\"prompt\\":\\"超长提示词\\",\\"steps\\":28}"}';
+    final submission = PngGeneratedImageStorage(
+      fileService: _LocalFileService(),
+    ).submit(GeneratedImageStorageRequest(
+      logicalTaskId: 'metadata:fallback',
+      pngBytes: source,
+      fileName: 'fallback.png',
+      storagePolicy: GeneratedImageStoragePolicy.pngOnly(
+        outputDirectory: outputDirectory.path,
+      ),
+      metadataPolicy: const GeneratedImageMetadataPolicy(
+        eraseMetadata: true,
+        customMetadataEnabled: true,
+        customMetadataContent: metadata,
+      ),
+    ));
+
+    final artifact = await submission.completed;
+    final published = await File(artifact.currentFile!.path).readAsBytes();
+
+    expect(artifact.status, GeneratedImageStorageStatus.saved);
+    expect(
+      artifact.metadataEmbeddingMode,
+      ImageMetadataEmbeddingMode.pngInternationalText,
+    );
+    expect(await ImageService().extractMetadataFromBytes(published), metadata);
+  });
+
+  test('metadata failure reports a warning but still publishes the paid image',
+      () async {
+    final outputDirectory = await Directory.systemTemp.createTemp(
+      'casrand-generated-image-metadata-error-',
+    );
+    addTearDown(() => outputDirectory.delete(recursive: true));
+    final source = _opaquePng(width: 16, height: 16);
+    final metadataFailure = StateError('metadata fixture failure');
+    final submission = PngGeneratedImageStorage(
+      fileService: _LocalFileService(),
+      metadataProcessor: (_, __) => Future.error(metadataFailure),
+    ).submit(GeneratedImageStorageRequest(
+      logicalTaskId: 'metadata:error',
+      pngBytes: source,
+      fileName: 'metadata-error.png',
+      storagePolicy: GeneratedImageStoragePolicy.pngOnly(
+        outputDirectory: outputDirectory.path,
+      ),
+      metadataPolicy: const GeneratedImageMetadataPolicy(
+        eraseMetadata: true,
+        customMetadataEnabled: false,
+        customMetadataContent: '',
+      ),
+    ));
+
+    final artifact = await submission.completed;
+
+    expect(artifact.status, GeneratedImageStorageStatus.saved);
+    expect(artifact.metadataFailure, same(metadataFailure));
+    expect(await File(artifact.currentFile!.path).readAsBytes(), source);
+  });
+
   test('result content follows its artifact without copying preview bytes',
       () async {
     final outputDirectory = await Directory.systemTemp.createTemp(
@@ -161,20 +340,21 @@ void main() {
     );
     addTearDown(() => outputDirectory.delete(recursive: true));
     final pngBytes = Uint8List.fromList([137, 80, 78, 71, 9, 8, 7, 6]);
-    final submission = PngGeneratedImageStorage().submit(
-      GeneratedImageStorageRequest(
-        logicalTaskId: 'test:result',
-        pngBytes: pngBytes,
-        fileName: 'result.png',
-        storagePolicy: GeneratedImageStoragePolicy.pngOnly(
-          outputDirectory: outputDirectory.path,
-        ),
-        metadataPolicy: const GeneratedImageMetadataPolicy(
-          eraseMetadata: false,
-          customMetadataEnabled: false,
-          customMetadataContent: '',
-        ),
+    final request = GeneratedImageStorageRequest(
+      logicalTaskId: 'test:result',
+      pngBytes: pngBytes,
+      fileName: 'result.png',
+      storagePolicy: GeneratedImageStoragePolicy.pngOnly(
+        outputDirectory: outputDirectory.path,
       ),
+      metadataPolicy: const GeneratedImageMetadataPolicy(
+        eraseMetadata: false,
+        customMetadataEnabled: false,
+        customMetadataContent: '',
+      ),
+    );
+    final submission = PngGeneratedImageStorage().submit(
+      request,
     );
     final content = InfoCardContent(
       title: 'result.png',
@@ -183,7 +363,7 @@ void main() {
       imageArtifact: submission.artifact,
     );
 
-    expect(identical(content.imageBytes, pngBytes), isTrue);
+    expect(identical(content.imageBytes, request.pngBytes), isTrue);
     expect(content.currentImageFile, isNull);
 
     await submission.completed;
@@ -214,6 +394,11 @@ void main() {
     expect(artifact.status, GeneratedImageStorageStatus.saved);
     expect(artifact.currentFile, isNull);
     expect(artifact.permanentFiles, isEmpty);
+    expect(
+      artifact.saveDestination,
+      GeneratedImageSaveDestination.androidGallery,
+    );
+    expect(artifact.isDurablySaved, isTrue);
   });
 
   test('publication failure is observable and rejects durable completion',
@@ -254,7 +439,7 @@ void main() {
     );
     final pngBytes = _opaquePng();
 
-    final submission = storage.submit(GeneratedImageStorageRequest(
+    final request = GeneratedImageStorageRequest(
       logicalTaskId: 'jpeg:success',
       pngBytes: pngBytes,
       fileName: 'result.png',
@@ -269,9 +454,11 @@ void main() {
         customMetadataEnabled: false,
         customMetadataContent: '',
       ),
-    ));
+    );
+    final submission = storage.submit(request);
 
-    expect(identical(submission.artifact.previewBytes, pngBytes), isTrue);
+    expect(
+        identical(submission.artifact.previewBytes, request.pngBytes), isTrue);
     expect(submission.artifact.currentFile, isNull);
     while (encoder.calls.isEmpty) {
       await Future<void>.delayed(const Duration(milliseconds: 10));
@@ -301,7 +488,7 @@ void main() {
     );
   });
 
-  test('JPEG candidate that is not smaller stays on session PNG and skips',
+  test('JPEG candidate that is not smaller publishes permanent PNG fallback',
       () async {
     final session = await Directory.systemTemp.createTemp('casrand-session-');
     final output = await Directory.systemTemp.createTemp('casrand-jpeg-');
@@ -341,11 +528,11 @@ void main() {
 
     final artifact = await submission.completed;
 
-    expect(artifact.status, GeneratedImageStorageStatus.skippedNotSmaller);
+    expect(artifact.status, GeneratedImageStorageStatus.pngFallbackSaved);
     expect(artifact.currentFile?.mediaType, 'image/png');
-    expect(artifact.currentFile?.isPermanent, isFalse);
-    expect(artifact.permanentFiles, isEmpty);
-    expect(output.listSync(), isEmpty);
+    expect(artifact.currentFile?.isPermanent, isTrue);
+    expect(artifact.permanentFiles, [artifact.currentFile]);
+    expect(await File(_pathIn(output, 'larger.png')).readAsBytes(), pngBytes);
   });
 
   test('atomic JPEG publication never overwrites an existing final file',
@@ -474,6 +661,127 @@ void main() {
     expect(jpegBytes.length, lessThan(source.length));
     expect(reopened?.width, 128);
     expect(reopened?.height, 128);
+  });
+
+  test('public storage seam keeps NovelAI metadata in the published JPEG',
+      () async {
+    final session = await Directory.systemTemp.createTemp('casrand-session-');
+    final output = await Directory.systemTemp.createTemp('casrand-jpeg-');
+    addTearDown(() async {
+      if (await session.exists()) await session.delete(recursive: true);
+      if (await output.exists()) await output.delete(recursive: true);
+    });
+    final source = _novelAiOpaquePng();
+    final storage = GeneratedImageStorageService(
+      desktopJpegSupported: true,
+      sessionDirectoryProvider: () async => session,
+    );
+
+    final artifact = await storage
+        .submit(GeneratedImageStorageRequest(
+          logicalTaskId: 'jpeg:metadata',
+          pngBytes: source,
+          fileName: 'metadata.png',
+          storagePolicy: GeneratedImageStoragePolicy(
+            jpegEnabled: true,
+            retainOriginalPng: false,
+            pngOutputDirectory: '',
+            jpegOutputDirectory: output.path,
+          ),
+          metadataPolicy: const GeneratedImageMetadataPolicy(
+            eraseMetadata: false,
+            customMetadataEnabled: false,
+            customMetadataContent: '',
+          ),
+        ))
+        .completed;
+
+    expect(artifact.status, GeneratedImageStorageStatus.jpegSaved);
+    final jpeg = await File(artifact.currentFile!.path).readAsBytes();
+    final metadata = await ImageService().extractMetadataFromBytes(jpeg);
+    expect(metadata, isNotNull);
+    expect(metadata, contains('metadata prompt'));
+    expect(metadata, contains('metadata negative'));
+  });
+
+  test('public storage seam keeps iTXt metadata in the published JPEG',
+      () async {
+    final session = await Directory.systemTemp.createTemp('casrand-session-');
+    final output = await Directory.systemTemp.createTemp('casrand-jpeg-');
+    addTearDown(() async {
+      if (await session.exists()) await session.delete(recursive: true);
+      if (await output.exists()) await output.delete(recursive: true);
+    });
+
+    final storage = GeneratedImageStorageService(
+      desktopJpegSupported: true,
+      sessionDirectoryProvider: () async => session,
+    );
+    final artifact = await storage
+        .submit(GeneratedImageStorageRequest(
+          logicalTaskId: 'jpeg:itxt-metadata',
+          pngBytes: _novelAiITXtPng(),
+          fileName: 'itxt-metadata.png',
+          storagePolicy: GeneratedImageStoragePolicy(
+            jpegEnabled: true,
+            retainOriginalPng: false,
+            pngOutputDirectory: '',
+            jpegOutputDirectory: output.path,
+          ),
+          metadataPolicy: const GeneratedImageMetadataPolicy(
+            eraseMetadata: false,
+            customMetadataEnabled: false,
+            customMetadataContent: '',
+          ),
+        ))
+        .completed;
+
+    expect(artifact.status, GeneratedImageStorageStatus.jpegSaved);
+    final jpeg = await File(artifact.currentFile!.path).readAsBytes();
+    final metadata = await ImageService().extractMetadataFromBytes(jpeg);
+    expect(metadata, isNotNull);
+    expect(metadata, contains('iTXt storage prompt'));
+    expect(metadata, contains('iTXt storage negative'));
+  });
+
+  test('long generated names do not overflow the atomic temporary filename',
+      () async {
+    final session = await Directory.systemTemp.createTemp('casrand-session-');
+    final output = await Directory.systemTemp.createTemp('casrand-jpeg-');
+    addTearDown(() async {
+      if (await session.exists()) await session.delete(recursive: true);
+      if (await output.exists()) await output.delete(recursive: true);
+    });
+    final fileName =
+        '${List<String>.filled(200, 'a').join()}-20260823021141-000006-mefopa.png';
+    final source = _noisyOpaquePng();
+    final storage = GeneratedImageStorageService(
+      desktopJpegSupported: true,
+      sessionDirectoryProvider: () async => session,
+    );
+
+    final artifact = await storage
+        .submit(GeneratedImageStorageRequest(
+          logicalTaskId: 'jpeg:long-name',
+          pngBytes: source,
+          fileName: fileName,
+          storagePolicy: GeneratedImageStoragePolicy(
+            jpegEnabled: true,
+            retainOriginalPng: false,
+            pngOutputDirectory: '',
+            jpegOutputDirectory: output.path,
+          ),
+          metadataPolicy: const GeneratedImageMetadataPolicy(
+            eraseMetadata: false,
+            customMetadataEnabled: false,
+            customMetadataContent: '',
+          ),
+        ))
+        .completed;
+
+    expect(artifact.status, GeneratedImageStorageStatus.jpegSaved);
+    expect(File(artifact.currentFile!.path).existsSync(), isTrue);
+    expect(artifact.currentFile!.path.endsWith('.jpg'), isTrue);
   });
 
   test('one queued conversion failure does not stop the next image', () async {

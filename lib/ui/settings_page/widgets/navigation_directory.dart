@@ -6,6 +6,7 @@ import 'package:nai_casrand/ui/navigation/navigation_destination_catalog.dart';
 
 class NavigationDirectory extends StatelessWidget {
   final NavigationConfiguration configuration;
+  final bool showHeader;
   final Map<AppDestination, GlobalKey> destinationKeys;
   final ValueChanged<AppDestination> onOpenDestination;
   final ValueChanged<({AppDestination destination, bool enabled})>
@@ -15,6 +16,7 @@ class NavigationDirectory extends StatelessWidget {
   const NavigationDirectory({
     super.key,
     required this.configuration,
+    this.showHeader = true,
     required this.destinationKeys,
     required this.onOpenDestination,
     required this.onEnabledChanged,
@@ -28,12 +30,13 @@ class NavigationDirectory extends StatelessWidget {
       builder: (context, _) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          ListTile(
-            key: const Key('navigation-directory-title'),
-            leading: const Icon(Icons.view_sidebar_outlined),
-            title: Text(context.tr('navigation_directory')),
-            subtitle: Text(context.tr('navigation_directory_hint')),
-          ),
+          if (showHeader)
+            ListTile(
+              key: const Key('navigation-directory-title'),
+              leading: const Icon(Icons.view_sidebar_outlined),
+              title: Text(context.tr('navigation_directory')),
+              subtitle: Text(context.tr('navigation_directory_hint')),
+            ),
           ReorderableListView.builder(
             key: const Key('navigation-directory-list'),
             shrinkWrap: true,

@@ -10,6 +10,7 @@ class InfoCardContent {
 
   final Uint8List? _imageBytes;
   final GeneratedImageArtifact? imageArtifact;
+  final Future<void> Function()? retryImageStorage;
 
   Uint8List? get imageBytes => imageArtifact?.previewBytes ?? _imageBytes;
   GeneratedImageFile? get currentImageFile => imageArtifact?.currentFile;
@@ -44,6 +45,7 @@ class InfoCardContent {
     required this.additionalInfo,
     Uint8List? imageBytes,
     this.imageArtifact,
+    this.retryImageStorage,
     this.anlasCost,
     this.anlasCostIsEstimated = false,
     this.anlasRemaining,
@@ -55,6 +57,7 @@ class InfoCardContent {
   }) : _imageBytes = imageBytes;
 
   InfoCardContent copyWith({
+    GeneratedImageArtifact? imageArtifact,
     int? anlasCost,
     bool? anlasCostIsEstimated,
     int? anlasRemaining,
@@ -68,7 +71,8 @@ class InfoCardContent {
       info: info,
       additionalInfo: additionalInfo,
       imageBytes: _imageBytes,
-      imageArtifact: imageArtifact,
+      imageArtifact: imageArtifact ?? this.imageArtifact,
+      retryImageStorage: retryImageStorage,
       anlasCost: anlasCost ?? this.anlasCost,
       anlasCostIsEstimated: anlasCostIsEstimated ?? this.anlasCostIsEstimated,
       anlasRemaining: anlasRemaining ?? this.anlasRemaining,

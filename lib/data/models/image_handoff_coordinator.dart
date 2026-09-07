@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:image/image.dart' as img;
-import 'package:image_size_getter/image_size_getter.dart';
+import 'package:nai_casrand/data/models/displayed_image_size.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 
@@ -28,7 +28,7 @@ enum ImageHandoffAction { imageToImage, inpaint, enhance, directorTools }
 enum ImageHandoffPhase { idle, preparing, failure }
 
 ImageDimensions _readImageDimensionsInBackground(Uint8List bytes) {
-  final size = ImageSizeGetter.getSize(MemoryInput(bytes));
+  final size = displayedImageSize(bytes);
   if (size.width <= 0 || size.height <= 0) {
     throw const FormatException('Image dimensions are unavailable.');
   }
@@ -42,10 +42,11 @@ Future<ImageDimensions> _defaultImageDimensionsReader(Uint8List bytes) {
 const int _handoffPreviewLongestEdge = 512;
 
 Uint8List _resizeHandoffPreview(Uint8List bytes) {
-  final source = img.decodeImage(bytes);
-  if (source == null) {
+  final decoded = img.decodeImage(bytes);
+  if (decoded == null) {
     throw const FormatException('Image preview could not be decoded.');
   }
+  final source = img.bakeOrientation(decoded);
   final landscape = source.width >= source.height;
   final preview = img.copyResize(
     source,

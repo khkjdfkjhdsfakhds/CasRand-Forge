@@ -61,7 +61,7 @@ void main() {
     expect(scheduler.status.completedTaskCount, 1);
   });
 
-  test('a failed persistence releases the success reservation for a retry', () {
+  test('a reserved paid response cannot be reopened as generation failure', () {
     final scheduler = GenerationScheduler(
       taskCount: 1,
       workerIds: const ['A', 'B'],
@@ -72,15 +72,13 @@ void main() {
     final retry = scheduler.claim('B')!;
 
     expect(scheduler.reserveSuccess(firstAttempt), isTrue);
-    final persistenceFailure = scheduler.completeFailure(firstAttempt);
-    expect(persistenceFailure.taskRequeued, isTrue);
-    expect(scheduler.reserveSuccess(retry), isTrue);
-    expect(scheduler.completeSuccess(retry), isTrue);
+    expect(() => scheduler.completeFailure(firstAttempt), throwsStateError);
+    expect(scheduler.reserveSuccess(retry), isFalse);
+    expect(scheduler.completeSuccess(firstAttempt), isTrue);
     expect(scheduler.status.completedTaskCount, 1);
   });
 
-  test('a reserved persistence can release its API worker without completing',
-      () {
+  test('a reserved response can release its API worker before completion', () {
     final scheduler = GenerationScheduler(
       taskCount: 2,
       workerIds: const ['A'],
@@ -159,6 +157,130 @@ void main() {
 
     expect(scheduler.claim('A'), isNull);
     expect(scheduler.status.allWorkersPaused, isTrue);
+  });
+
+  test('an older saved success does not erase newer worker failures', () {
+    final scheduler = GenerationScheduler(taskCount: 0, workerIds: ['A']);
+    final old = scheduler.claim('A')!;
+    scheduler.reserveSuccess(old);
+    scheduler.detachWorkerForPersistence(old);
+    scheduler.completeFailure(scheduler.claim('A')!);
+    scheduler.completeSuccess(old);
+    for (var failure = 0; failure < 4; failure++) {
+      scheduler.completeFailure(scheduler.claim('A')!);
+    }
+    expect(scheduler.status.allWorkersPaused, isTrue);
+  });
+
+  test(
+      'unknown task is quarantined while healthy accounts finish untouched tasks',
+      () {
+    final scheduler = GenerationScheduler(taskCount: 3, workerIds: ['A', 'B']);
+    final unknown = scheduler.claim('A')!;
+    expect(scheduler.suspendOutcome(unknown), isTrue);
+    expect(scheduler.claim('A'), isNull);
+    expect(scheduler.status.inFlightCount, 0);
+    for (final number in [2, 3]) {
+      final lease = scheduler.claim('B')!;
+      expect(lease.taskNumber, number);
+      scheduler.reserveSuccess(lease);
+      scheduler.completeSuccess(lease);
+    }
+    expect(scheduler.status.suspendedTaskCount, 1);
+    expect(scheduler.status.completedTaskCount, 2);
+    expect(scheduler.status.finished, isTrue);
+  });
+
+  test(
+      'an account rejection pauses immediately and gives the task to a healthy account',
+      () {
+    final scheduler = GenerationScheduler(taskCount: 1, workerIds: ['A', 'B']);
+    final rejected = scheduler.claim('A')!;
+    final failure = scheduler.completeFailure(rejected, pauseWorker: true);
+    expect(failure.workerPaused, isTrue);
+    expect(failure.consecutiveFailureCount, 1);
+    expect(failure.taskRequeued, isTrue);
+    expect(scheduler.claim('A'), isNull);
+    expect(scheduler.claim('B')?.taskNumber, 1);
+  });
+
+  test('cancelling an unsent task finishes without retry or account penalty',
+      () {
+    final scheduler = GenerationScheduler(taskCount: 1, workerIds: ['A']);
+    final unsent = scheduler.claim('A')!;
+    expect(scheduler.cancel(unsent), isTrue);
+    expect(scheduler.status.inFlightCount, 0);
+    expect(scheduler.status.allWorkersPaused, isFalse);
+    expect(scheduler.status.finished, isTrue);
+    expect(scheduler.status.abandonedTaskCount, 1);
+    expect(scheduler.claim('A'), isNull);
+    expect(scheduler.reserveSuccess(unsent), isFalse);
+    expect(scheduler.cancel(unsent), isFalse);
+  });
+
+  test('late unknown success preserves a newer lease and its account failure',
+      () {
+    final scheduler = GenerationScheduler(taskCount: 2, workerIds: ['A', 'B']);
+    final old = scheduler.claim('A')!;
+    scheduler.suspendOutcome(old, pauseWorker: false);
+    final newer = scheduler.claim('A')!;
+    expect(scheduler.reserveSuccess(old), isTrue);
+    expect(scheduler.detachWorkerForPersistence(old), isTrue);
+    expect(scheduler.claim('A'), isNull,
+        reason: 'The newer request still owns A.');
+    expect(scheduler.completeFailure(newer, pauseWorker: true).workerPaused,
+        isTrue);
+    expect(scheduler.completeSuccess(old), isTrue);
+    expect(scheduler.claim('A'), isNull,
+        reason: 'The late success must not re-enable rejected A.');
+    expect(scheduler.status.suspendedTaskCount, 0);
+    final retry = scheduler.claim('B')!;
+    expect(retry.taskNumber, 2);
+    scheduler.reserveSuccess(retry);
+    scheduler.completeSuccess(retry);
+    expect(scheduler.status.finished, isTrue);
+    expect(scheduler.status.completedTaskCount, 2);
+  });
+
+  test('late success after a suspended batch finishes is accepted exactly once',
+      () {
+    final scheduler = GenerationScheduler(taskCount: 1, workerIds: ['A']);
+    final old = scheduler.claim('A')!;
+    scheduler.suspendOutcome(old);
+    expect(scheduler.status.finished, isTrue);
+    expect(scheduler.status.suspendedTaskCount, 1);
+    expect(scheduler.status.abandonedTaskCount, 0);
+    expect(scheduler.reserveSuccess(old), isTrue);
+    expect(scheduler.status.inFlightCount, 1);
+    expect(scheduler.detachWorkerForPersistence(old), isTrue);
+    expect(scheduler.completeSuccess(old), isTrue);
+    expect(scheduler.status.suspendedTaskCount, 0);
+    expect(scheduler.status.completedTaskCount, 1);
+    expect(scheduler.reserveSuccess(old), isFalse);
+    expect(scheduler.completeSuccess(old), isFalse);
+  });
+
+  test('definitely-unsent cancellation never discards an unknown paid request',
+      () {
+    final scheduler = GenerationScheduler(taskCount: 1, workerIds: ['A']);
+    final unknown = scheduler.claim('A')!;
+    scheduler.suspendOutcome(unknown);
+    expect(scheduler.cancel(unknown), isFalse);
+    expect(scheduler.reserveSuccess(unknown), isTrue);
+    expect(scheduler.completeSuccess(unknown), isTrue);
+  });
+
+  test('duplicate suspension does not pause a newer request on that worker',
+      () {
+    final scheduler = GenerationScheduler(taskCount: 2, workerIds: ['A']);
+    final old = scheduler.claim('A')!;
+    scheduler.suspendOutcome(old, pauseWorker: false);
+    final newer = scheduler.claim('A')!;
+    expect(scheduler.suspendOutcome(old), isTrue);
+    expect(scheduler.status.allWorkersPaused, isFalse);
+    expect(scheduler.status.inFlightCount, 1);
+    scheduler.reserveSuccess(newer);
+    scheduler.completeSuccess(newer);
   });
 
   test('stop blocks new claims and finishes after in-flight work settles', () {

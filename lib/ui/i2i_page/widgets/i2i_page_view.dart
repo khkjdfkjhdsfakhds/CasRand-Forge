@@ -137,6 +137,7 @@ class _I2iPageViewState extends State<I2iPageView> {
     return ListenableBuilder(
       listenable: Listenable.merge([
         viewmodel,
+        viewmodel.payloadConfig,
         if (_handoff != null) _handoff!,
       ]),
       builder: (context, _) {
@@ -782,15 +783,36 @@ class _I2iPageViewState extends State<I2iPageView> {
   Future<void> _handleDrop(BuildContext context, PerformDropEvent event) async {
     if (event.session.items.isEmpty) return;
     final reader = event.session.items.first.dataReader;
-    if (reader == null) return;
+    if (reader == null) {
+      showErrorBar(
+        context,
+        tr('image_drop_data_unavailable'),
+      );
+      return;
+    }
     reader.getFile(imageFormat, (file) async {
-      final bytes = await file.readAll();
-      final succeed = viewmodel.loadImageBytes(bytes);
-      if (!context.mounted) return;
-      if (succeed) {
-        showInfoBar(context, '${tr('i2i_import_image')}${tr('succeed')}');
-      } else {
-        showErrorBar(context, '${tr('i2i_import_image')}${tr('failed')}');
+      try {
+        final bytes = await file.readAll();
+        final succeed = viewmodel.loadImageBytes(bytes);
+        if (!context.mounted) return;
+        if (succeed) {
+          showInfoBar(context, '${tr('i2i_import_image')}${tr('succeed')}');
+        } else {
+          showErrorBar(context, tr('image_drop_rejected'));
+        }
+      } catch (error) {
+        if (!context.mounted) return;
+        showErrorBar(
+          context,
+          tr('image_drop_failed', namedArgs: {'error': '$error'}),
+        );
+      }
+    }, onError: (error) {
+      if (context.mounted) {
+        showErrorBar(
+          context,
+          tr('image_drop_failed', namedArgs: {'error': '$error'}),
+        );
       }
     });
   }
