@@ -15,6 +15,9 @@ import 'package:get_it/get_it.dart';
 import 'package:image/image.dart' as img;
 import 'package:vm_service/vm_service.dart' as service;
 import 'package:vm_service/vm_service_io.dart';
+import 'package:irondash_message_channel/irondash_message_channel.dart';
+import 'package:super_native_extensions/src/native/context.dart'
+    as native_context;
 import 'package:nai_casrand/data/models/api_request.dart';
 import 'package:nai_casrand/data/models/command_status.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
@@ -145,6 +148,22 @@ void main() {
         .setMockMethodCallHandler(
             const MethodChannel('plugins.flutter.io/shared_preferences'),
             (c) async => c.method == 'getAll' ? <String, Object>{} : true);
+    // The memory assertions do not exercise native drag and drop. Keep the
+    // page's desktop import wrapper mountable in the Flutter test VM, where
+    // the optional engine-context plugin is not registered.
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('dev.irondash.engine_context'),
+      (call) async => call.method == 'getEngineHandle' ? 0 : null,
+    );
+    final nativeChannels = MockMessageChannelContext();
+    for (final channel in ['DropManager', 'DragManager']) {
+      nativeChannels.registerMockMethodCallHandler(
+        channel,
+        (call) async => null,
+      );
+    }
+    native_context.setContextOverride(nativeChannels);
     await EasyLocalization.ensureInitialized();
     translations =
         jsonDecode(await rootBundle.loadString('assets/l10n/en.json'));
