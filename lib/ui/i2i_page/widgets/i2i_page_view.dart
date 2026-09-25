@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/core/constants/image_formats.dart';
 import 'package:nai_casrand/data/models/i2i_config.dart';
+import 'package:nai_casrand/data/models/scribble_document.dart';
 import 'package:nai_casrand/data/models/image_handoff_coordinator.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/data/use_cases/anlas_cost.dart';
@@ -20,6 +21,7 @@ import 'package:nai_casrand/ui/generation_page/widgets/result_actions.dart';
 import 'package:nai_casrand/ui/i2i_page/view_models/i2i_page_viewmodel.dart';
 import 'package:nai_casrand/ui/i2i_page/widgets/inpaint_mask_overlay.dart';
 import 'package:nai_casrand/ui/i2i_page/widgets/mask_editor_view.dart';
+import 'package:nai_casrand/ui/i2i_page/widgets/scribble_editor_view.dart';
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 
 typedef InpaintImagePreparer = Future<void> Function(
@@ -197,7 +199,7 @@ class _I2iPageViewState extends State<I2iPageView> {
                   Image.memory(
                     config.displayImageBytes!,
                     fit: BoxFit.fill,
-                    filterQuality: FilterQuality.medium,
+                    filterQuality: FilterQuality.high,
                     gaplessPlayback: true,
                   ),
                   if (config.hasMask)
@@ -325,8 +327,11 @@ class _I2iPageViewState extends State<I2iPageView> {
         Positioned(
           top: 12,
           right: 12,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
+          left: 12,
+          child: Wrap(
+            alignment: WrapAlignment.end,
+            spacing: 8,
+            runSpacing: 8,
             children: [
               if (config.hasInpaintSelection) ...[
                 Tooltip(
@@ -351,6 +356,13 @@ class _I2iPageViewState extends State<I2iPageView> {
                   icon: const Icon(Icons.brush_outlined),
                   label: Text(tr('inpaint_section')),
                 ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.tonalIcon(
+                key: const Key('i2i-scribble-editor'),
+                onPressed: () => _openScribbleEditor(context),
+                icon: const Icon(Icons.draw_outlined),
+                label: Text(tr('scribble_title')),
               ),
             ],
           ),
@@ -842,6 +854,26 @@ class _I2iPageViewState extends State<I2iPageView> {
       focusFrame: result.focusFrame,
       contextPx: result.contextPx,
     );
+  }
+
+  Future<void> _openScribbleEditor(BuildContext context) async {
+    final config = viewmodel.config;
+    if (!config.hasImage) {
+      await _importImage(context);
+      if (!context.mounted || !config.hasImage) return;
+    }
+    final revision = config.imageRevision;
+    final result = await ScribbleEditorView.open(context,
+        document: config.scribbleDocument ??
+            ScribbleDocument(
+                originalBytes: config.imageBytes!,
+                width: config.width,
+                height: config.height));
+    if (result == null || !context.mounted) return;
+    if (!identical(viewmodel.config, config) ||
+        !config.applyScribble(result.bytes, result.document, revision)) {
+      showWarningBar(context, tr('scribble_source_changed'));
+    }
   }
 
   void _generateOnce(BuildContext context) {

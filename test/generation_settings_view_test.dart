@@ -991,12 +991,12 @@ void main() {
           PromptConfig(
               selectionMethod: 'single_sequential',
               num: 4000000000,
-              strs: ['A'],
+              strs: ['A1', 'A2'],
               prompts: []),
           PromptConfig(
               selectionMethod: 'single_sequential',
               num: 4000000001,
-              strs: ['B'],
+              strs: ['B1', 'B2'],
               prompts: []),
         ]);
     final viewmodel = _NoNetworkGenerationPageViewmodel();
@@ -1005,7 +1005,7 @@ void main() {
     await tester.pumpWidget(localizedApp(
         Scaffold(body: GenerationSettingsView(viewmodel: viewmodel))));
     await tester.pumpAndSettle();
-    expect(find.textContaining('16000000004000000000'), findsWidgets);
+    expect(find.textContaining('32000000008000000000'), findsWidgets);
     expect(find.textContaining('exceeds'), findsOneWidget);
     final originalCount = config.settings.generationCount;
     viewmodel.startGeneration();
@@ -1040,4 +1040,105 @@ void main() {
     expect(config.rootPromptConfig.getPrmpts().toPrompt(), 'A');
     expect(config.rootPromptConfig.getPrmpts().toPrompt(), 'A');
   });
+
+  testWidgets(
+    'generation settings separate generationCount and interval between random and fixed modes, and hide lock-all-combinations in fixed mode',
+    (tester) async {
+      final config = GetIt.I<PayloadConfig>();
+      config.promptMode = PromptMode.random;
+      config.randomProfile.generationCount = 25;
+      config.randomProfile.generationIntervalSec = 7;
+      config.fixedProfile.generationCount = 3;
+      config.fixedProfile.generationIntervalSec = 0;
+
+      final viewmodel = _NoNetworkGenerationPageViewmodel();
+      addTearDown(viewmodel.dispose);
+
+      // 1. In random mode: shows random settings and lock-all-combinations checkbox
+      await tester.pumpWidget(
+        localizedApp(
+          Scaffold(body: GenerationSettingsView(viewmodel: viewmodel)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('generation-settings-lock-all-combinations')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('generation-settings-count')),
+          matching: find.text('25'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('generation-settings-interval')),
+          matching: find.text('7'),
+        ),
+        findsOneWidget,
+      );
+
+      // 2. Switch to fixed prompt mode
+      config.promptMode = PromptMode.fixed;
+      await tester.pumpAndSettle();
+
+      // lock-all-combinations MUST be deleted / not rendered in fixed mode
+      expect(
+        find.byKey(const Key('generation-settings-lock-all-combinations')),
+        findsNothing,
+      );
+      // Fixed mode count and interval are displayed
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('generation-settings-count')),
+          matching: find.text('3'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('generation-settings-interval')),
+          matching: find.text('0'),
+        ),
+        findsOneWidget,
+      );
+
+      // Edit count in fixed mode
+      viewmodel.setGenerationCount('5');
+      viewmodel.setGenerationInterval('1');
+      await tester.pumpAndSettle();
+
+      expect(config.fixedProfile.generationCount, 5);
+      expect(config.fixedProfile.generationIntervalSec, 1);
+      // Random profile remains completely unaffected
+      expect(config.randomProfile.generationCount, 25);
+      expect(config.randomProfile.generationIntervalSec, 7);
+
+      // 3. Switch back to random mode
+      config.promptMode = PromptMode.random;
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('generation-settings-lock-all-combinations')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('generation-settings-count')),
+          matching: find.text('25'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('generation-settings-interval')),
+          matching: find.text('7'),
+        ),
+        findsOneWidget,
+      );
+    },
+  );
 }

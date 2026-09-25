@@ -9,12 +9,19 @@ class CharacterConfigViewmodel extends ChangeNotifier {
   CharacterConfig config;
   ParamConfig paramConfig;
   ValueChanged<bool>? onAutoPositionChanged;
+  VoidCallback? onConfigChanged;
 
   CharacterConfigViewmodel({
     required this.config,
     required this.paramConfig,
     this.onAutoPositionChanged,
+    this.onConfigChanged,
   });
+
+  void _notifyChanged() {
+    notifyListeners();
+    onConfigChanged?.call();
+  }
 
   bool get autoPosition => paramConfig.autoPosition;
 
@@ -67,29 +74,42 @@ class CharacterConfigViewmodel extends ChangeNotifier {
     // Switching to a manual grid position clears the V5 free center so the
     // two position systems never conflict.
     config.freeCenter = null;
+    config.rememberedFreeCenter = null;
     config.positions = [pt];
-    notifyListeners();
+    _notifyChanged();
   }
 
   /// Sets the V5 free position in normalized (0..1) coordinates. Selecting a
   /// free point clears the legacy grid positions.
   void setFreeCenter(Point<double> center) {
+    setFreeCenterFor(config, center);
+  }
+
+  /// Sets a free position for any character shown in the shared position
+  /// editor. The viewmodel still owns the notifier so the dialog updates even
+  /// when the selected character is different from the card that opened it.
+  void setFreeCenterFor(CharacterConfig character, Point<double> center) {
     if (autoPosition) return;
-    config.freeCenter = center;
-    config.positions = [];
-    notifyListeners();
+    character.freeCenter = center;
+    character.rememberedFreeCenter = center;
+    character.positions = [];
+    _notifyChanged();
   }
 
   void setAutoPosition(bool? value) {
     if (value == null) return;
-    if (value) {
-      // AI choice means that no explicit V5 point should remain active.
-      config.freeCenter = null;
-    }
     if (onAutoPositionChanged != null) {
       onAutoPositionChanged!(value);
     } else {
       paramConfig.autoPosition = value;
+      if (value && config.freeCenter != null) {
+        config.rememberedFreeCenter = config.freeCenter;
+        config.freeCenter = null;
+      } else if (!value &&
+          config.freeCenter == null &&
+          config.rememberedFreeCenter != null) {
+        config.freeCenter = config.rememberedFreeCenter;
+      }
       if (!value && config.positions.isEmpty && config.freeCenter == null) {
         config.positions = [CharacterConfig.defaultPosition];
       }

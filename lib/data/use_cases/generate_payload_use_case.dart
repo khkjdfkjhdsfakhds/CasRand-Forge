@@ -114,8 +114,12 @@ class GeneratePayloadUseCase {
   PayloadGenerationResult call() {
     final plan = i2iPlan;
     final selectedParameters = payloadConfig.paramConfig;
-    final model = effectiveGenerationModel(selectedParameters.model,
-        inpaint: plan?.isInpaint ?? false);
+    final rawModel = (enhanceOptions != null &&
+            payloadConfig.enhanceConfig.sourceModel != null)
+        ? payloadConfig.enhanceConfig.sourceModel!
+        : selectedParameters.model;
+    final model =
+        effectiveGenerationModel(rawModel, inpaint: plan?.isInpaint ?? false);
     final paramConfig = model == selectedParameters.model
         ? selectedParameters
         : (ParamConfig.fromJson(selectedParameters.toJson())..model = model);
@@ -129,8 +133,13 @@ class GeneratePayloadUseCase {
       prompt: basePromptResult.toPrompt(),
       comment: basePromptResult.toComment(),
     );
+    // Enhance imports may retain the source image's original prompt for
+    // metadata and handoff purposes, but the request must use the prompt
+    // currently shown in the active profile. Otherwise editing an imported
+    // prompt is silently discarded by the stale source snapshot.
+    final rawBasePrompt = basePair.prompt;
     var effectiveBasePrompt = _appendPromptSuffix(
-      enhanceOptions?.prompt(basePair.prompt, model) ?? basePair.prompt,
+      enhanceOptions?.prompt(rawBasePrompt, model) ?? rawBasePrompt,
       promptSuffix,
     );
     if (usesV5 && paramConfig.transparentBackground) {

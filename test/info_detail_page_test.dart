@@ -18,6 +18,7 @@ import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/info_card.dart';
+import 'package:nai_casrand/ui/navigation/widgets/image_import_dialog.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/generation_page_view.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/result_actions.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
@@ -139,6 +140,60 @@ void main() {
         ),
       ),
     );
+  }
+
+  for (final width in [390.0, 1600.0]) {
+    testWidgets('metadata action imports current gallery image at width $width',
+        (tester) async {
+      await tester.binding.setSurfaceSize(Size(width, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final first = buildContent(bytes: solidPng(64, 96));
+      final second = InfoCardContent(
+        title: 'second.png',
+        info: 'second',
+        imageBytes: solidPng(64, 96),
+        additionalInfo: {
+          ...first.additionalInfo,
+          'input': 'second image prompt',
+          'steps': 28
+        },
+      );
+      final payload = GetIt.I<PayloadConfig>();
+      final seedBefore = payload.fixedProfile.paramConfig.seed;
+      await tester.pumpWidget(localizedApp(InfoDetailPage.gallery(
+        contents: [first, second],
+        initialIndex: 0,
+      )));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('detail-gallery-next')));
+      await tester.pumpAndSettle();
+      final action = find.byKey(const Key('result-action-import-metadata'));
+      await tester.ensureVisible(action);
+      await tester.tap(action);
+      await tester.pumpAndSettle();
+      final dialog =
+          tester.widget<ImageImportDialog>(find.byType(ImageImportDialog));
+      expect(dialog.candidate.prompt, 'second image prompt');
+      expect(dialog.candidate.fileName, 'second.png');
+      expect(payload.promptMode, PromptMode.random);
+      expect(
+          tester
+              .widget<CheckboxListTile>(
+                  find.byKey(const Key('metadata-import-seed')))
+              .value,
+          isFalse);
+      final confirm = find.byKey(const Key('metadata-import-confirm'));
+      await tester.ensureVisible(confirm);
+      await tester.tap(confirm);
+      await tester.pumpAndSettle();
+      expect(payload.promptMode, PromptMode.fixed);
+      expect(
+          payload.fixedProfile.rootPromptConfig.strs, ['second image prompt']);
+      expect(payload.fixedProfile.paramConfig.steps, 28);
+      expect(payload.fixedProfile.paramConfig.seed, seedBefore);
+      expect(find.byType(ImageImportDialog), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
   }
 
   testWidgets('a wide window puts the image beside the prompt', (tester) async {

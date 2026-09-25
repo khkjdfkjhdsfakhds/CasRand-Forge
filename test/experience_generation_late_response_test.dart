@@ -124,13 +124,41 @@ void main() {
     await GetIt.I.reset();
   });
 
-  testWidgets(
-      'unknown POST pauses without replay, then saves the original late result',
+  testWidgets('build117 disconnect retries automatically on the same card',
+      (tester) async {
+    _settings();
+    final transport = _Transport();
+    final api = ApiService(clientFactory: transport.newClient);
+    final files = _RecordingFiles();
+    final vm = GenerationPageViewmodel(apiService: api, fileService: files);
+    addTearDown(vm.dispose);
+    addTearDown(api.close);
+    vm.startGeneration();
+    await _pump(tester);
+    final card = vm.commandList.single;
+    final original = (transport.requests.single as http.Request).body;
+    transport.pending.single.completeError(http.ClientException('closed'));
+    await _pump(tester);
+    expect(vm.commandStatus.outcomeUnknownFor(card), isNull);
+    expect(transport.requests, hasLength(1));
+    await tester.pump(const Duration(seconds: 6));
+    await _pump(tester);
+    expect(transport.requests, hasLength(2));
+    expect((transport.requests.last as http.Request).body, original);
+    final png = _png(33);
+    transport.image(1, png);
+    await _pump(tester);
+    expect(files.savedBytes, [png]);
+    expect(vm.commandList.single, same(card));
+    expect(card.value.imageBytes, png);
+  });
+
+  testWidgets('build117 deadline retries and ignores the expired response',
       (tester) async {
     _settings();
     final transport = _Transport();
     final api = ApiService(
-        requestTimeout: const Duration(seconds: 1),
+        requestTimeout: const Duration(seconds: 2),
         clientFactory: transport.newClient);
     final files = _RecordingFiles();
     final vm = GenerationPageViewmodel(apiService: api, fileService: files);
@@ -138,105 +166,170 @@ void main() {
     addTearDown(api.close);
     vm.startGeneration();
     await _pump(tester);
-    final originalCard = vm.commandList.single;
+    final card = vm.commandList.single;
     await tester.pump(const Duration(seconds: 2));
     await _pump(tester);
-    expect(vm.commandStatus.outcomeUnknownFor(originalCard), isNotNull);
-    expect(vm.commandStatus.isExecuting(originalCard), isFalse);
-    await tester.pump(const Duration(seconds: 30));
+    expect(vm.commandStatus.outcomeUnknownFor(card), isNull);
+    expect(vm.commandStatus.isGenerationActive.value, isTrue);
+    await tester.pump(const Duration(seconds: 5));
+    await _pump(tester);
+    expect(transport.requests, hasLength(2));
+    transport.image(0, _png(10));
+    await _pump(tester);
+    expect(files.savedBytes, isEmpty);
+    transport.image(1, _png(11));
+    await _pump(tester);
+    expect(files.savedBytes, [_png(11)]);
+    expect(vm.commandList.single, same(card));
+    expect(vm.commandStatus.currentGenerationCount, 1);
+  });
+
+  testWidgets(
+      'build117 all accounts survive intermittent disconnects and successes reset counts',
+      (tester) async {
+    _settings(count: 10, parallel: true);
+    final transport = _Transport();
+    final api = ApiService(clientFactory: transport.newClient);
+    final files = _RecordingFiles();
+    final vm = GenerationPageViewmodel(apiService: api, fileService: files);
+    addTearDown(vm.dispose);
+    addTearDown(api.close);
+    vm.startGeneration();
+    await _pump(tester);
+    for (var round = 0; round < 5; round++) {
+      final start = round * 4;
+      expect(transport.requests, hasLength(start + 2));
+      expect(
+          transport.requests
+              .skip(start)
+              .map((r) => r.headers['authorization'])
+              .toSet(),
+          {'Bearer TOKEN_A', 'Bearer TOKEN_B'});
+      for (var i = start; i < start + 2; i++) {
+        transport.pending[i]
+            .completeError(http.ClientException('disconnected'));
+      }
+      await _pump(tester);
+      expect(vm.commandStatus.isGenerationActive.value, isTrue);
+      await tester.pump(const Duration(seconds: 5));
+      await _pump(tester);
+      expect(transport.requests, hasLength(start + 4),
+          reason:
+              'Both accounts must return after their first-failure delay on every round.');
+      expect(
+          transport.requests
+              .skip(start + 2)
+              .map((r) => r.headers['authorization'])
+              .toSet(),
+          {'Bearer TOKEN_A', 'Bearer TOKEN_B'});
+      transport.image(start + 2, _png(round * 2));
+      transport.image(start + 3, _png(round * 2 + 1));
+      await _pump(tester);
+    }
+    expect(files.savedBytes, hasLength(10));
+    expect(vm.commandStatus.currentGenerationCount, 10);
+    expect(vm.commandStatus.isGenerationActive.value, isFalse);
+    expect(
+        vm.commandList
+            .every((c) => vm.commandStatus.outcomeUnknownFor(c) == null),
+        isTrue);
+  });
+
+  for (final failure in ['disconnect', 'unauthorized', 'rate limited']) {
+    testWidgets('build117 $failure pauses only after five consecutive failures',
+        (tester) async {
+      _settings();
+      final transport = _Transport();
+      final api = ApiService(clientFactory: transport.newClient);
+      final vm = GenerationPageViewmodel(
+          apiService: api, fileService: _RecordingFiles());
+      addTearDown(vm.dispose);
+      addTearDown(api.close);
+      vm.startGeneration();
+      await _pump(tester);
+      for (var attempt = 0; attempt < 5; attempt++) {
+        expect(transport.requests, hasLength(attempt + 1));
+        if (failure == 'disconnect') {
+          transport.pending[attempt]
+              .completeError(http.ClientException('closed'));
+        } else {
+          transport.pending[attempt].complete(http.StreamedResponse(
+              Stream.value(utf8.encode(failure)),
+              failure == 'unauthorized' ? 401 : 429,
+              headers: {'retry-after': '60'}));
+        }
+        await _pump(tester);
+        if (attempt < 4) {
+          expect(vm.commandStatus.isGenerationActive.value, isTrue);
+          final delay = attempt == 0 ? 5 : 15;
+          await tester.pump(Duration(seconds: delay - 1));
+          expect(transport.requests, hasLength(attempt + 1));
+          await tester.pump(const Duration(seconds: 1));
+          await _pump(tester);
+        }
+      }
+      expect(vm.commandStatus.isGenerationActive.value, isFalse);
+      await tester.pump(const Duration(minutes: 2));
+      await _pump(tester);
+      expect(transport.requests, hasLength(5));
+    });
+  }
+
+  testWidgets('build117 stop cancels automatic retry without another POST',
+      (tester) async {
+    _settings();
+    final transport = _Transport();
+    final api = ApiService(clientFactory: transport.newClient);
+    final vm = GenerationPageViewmodel(
+        apiService: api, fileService: _RecordingFiles());
+    addTearDown(vm.dispose);
+    addTearDown(api.close);
+    vm.startGeneration();
+    await _pump(tester);
+    transport.pending.single.completeError(http.ClientException('closed'));
+    await _pump(tester);
+    vm.stopGeneration();
+    await tester.pump(const Duration(minutes: 1));
     await _pump(tester);
     expect(transport.requests, hasLength(1));
-    expect(files.savedBytes, isEmpty);
-    final png = _png(20);
-    transport.image(0, png);
-    await _pump(tester);
-    expect(files.savedBytes, hasLength(1));
-    expect(files.savedBytes.single, png);
-    expect(vm.commandList.single, same(originalCard));
-    expect(originalCard.value.imageBytes, png);
-    expect(vm.commandStatus.outcomeUnknownFor(originalCard), isNull);
-    expect(vm.commandStatus.currentGenerationCount, 1);
     expect(vm.commandStatus.isGenerationActive.value, isFalse);
   });
 
   testWidgets(
-      'healthy account continues unsent tasks after another account becomes unknown',
-      (tester) async {
-    _settings(count: 4, parallel: true);
-    final transport = _Transport();
-    final api = ApiService(
-        requestTimeout: const Duration(seconds: 1),
-        clientFactory: transport.newClient);
-    final files = _RecordingFiles();
-    final vm = GenerationPageViewmodel(apiService: api, fileService: files);
-    addTearDown(vm.dispose);
-    addTearDown(api.close);
-    vm.startGeneration();
-    await _pump(tester);
-    expect(transport.requests, hasLength(2));
-    await tester.pump(const Duration(milliseconds: 500));
-    transport.image(1, _png(21));
-    await _pump(tester);
-    expect(transport.requests, hasLength(3));
-    await tester.pump(const Duration(milliseconds: 510));
-    await _pump(tester);
-    expect(vm.commandStatus.currentGenerationCount, 1);
-    transport.image(2, _png(22));
-    await _pump(tester);
-    expect(transport.requests, hasLength(4));
-    expect(transport.requests.skip(1).map((r) => r.headers['authorization']),
-        everyElement('Bearer TOKEN_B'));
-    transport.image(3, _png(23));
-    await _pump(tester);
-    expect(vm.commandStatus.currentGenerationCount, 3);
-    expect(vm.commandStatus.isGenerationActive.value, isFalse);
-    await tester.pump(const Duration(seconds: 15));
-    await _pump(tester);
-    expect(transport.requests, hasLength(4));
-    transport.image(0, _png(24));
-    await _pump(tester);
-    expect(files.savedBytes, hasLength(4));
-    expect(vm.commandStatus.currentGenerationCount, 4);
-  });
-
-  testWidgets('old-batch late success cannot complete or cancel a new batch',
+      'build117 Vibe disconnect clears failed extraction and retries generation',
       (tester) async {
     _settings();
+    final config = GetIt.I<PayloadConfig>();
+    config.paramConfig.model = 'nai-diffusion-4-5-full';
+    final reference = VibeConfigV4(
+        fileName: 'fixture.png', imageBytes: _png(28), referenceStrength: 0.6);
+    config.vibeConfigListV4.add(reference);
+    config.setVibeEnabled(true);
     final transport = _Transport();
-    final api = ApiService(
-        requestTimeout: const Duration(seconds: 1),
-        clientFactory: transport.newClient);
+    final api = ApiService(clientFactory: transport.newClient);
     final files = _RecordingFiles();
     final vm = GenerationPageViewmodel(apiService: api, fileService: files);
     addTearDown(vm.dispose);
     addTearDown(api.close);
     vm.startGeneration();
     await _pump(tester);
-    final oldCard = vm.commandList.single;
-    final oldTimestamp = vm.commandStatus.generationTimestamp;
-    await tester.pump(const Duration(seconds: 2));
+    expect(transport.requests.single.url.path, contains('encode-vibe'));
+    transport.pending.single.completeError(http.ClientException('closed'));
     await _pump(tester);
-    expect(vm.commandStatus.isGenerationActive.value, isFalse);
-    vm.startGeneration();
+    await tester.pump(const Duration(seconds: 5));
     await _pump(tester);
     expect(transport.requests, hasLength(2));
-    final newCommand = vm.currentCommand;
-    expect(newCommand, isNotNull);
-    expect(vm.commandStatus.generationTimestamp, isNot(oldTimestamp));
-    transport.image(0, _png(25));
+    expect(transport.requests.last.url.path, contains('encode-vibe'));
+    transport.bytes(1, Uint8List.fromList([10, 20, 30]));
     await _pump(tester);
-    expect(oldCard.value.imageBytes, _png(25));
+    expect(transport.requests, hasLength(3));
+    expect(transport.requests.last.url.path, contains('generate-image'));
+    expect(reference.encodingFor('nai-diffusion-4-5-full'),
+        base64Encode([10, 20, 30]));
+    transport.image(2, _png(31));
+    await _pump(tester);
     expect(files.savedBytes, hasLength(1));
-    expect(vm.currentCommand, same(newCommand));
-    expect(vm.commandStatus.currentGenerationCount, 0);
-    expect(vm.commandStatus.isGenerationActive.value, isTrue);
-    transport.image(1, _png(26));
-    await _pump(tester);
-    expect(files.savedBytes, hasLength(2));
-    expect(vm.commandStatus.currentGenerationCount, 1);
-    expect(vm.commandStatus.isGenerationActive.value, isFalse);
   });
-
   testWidgets(
       'Stop blocks new POSTs but still saves an already submitted response',
       (tester) async {
@@ -261,40 +354,5 @@ void main() {
     expect(files.savedBytes.single, png);
     expect(vm.commandStatus.isGenerationActive.value, isFalse);
     expect(vm.commandStatus.currentGenerationCount, 1);
-  });
-
-  testWidgets(
-      'unknown Vibe keeps its late encoding on the exact original reference',
-      (tester) async {
-    _settings();
-    final config = GetIt.I<PayloadConfig>();
-    config.paramConfig.model = 'nai-diffusion-4-5-full';
-    final original = VibeConfigV4(
-        fileName: 'fixture.png', imageBytes: _png(28), referenceStrength: 0.6);
-    config.vibeConfigListV4.add(original);
-    config.setVibeEnabled(true);
-    final transport = _Transport();
-    final api = ApiService(
-        requestTimeout: const Duration(seconds: 1),
-        clientFactory: transport.newClient);
-    final vm = GenerationPageViewmodel(
-        apiService: api, fileService: _RecordingFiles());
-    addTearDown(vm.dispose);
-    addTearDown(api.close);
-    vm.startGeneration();
-    await _pump(tester);
-    expect(transport.requests.single.url.path, contains('encode-vibe'));
-    await tester.pump(const Duration(seconds: 2));
-    await _pump(tester);
-    await tester.pump(const Duration(seconds: 30));
-    await _pump(tester);
-    expect(transport.requests, hasLength(1));
-    final encoding = Uint8List.fromList([10, 20, 30]);
-    transport.bytes(0, encoding);
-    await _pump(tester);
-    expect(
-        original.encodingFor('nai-diffusion-4-5-full'), base64Encode(encoding));
-    expect(transport.requests, hasLength(1),
-        reason: 'Late preparation must not restart generation.');
   });
 }

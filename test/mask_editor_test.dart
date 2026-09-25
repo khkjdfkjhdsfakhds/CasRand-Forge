@@ -9,6 +9,99 @@ import 'package:nai_casrand/data/use_cases/autocrop_planner.dart';
 import 'package:nai_casrand/ui/i2i_page/widgets/mask_editor_view.dart';
 
 void main() {
+  testWidgets('copy exports composed mask and invert supports undo and redo',
+      (tester) async {
+    final image =
+        Uint8List.fromList(img.encodePng(img.Image(width: 64, height: 48)));
+    final outputs = <Uint8List>[];
+    await tester.pumpWidget(MaterialApp(
+        home: MaskEditorView(
+      imageBytes: image,
+      imageWidth: 64,
+      imageHeight: 48,
+      initialStrokes: const [
+        MaskStroke(isErase: false, brushSize: 1, points: [Offset(16, 16)])
+      ],
+      clipboardImageWriter: (bytes) async {
+        outputs.add(bytes);
+      },
+    )));
+    await tester.pumpAndSettle();
+    Future<void> finishWork() async {
+      await tester.pump();
+      for (var attempt = 0; attempt < 20; attempt++) {
+        await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 100)));
+        await tester.pump();
+        if (tester
+                .widget<IconButton>(find.byKey(const Key('mask-editor-copy')))
+                .onPressed !=
+            null) {
+          break;
+        }
+      }
+      await tester.pumpAndSettle();
+    }
+
+    Future<img.Image> copy() async {
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+      await finishWork();
+      return img.decodePng(outputs.last)!;
+    }
+
+    final original = await copy();
+    expect(original.width, 64);
+    expect(original.height, 48);
+    expect(original.getPixel(16, 16).r, 255);
+    expect(original.getPixel(0, 0).r, 0);
+    await tester.tap(find.byKey(const Key('mask-editor-invert')));
+    await finishWork();
+    final inverted = await copy();
+    for (final pixel in original) {
+      expect(inverted.getPixel(pixel.x, pixel.y).r, 255 - pixel.r);
+    }
+    await tester.tap(find.byKey(const Key('mask-editor-undo')));
+    await finishWork();
+    expect((await copy()).getBytes(), original.getBytes());
+    await tester.tap(find.byKey(const Key('mask-editor-redo')));
+    await finishWork();
+    expect((await copy()).getBytes(), inverted.getBytes());
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('failed clipboard write retains mask and unlocks actions',
+      (tester) async {
+    final image =
+        Uint8List.fromList(img.encodePng(img.Image(width: 16, height: 16)));
+    await tester.pumpWidget(MaterialApp(
+        home: MaskEditorView(
+      imageBytes: image,
+      imageWidth: 16,
+      imageHeight: 16,
+      initialStrokes: const [],
+      clipboardImageWriter: (_) async => throw StateError('unavailable'),
+    )));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('mask-editor-copy')));
+    await tester.pump();
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 200)));
+    await tester.pumpAndSettle();
+    expect(find.text('mask_editor_operation_failed'), findsOneWidget);
+    expect(
+        tester
+            .widget<IconButton>(find.byKey(const Key('mask-editor-copy')))
+            .onPressed,
+        isNotNull);
+    expect(
+        tester
+            .widget<IconButton>(find.byKey(const Key('mask-editor-undo')))
+            .onPressed,
+        isNull);
+  });
+
   test('official pixel-circle footprints match the production editor', () {
     expect(officialMaskCircleCells(1), hasLength(1));
     expect(officialMaskCircleCells(2), hasLength(4));
@@ -403,6 +496,13 @@ void main() {
 
     expect(clipboardReads, 1);
     expect(find.byKey(const Key('mask-import-channel')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('mask-import-close')));
+    await tester.pumpAndSettle();
+    expect(
+        tester
+            .widget<IconButton>(find.byKey(const Key('mask-editor-undo')))
+            .onPressed,
+        isNull);
   });
 
   testWidgets('invalid clipboard content leaves the mask editor unchanged', (

@@ -147,6 +147,91 @@ class _TokenManagerPageViewState extends State<TokenManagerPageView> {
                               ),
                               Text(_usageText(entry.token)),
                               Text(_expirationText(entry.token)),
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Wrap(
+                                  spacing: 8,
+                                  runSpacing: 4,
+                                  children: [
+                                    FilterChip(
+                                      key: ValueKey(
+                                        'token-points-${entry.token}',
+                                      ),
+                                      visualDensity: VisualDensity.compact,
+                                      showCheckmark: false,
+                                      selectedColor: Theme.of(context)
+                                          .colorScheme
+                                          .primaryContainer,
+                                      backgroundColor: Theme.of(context)
+                                          .colorScheme
+                                          .surfaceContainerHighest,
+                                      side: BorderSide(
+                                        color: entry.allowPoints
+                                            ? Theme.of(context)
+                                                .colorScheme
+                                                .primary
+                                                .withValues(alpha: 0.45)
+                                            : Theme.of(context)
+                                                .colorScheme
+                                                .outline
+                                                .withValues(alpha: 0.55),
+                                      ),
+                                      avatar: Icon(
+                                        entry.allowPoints
+                                            ? Icons.account_balance_wallet_outlined
+                                            : Icons.block_outlined,
+                                        size: 16,
+                                      ),
+                                      label: Text(
+                                        tr(entry.allowPoints
+                                            ? 'api_token_allow_points'
+                                            : 'api_token_points_blocked'),
+                                      ),
+                                      selected: entry.allowPoints,
+                                      onSelected: (val) =>
+                                          viewmodel.setTokenAllowPoints(index, val),
+                                    ),
+                                    FilterChip(
+                                      key: ValueKey(
+                                        'token-free-${entry.token}',
+                                      ),
+                                      visualDensity: VisualDensity.compact,
+                                      showCheckmark: false,
+                                      selectedColor: Theme.of(context)
+                                          .colorScheme
+                                          .primaryContainer,
+                                      backgroundColor: Theme.of(context)
+                                          .colorScheme
+                                          .surfaceContainerHighest,
+                                      side: BorderSide(
+                                        color: entry.allowFree
+                                            ? Theme.of(context)
+                                                .colorScheme
+                                                .primary
+                                                .withValues(alpha: 0.45)
+                                            : Theme.of(context)
+                                                .colorScheme
+                                                .outline
+                                                .withValues(alpha: 0.55),
+                                      ),
+                                      avatar: Icon(
+                                        entry.allowFree
+                                            ? Icons.card_giftcard_outlined
+                                            : Icons.block_outlined,
+                                        size: 16,
+                                      ),
+                                      label: Text(
+                                        tr(entry.allowFree
+                                            ? 'api_token_allow_free'
+                                            : 'api_token_free_blocked'),
+                                      ),
+                                      selected: entry.allowFree,
+                                      onSelected: (val) =>
+                                          viewmodel.setTokenAllowFree(index, val),
+                                    ),
+                                  ],
+                                ),
+                              ),
                               if (compact)
                                 Align(
                                   alignment: AlignmentDirectional.centerEnd,

@@ -18,6 +18,7 @@ import 'package:nai_casrand/ui/generation_page/widgets/result_actions.dart'
     show formatAnlasBadge, formatAnlasTooltip;
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
 import 'package:waterfall_flow/waterfall_flow.dart';
+import '../../navigation/widgets/image_import_area.dart';
 
 class GenerationPageView extends StatefulWidget {
   final GenerationPageViewmodel viewmodel;
@@ -178,10 +179,12 @@ class _GenerationPageViewState extends State<GenerationPageView> {
         ],
       ),
     );
-    return Scaffold(
+    return ImageImportArea(
+      ignoreWhenTextEditing: false,
+      child: Scaffold(
       body: content,
       floatingActionButton: buttons,
-    );
+    ));
   }
 
   /// Completed results in the same newest-first order the grid uses.
@@ -278,7 +281,6 @@ class _GenerationPageViewState extends State<GenerationPageView> {
           final preciseSupported = ImageImportCapabilities.forModel(
             config.paramConfig.model,
           ).supports(ImageImportAction.preciseReference);
-          final toolActive = config.activeBatchTool != null;
           final canEdit = viewmodel.canChangeBatchTool;
           Future<void> toggleTool(BatchToolKind kind, bool enabled) async {
             final pending = viewmodel.setBatchToolEnabled(kind, enabled);
@@ -299,7 +301,28 @@ class _GenerationPageViewState extends State<GenerationPageView> {
               constraints: const BoxConstraints(maxWidth: 520),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  SwitchListTile(
+                    title: Text(tr('i2i_inpaint')),
+                    subtitle: Text(config.i2iConfig.hasImage
+                        ? tr('resource_ready')
+                        : tr('resource_missing')),
+                    value: config.i2iEnabled,
+                    onChanged: canEdit && config.i2iConfig.hasImage
+                        ? (value) async {
+                            if (value && config.batchToolKind != null) {
+                              await viewmodel.setBatchToolEnabled(
+                                  config.batchToolKind!, false);
+                            }
+                            if (!context.mounted) return;
+                            setState(() {
+                              config.setI2iEnabled(value);
+                              viewmodel.advancedFeaturesChanged();
+                            });
+                          }
+                        : null,
+                  ),
                   SwitchListTile(
                     key: const Key('batch-enhance-toggle'),
                     title: const Text('Enhance / Max'),
@@ -330,25 +353,7 @@ class _GenerationPageViewState extends State<GenerationPageView> {
                   ),
                   if (viewmodel.isSendingToolToBatch)
                     const LinearProgressIndicator(),
-                  if (toolActive)
-                    Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Text(tr('batch_tool_resources_paused')),
-                    ),
-                  SwitchListTile(
-                    title: Text(tr('i2i_inpaint')),
-                    subtitle: Text(config.i2iConfig.hasImage
-                        ? tr('resource_ready')
-                        : tr('resource_missing')),
-                    value: config.i2iEnabled,
-                    onChanged:
-                        canEdit && !toolActive && config.i2iConfig.hasImage
-                            ? (value) => setState(() {
-                                  config.setI2iEnabled(value);
-                                  viewmodel.advancedFeaturesChanged();
-                                })
-                            : null,
-                  ),
+                  const Divider(height: 24),
                   SwitchListTile(
                     title: const Text('Vibe Transfer'),
                     subtitle: Text(config.vibeConfigList.isNotEmpty ||
@@ -357,7 +362,6 @@ class _GenerationPageViewState extends State<GenerationPageView> {
                         : tr('resource_missing')),
                     value: config.vibeEnabled,
                     onChanged: canEdit &&
-                            !toolActive &&
                             (config.vibeConfigList.isNotEmpty ||
                                 config.vibeConfigListV4.isNotEmpty)
                         ? (value) {
@@ -391,7 +395,6 @@ class _GenerationPageViewState extends State<GenerationPageView> {
                             : tr('resource_missing')),
                     value: config.preciseReferenceEnabled,
                     onChanged: canEdit &&
-                            !toolActive &&
                             preciseSupported &&
                             config.preciseReferenceConfigList.isNotEmpty
                         ? (value) {

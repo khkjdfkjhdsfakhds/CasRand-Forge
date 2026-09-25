@@ -15,7 +15,7 @@ class CharacterConfigView extends StatelessWidget {
   final PromptEditingAssistance? promptAssistance;
   final bool autocompleteEnabled;
   final int characterIndex;
-  final List<Point<double>?>? referencePositions;
+  final List<CharacterConfig> allCharacters;
 
   const CharacterConfigView({
     super.key,
@@ -23,7 +23,7 @@ class CharacterConfigView extends StatelessWidget {
     this.promptAssistance,
     this.autocompleteEnabled = true,
     this.characterIndex = 0,
-    this.referencePositions,
+    this.allCharacters = const [],
   });
 
   @override
@@ -101,7 +101,7 @@ class CharacterConfigView extends StatelessWidget {
       builder: (context) => _EditPositionDialog(
         viewmodel: viewmodel,
         characterIndex: characterIndex,
-        referencePositions: referencePositions,
+        allCharacters: allCharacters,
       ),
     );
   }
@@ -173,12 +173,12 @@ class CharacterConfigView extends StatelessWidget {
 class _EditPositionDialog extends StatefulWidget {
   final CharacterConfigViewmodel viewmodel;
   final int characterIndex;
-  final List<Point<double>?>? referencePositions;
+  final List<CharacterConfig> allCharacters;
 
   const _EditPositionDialog({
     required this.viewmodel,
     this.characterIndex = 0,
-    this.referencePositions,
+    this.allCharacters = const [],
   });
 
   @override
@@ -188,6 +188,7 @@ class _EditPositionDialog extends StatefulWidget {
 class _EditPositionDialogState extends State<_EditPositionDialog> {
   late final TextEditingController _x;
   late final TextEditingController _y;
+  late int _selectedCharacterIndex;
 
   bool get _free => widget.viewmodel.isV5 && !widget.viewmodel.autoPosition;
 
@@ -196,7 +197,8 @@ class _EditPositionDialogState extends State<_EditPositionDialog> {
   @override
   void initState() {
     super.initState();
-    final Point<double>? c = widget.viewmodel.config.freeCenter;
+    _selectedCharacterIndex = widget.characterIndex;
+    final Point<double>? c = _selectedCharacter.freeCenter;
     final Point<double> start = c ?? const Point<double>(0.5, 0.5);
     _x = TextEditingController(text: _fmt(start.x));
     _y = TextEditingController(text: _fmt(start.y));
@@ -213,9 +215,30 @@ class _EditPositionDialogState extends State<_EditPositionDialog> {
     final double? x = double.tryParse(_x.text);
     final double? y = double.tryParse(_y.text);
     if (x == null || y == null) return;
-    widget.viewmodel.setFreeCenter(
+    widget.viewmodel.setFreeCenterFor(
+      _selectedCharacter,
       Point<double>(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)),
     );
+  }
+
+  CharacterConfig get _selectedCharacter {
+    final characters = widget.allCharacters;
+    if (_selectedCharacterIndex >= 0 &&
+        _selectedCharacterIndex < characters.length) {
+      return characters[_selectedCharacterIndex];
+    }
+    return widget.viewmodel.config;
+  }
+
+  void _selectCharacter(int index) {
+    if (index < 0 || index >= widget.allCharacters.length) return;
+    final character = widget.allCharacters[index];
+    final center = CharacterFreePositionCanvas.displayCenter(character);
+    setState(() {
+      _selectedCharacterIndex = index;
+      _x.text = _fmt(center.x);
+      _y.text = _fmt(center.y);
+    });
   }
 
   @override
@@ -229,32 +252,37 @@ class _EditPositionDialogState extends State<_EditPositionDialog> {
           title: Text(
             '${tr('edit')}${tr('colon')}${tr('character_position')}',
           ),
-          content: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: 460,
-              maxHeight: MediaQuery.sizeOf(context).height * 0.7,
-            ),
-            child: SingleChildScrollView(
-              child: SizedBox(
-                width: 460,
-                child: free
-                    ? Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _AutoPositionCheckbox(viewmodel: vm),
-                          const Divider(),
-                          CharacterFreePositionCanvas(
-                            viewmodel: vm,
-                            characterIndex: widget.characterIndex,
-                            referencePositions: widget.referencePositions,
-                            xController: _x,
-                            yController: _y,
-                          ),
-                        ],
-                      )
-                    : CharacterPositionView(viewmodel: vm),
-              ),
-            ),
+          content: SizedBox(
+            width: 460,
+            // AlertDialog further constrains this to the actual space left
+            // after its title, actions, safe area and keyboard insets.
+            height: free ? MediaQuery.sizeOf(context).height * 0.7 : null,
+            child: free
+                ? Column(
+                    children: [
+                      _AutoPositionCheckbox(viewmodel: vm),
+                      const Divider(),
+                      Expanded(
+                        child: CharacterFreePositionCanvas(
+                          viewmodel: vm,
+                          fitToBounds: true,
+                          characterIndex: widget.characterIndex,
+                          selectedCharacterIndex: _selectedCharacterIndex,
+                          onCharacterSelected: _selectCharacter,
+                          referenceCharacters: widget.allCharacters,
+                          xController: _x,
+                          yController: _y,
+                        ),
+                      ),
+                    ],
+                  )
+                : SingleChildScrollView(
+                    child: CharacterPositionView(
+                      viewmodel: vm,
+                      allCharacters: widget.allCharacters,
+                      characterIndex: widget.characterIndex,
+                    ),
+                  ),
           ),
           actions: [
             if (free) ...[
@@ -302,10 +330,28 @@ class _EditPositionDialogState extends State<_EditPositionDialog> {
   }
 }
 
+/// The grid cells a character actually occupies right now.
+///
+/// A V5 free point is folded into the cell it maps to, while characters with
+/// no explicit position stay unmarked so the AI-choice mode is not mistaken
+/// for a C3 placement.
+List<Point<int>> _occupiedGridPositions(CharacterConfig config) {
+  final free = config.freeCenter;
+  if (free != null) return [CharacterConfig.gridPositionFor(free)];
+  return config.positions;
+}
+
 class CharacterPositionView extends StatelessWidget {
   final CharacterConfigViewmodel viewmodel;
+  final List<CharacterConfig> allCharacters;
+  final int characterIndex;
 
-  const CharacterPositionView({super.key, required this.viewmodel});
+  const CharacterPositionView({
+    super.key,
+    required this.viewmodel,
+    this.allCharacters = const [],
+    this.characterIndex = 0,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -330,6 +376,13 @@ class CharacterPositionView extends StatelessWidget {
                     final selected =
                         viewmodel.config.effectiveGridPositions.contains(pt);
                     final label = '${xMapping[x]}${y.toString()}';
+                    final others = [
+                      for (var i = 0; i < allCharacters.length; i++)
+                        if (i != characterIndex &&
+                            _occupiedGridPositions(allCharacters[i])
+                                .contains(pt))
+                          i,
+                    ];
                     cols.add(InkWell(
                       key: Key('character-position-$label'),
                       onTap: () => viewmodel.switchPosition(pt),
@@ -347,7 +400,20 @@ class CharacterPositionView extends StatelessWidget {
                                   : Colors.transparent,
                             ),
                           ),
-                          child: Center(child: Text(label)),
+                          child: Center(
+                            child: Text(
+                              others.isEmpty
+                                  ? label
+                                  : '$label\n${others.map((i) => '#${i + 1}').join(' ')}',
+                              textAlign: TextAlign.center,
+                              style: others.isEmpty
+                                  ? null
+                                  : const TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                            ),
+                          ),
                         ),
                       ),
                     ));

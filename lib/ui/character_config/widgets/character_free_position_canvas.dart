@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:nai_casrand/data/models/character_config.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/ui/character_config/view_models/character_config_viewmodel.dart';
 
@@ -14,23 +15,49 @@ import 'package:nai_casrand/ui/character_config/view_models/character_config_vie
 class CharacterFreePositionCanvas extends StatelessWidget {
   final CharacterConfigViewmodel viewmodel;
   final int characterIndex;
+
+  /// Fit the entire canvas into both available dimensions.
+  final bool fitToBounds;
+
+  /// Index of the character whose point is currently editable.
+  final int? selectedCharacterIndex;
+
+  /// Called when a reference marker is clicked.
+  final ValueChanged<int>? onCharacterSelected;
   final String? characterLabel;
 
-  /// Optional ordered list of every character's free position (null when a
-  /// character has not been placed yet). Used to display secondary
-  /// (non-draggable) markers for the other characters in the scene.
-  final List<Point<double>?>? referencePositions;
+  /// Every character of the scene, in list order, so the other characters can
+  /// be drawn as read-only reference markers while this one is edited.
+  ///
+  /// The live [CharacterConfig] instances are read on every build. Passing
+  /// precomputed coordinates instead would freeze the markers at the moment
+  /// the surrounding card was last built, which loses any position set later
+  /// in the same session.
+  final List<CharacterConfig>? referenceCharacters;
 
   /// Optional external controllers for the X / Y inputs shown in the dialog.
   final TextEditingController? xController;
   final TextEditingController? yController;
 
+  /// Radius of the read-only markers for the other characters.
+  static const double _referenceRadius = 11;
+
+  /// Radius of the edited character's marker.
+  static const double _editedRadius = 14;
+
+  /// Click target around a reference marker. The visible dot stays compact,
+  /// while the larger target makes switching characters easier.
+  static const double _referenceTapSize = 36;
+
   const CharacterFreePositionCanvas({
     super.key,
     required this.viewmodel,
     this.characterIndex = 0,
+    this.fitToBounds = false,
+    this.selectedCharacterIndex,
+    this.onCharacterSelected,
     this.characterLabel,
-    this.referencePositions,
+    this.referenceCharacters,
     this.xController,
     this.yController,
   });
@@ -41,6 +68,7 @@ class CharacterFreePositionCanvas extends StatelessWidget {
     Offset local,
     double canvasWidth,
     double canvasHeight,
+    CharacterConfig character,
   ) {
     if (canvasWidth <= 0 || canvasHeight <= 0) return;
     final double x = (local.dx / canvasWidth).clamp(0.0, 1.0);
@@ -48,11 +76,46 @@ class CharacterFreePositionCanvas extends StatelessWidget {
     // Keep the coordinate inputs in sync with the dragged point.
     xController?.text = _fmt(x);
     yController?.text = _fmt(y);
-    viewmodel.setFreeCenter(Point<double>(x, y));
+    viewmodel.setFreeCenterFor(character, Point<double>(x, y));
+  }
+
+  /// Where a character will actually be rendered right now: its V5 free point
+  /// when one is set, otherwise the center of every explicit legacy grid cell
+  /// it still uses. Characters without an explicit position stay unmarked so
+  /// the AI-choice default is not mistaken for a deliberate placement.
+  static List<Point<double>> placedCenters(CharacterConfig character) {
+    final Point<double>? free = character.freeCenter;
+    if (free != null) return [free];
+    return [
+      for (final Point<int> cell in character.positions)
+        Point<double>(
+          CharacterConfig.gridToNormalized[cell.x] ?? 0.5,
+          CharacterConfig.gridToNormalized[cell.y] ?? 0.5,
+        ),
+    ];
+  }
+
+  static Point<double> displayCenter(CharacterConfig character) {
+    final centers = placedCenters(character);
+    return centers.isEmpty ? const Point<double>(0.5, 0.5) : centers.first;
+  }
+
+  /// Read-only markers for the other characters, paired with their index.
+  List<(int, Point<double>)> _referenceDots() {
+    final List<CharacterConfig>? characters = referenceCharacters;
+    if (characters == null) return const [];
+    final selected = selectedCharacterIndex ?? characterIndex;
+    return [
+      for (final (int i, CharacterConfig character) in characters.indexed)
+        if (i != selected)
+          for (final Point<double> center in placedCenters(character))
+            (i, center),
+    ];
   }
 
   @override
   Widget build(BuildContext context) {
+    final ColorScheme colorScheme = Theme.of(context).colorScheme;
     // Listen to the viewmodel so the marker follows the pointer / typed values
     // in real time rather than only after the dialog is reopened.
     return ListenableBuilder(
@@ -64,65 +127,91 @@ class CharacterFreePositionCanvas extends StatelessWidget {
                 size.height > 0
             ? size.width / size.height
             : 832 / 1216;
-        final Point<double>? center = viewmodel.config.freeCenter;
-        final Point<double> display = center ?? const Point<double>(0.5, 0.5);
+        final int selected = selectedCharacterIndex ?? characterIndex;
+        final CharacterConfig selectedCharacter = referenceCharacters != null &&
+                selected >= 0 &&
+                selected < referenceCharacters!.length
+            ? referenceCharacters![selected]
+            : viewmodel.config;
+        final Point<double> display = displayCenter(selectedCharacter);
+        final List<(int, Point<double>)> references = _referenceDots();
 
+        final canvas = AspectRatio(
+          aspectRatio: aspect,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final double canvasWidth = constraints.maxWidth;
+              final double canvasHeight = constraints.maxHeight;
+              return GestureDetector(
+                key: const Key('character-free-canvas'),
+                behavior: HitTestBehavior.opaque,
+                onPanStart: (details) => _updateFromLocal(details.localPosition,
+                    canvasWidth, canvasHeight, selectedCharacter),
+                onPanUpdate: (details) => _updateFromLocal(
+                    details.localPosition,
+                    canvasWidth,
+                    canvasHeight,
+                    selectedCharacter),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.black12,
+                    border: Border.all(color: Colors.white24),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Stack(
+                    children: [
+                      // Reference (non-editing) character markers.
+                      for (final (int index, Point<double> point) in references)
+                        Positioned(
+                          left: point.x.clamp(0.0, 1.0) * canvasWidth -
+                              _referenceTapSize / 2,
+                          top: point.y.clamp(0.0, 1.0) * canvasHeight -
+                              _referenceTapSize / 2,
+                          child: GestureDetector(
+                            key: Key('character-free-marker-${index + 1}'),
+                            behavior: HitTestBehavior.opaque,
+                            onTap: onCharacterSelected == null
+                                ? null
+                                : () => onCharacterSelected!(index),
+                            child: SizedBox.square(
+                              dimension: _referenceTapSize,
+                              child: Center(
+                                child: _MarkerDot(
+                                  radius: _referenceRadius,
+                                  label: '${index + 1}',
+                                  color: colorScheme.surface,
+                                  borderColor: colorScheme.outline,
+                                  textColor: colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      // The editable character point.
+                      Positioned(
+                        left: display.x.clamp(0.0, 1.0) * canvasWidth -
+                            _editedRadius,
+                        top: display.y.clamp(0.0, 1.0) * canvasHeight -
+                            _editedRadius,
+                        child: _MarkerDot(
+                          radius: _editedRadius,
+                          label: characterLabel ?? '${selected + 1}',
+                          color: colorScheme.primary,
+                          borderColor: colorScheme.onPrimary,
+                          textColor: colorScheme.onPrimary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        );
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            AspectRatio(
-              aspectRatio: aspect,
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final double canvasWidth = constraints.maxWidth;
-                  final double canvasHeight = constraints.maxHeight;
-                  return GestureDetector(
-                    key: const Key('character-free-canvas'),
-                    behavior: HitTestBehavior.opaque,
-                    onPanStart: (details) => _updateFromLocal(
-                        details.localPosition, canvasWidth, canvasHeight),
-                    onPanUpdate: (details) => _updateFromLocal(
-                        details.localPosition, canvasWidth, canvasHeight),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.black12,
-                        border: Border.all(color: Colors.white24),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Stack(
-                        children: [
-                          // Reference (non-editing) character markers.
-                          if (referencePositions != null)
-                            for (final (i, ref) in referencePositions!.indexed)
-                              if (i != characterIndex && ref != null)
-                                Positioned(
-                                  left: ref.x * canvasWidth - 8,
-                                  top: ref.y * canvasHeight - 8,
-                                  child: IgnorePointer(
-                                    child: _MarkerDot(
-                                      radius: 9,
-                                      label: '${i + 1}',
-                                      color: Colors.white38,
-                                    ),
-                                  ),
-                                ),
-                          // The editable character point.
-                          Positioned(
-                            left: display.x.clamp(0.0, 1.0) * canvasWidth - 14,
-                            top: display.y.clamp(0.0, 1.0) * canvasHeight - 14,
-                            child: _MarkerDot(
-                              radius: 14,
-                              label: characterLabel ?? '${characterIndex + 1}',
-                              color: Theme.of(context).colorScheme.primary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
+            if (fitToBounds) Expanded(child: Center(child: canvas)) else canvas,
             const SizedBox(height: 8),
             Text(
               '${size.width} × ${size.height}',
@@ -139,11 +228,15 @@ class _MarkerDot extends StatelessWidget {
   final double radius;
   final String? label;
   final Color color;
+  final Color borderColor;
+  final Color textColor;
 
   const _MarkerDot({
     required this.radius,
     required this.label,
     required this.color,
+    required this.borderColor,
+    required this.textColor,
   });
 
   @override
@@ -154,15 +247,15 @@ class _MarkerDot extends StatelessWidget {
       decoration: BoxDecoration(
         color: color,
         shape: BoxShape.circle,
-        border: Border.all(color: Colors.white, width: 2),
+        border: Border.all(color: borderColor, width: 2),
       ),
       child: label == null
           ? null
           : Center(
               child: Text(
                 label!,
-                style: const TextStyle(
-                  color: Colors.white,
+                style: TextStyle(
+                  color: textColor,
                   fontSize: 11,
                   fontWeight: FontWeight.bold,
                 ),

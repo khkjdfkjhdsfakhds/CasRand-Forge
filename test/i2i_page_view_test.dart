@@ -180,6 +180,7 @@ void main() {
     expect(find.byKey(const Key('i2i-import-image-area')), findsOneWidget);
     expect(find.text('Base Image'), findsOneWidget);
     expect(find.byKey(const Key('inpaint-edit-mask')), findsOneWidget);
+    expect(find.byKey(const Key('i2i-scribble-editor')), findsOneWidget);
     expect(
       tester
           .widget<FilledButton>(
@@ -760,7 +761,7 @@ void main() {
     expect(config.manualFocusFrame, isNull);
   });
 
-  testWidgets('base image preview decodes the lightweight handoff image', (
+  testWidgets('base image preview uses the full resolution image', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(390, 800));
@@ -788,7 +789,7 @@ void main() {
           )
           .first,
     );
-    expect((image.image as MemoryImage).bytes, same(previewBytes));
+    expect((image.image as MemoryImage).bytes, same(originalBytes));
     expect(config.imageBytes, same(originalBytes));
   });
 

@@ -19,10 +19,22 @@ class EnhanceRequestOptions {
 
   /// The website normalizes conditioning pixels first, then snaps the final
   /// API dimensions to the nearest 64 pixels (ties round upward).
-  static GenerationSize apiSize(int width, int height) => GenerationSize(
-        width: max(64, (width / 64).round() * 64),
-        height: max(64, (height / 64).round() * 64),
-      );
+  static GenerationSize apiSize(int width, int height) {
+    var w = max(64, (width / 64).round() * 64);
+    var h = max(64, (height / 64).round() * 64);
+    if (width * height <= maxPixels && w * h > maxPixels) {
+      w = max(64, (width / 64).floor() * 64);
+      h = max(64, (height / 64).floor() * 64);
+      while (w * h > maxPixels && (w > 64 || h > 64)) {
+        if (w >= h && w > 64) {
+          w -= 64;
+        } else if (h > 64) {
+          h -= 64;
+        }
+      }
+    }
+    return GenerationSize(width: w, height: h);
+  }
 
   static GenerationSize outputSize(int width, int height) {
     final request = apiSize(width, height);

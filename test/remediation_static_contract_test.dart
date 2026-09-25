@@ -46,17 +46,17 @@ void main() {
     expect(apiService, isNot(contains('badCertificateCallback')));
   });
 
-  test('release metadata agrees on build 134', () {
+  test('release metadata agrees on build 156', () {
     expect(File('pubspec.yaml').readAsStringSync(),
-        contains('version: 1.0.0+134'));
+        contains('version: 1.0.0+156'));
     expect(
         File('.github/workflows/macos.yml').readAsStringSync(),
         contains(
-            "CFBundleVersion' \"\$APP_PATH/Contents/Info.plist\")\" = \"134\""));
+            "CFBundleVersion' \"\$APP_PATH/Contents/Info.plist\")\" = \"156\""));
     expect(File('.github/workflows/android.yml').readAsStringSync(),
-        contains("versionCode='134' versionName='1.0.0'"));
+        contains("versionCode='156' versionName='1.0.0'"));
     expect(File('.github/workflows/windows.yml').readAsStringSync(),
-        contains('1.0.0+134'));
+        contains('1.0.0+156'));
   });
 
   test('Web workflow targets forge-main and deploys complete decoded output',

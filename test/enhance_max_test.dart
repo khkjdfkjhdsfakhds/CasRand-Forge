@@ -54,6 +54,20 @@ class _WebsiteRandom implements Random {
 }
 
 void main() {
+  test('inpainting result model maps to a V5 Enhance model', () {
+    for (final transport in [
+      'nai-diffusion-5-inpainting',
+      'nai-diffusion-5-full-inpainting',
+    ]) {
+      final content = InfoCardContent(
+        title: 'inpaint',
+        info: '',
+        additionalInfo: {'model': transport},
+      );
+      expect(ResultActions(content: content).enhanceSourceModel,
+          'nai-diffusion-5-full');
+    }
+  });
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test('Enhance final-size alignment handles both sides of the half-step', () {
@@ -97,10 +111,20 @@ void main() {
         const GenerationSize(width: 1696, height: 1824));
   });
 
-  test('ordinary scale eligibility checks exact fractional dimensions', () {
-    final config = EnhanceConfig()
+  test('ordinary scale eligibility checks request area budget for arbitrary dimensions', () {
+    final small = EnhanceConfig()
       ..setPreparedImage(Uint8List(1), width: 43, height: 43);
-    expect(config.availableScales, isEmpty);
+    expect(small.availableScales, [1.0, 1.5, 2.0]);
+
+    final inpaintOutput = EnhanceConfig()
+      ..setPreparedImage(Uint8List(1), width: 1773, height: 1773);
+    expect(inpaintOutput.availableScales, [1.0]);
+    expect(EnhanceRequestOptions.apiSize(1773, 1773),
+        const GenerationSize(width: 1728, height: 1728));
+
+    final oversized = EnhanceConfig()
+      ..setPreparedImage(Uint8List(1), width: 2000, height: 2000);
+    expect(oversized.availableScales, isEmpty);
   });
 
   test('Enhance follows website random seed range and signed noise seed', () {

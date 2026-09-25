@@ -18,19 +18,24 @@ class GenerationSettingsView extends StatelessWidget {
     return ListenableBuilder(
       listenable: Listenable.merge([viewmodel, viewmodel.payloadConfig]),
       builder: (context, _) {
+        final isRandomMode =
+            viewmodel.payloadConfig.promptMode == PromptMode.random;
         final paramConfig = viewmodel.payloadConfig.paramConfig;
         final settings = viewmodel.payloadConfig.settings;
         final tool = viewmodel.activeBatchTool;
         final enhance = tool?.kind == BatchToolKind.enhance;
-        final combinationsAvailable = tool == null ||
-            enhance && viewmodel.payloadConfig.promptMode == PromptMode.random;
+        final combinationsAvailable = isRandomMode &&
+            (tool == null || enhance);
         final cycle = viewmodel.totalCombinationCycle;
         final oversized = viewmodel.allCombinationsTooLarge;
-        final displayedGenerationCount = viewmodel.lockToAllCombinations
-            ? cycle.toString()
-            : settings.generationCount == 0
-                ? '∞'
-                : settings.generationCount.toString();
+        final count = viewmodel.generationCount;
+        final interval = viewmodel.generationIntervalSec;
+        final displayedGenerationCount =
+            (isRandomMode && viewmodel.lockToAllCombinations)
+                ? cycle.toString()
+                : count == 0
+                    ? '∞'
+                    : count.toString();
 
         return SingleChildScrollView(
           child: Column(
@@ -41,35 +46,36 @@ class GenerationSettingsView extends StatelessWidget {
                 leading: const Icon(Icons.alarm),
                 title: context.tr('generation_count'),
                 currentValue: displayedGenerationCount,
-                editValue: settings.generationCount.toString(),
-                notice: viewmodel.lockToAllCombinations
+                editValue: count.toString(),
+                notice: (isRandomMode && viewmodel.lockToAllCombinations)
                     ? context.tr('generation_count_locked_to_combinations')
                     : '0 → ∞',
-                enabled: !viewmodel.lockToAllCombinations,
+                enabled: !isRandomMode || !viewmodel.lockToAllCombinations,
                 keyboardType: TextInputType.number,
                 confirmOnSubmit: true,
                 onEditComplete: viewmodel.setGenerationCount,
               ),
-              CheckboxListTile(
-                key: const Key('generation-settings-lock-all-combinations'),
-                secondary: const Icon(Icons.auto_awesome),
-                title: Text(context.tr('run_all_combinations')),
-                subtitle: Text(
-                  '${context.tr('total_combinations')}${context.tr('colon')}$cycle${oversized ? '\n${context.tr('generation_count_exceeds_limit')}' : ''}',
+              if (isRandomMode)
+                CheckboxListTile(
+                  key: const Key('generation-settings-lock-all-combinations'),
+                  secondary: const Icon(Icons.auto_awesome),
+                  title: Text(context.tr('run_all_combinations')),
+                  subtitle: Text(
+                    '${context.tr('total_combinations')}${context.tr('colon')}$cycle${oversized ? '\n${context.tr('generation_count_exceeds_limit')}' : ''}',
+                  ),
+                  value: viewmodel.lockToAllCombinations,
+                  onChanged: combinationsAvailable
+                      ? (value) {
+                          if (value == null) return;
+                          viewmodel.setLockToAllCombinations(value);
+                        }
+                      : null,
                 ),
-                value: viewmodel.lockToAllCombinations,
-                onChanged: combinationsAvailable
-                    ? (value) {
-                        if (value == null) return;
-                        viewmodel.setLockToAllCombinations(value);
-                      }
-                    : null,
-              ),
               EditableListTile(
                 key: const Key('generation-settings-interval'),
                 leading: const Icon(Icons.hourglass_empty),
                 title: context.tr('generation_interval'),
-                currentValue: settings.generationIntervalSec.toString(),
+                currentValue: interval.toString(),
                 keyboardType: TextInputType.number,
                 confirmOnSubmit: true,
                 onEditComplete: viewmodel.setGenerationInterval,

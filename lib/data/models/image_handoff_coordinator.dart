@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:image/image.dart' as img;
+import 'package:nai_casrand/core/constants/parameters.dart';
 import 'package:nai_casrand/data/models/displayed_image_size.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
@@ -82,6 +83,7 @@ class ImageHandoffCoordinator extends ChangeNotifier {
   Map<String, dynamic>? _metadata;
   String? _prompt;
   String? _model;
+  bool _updateFixedProfile = false;
   Object? _error;
   int _generation = 0;
 
@@ -113,9 +115,10 @@ class ImageHandoffCoordinator extends ChangeNotifier {
 
   bool sendToEnhance(
     Uint8List bytes, {
-    required Map<String, dynamic> metadata,
+    Map<String, dynamic>? metadata,
     String? prompt,
     String? model,
+    bool updateFixedProfile = false,
   }) {
     return _start(
       action: ImageHandoffAction.enhance,
@@ -123,6 +126,7 @@ class ImageHandoffCoordinator extends ChangeNotifier {
       metadata: metadata,
       prompt: prompt,
       model: model,
+      updateFixedProfile: updateFixedProfile,
       navigate: () => navigation.goTo(AppDestination.enhance),
     );
   }
@@ -165,6 +169,7 @@ class ImageHandoffCoordinator extends ChangeNotifier {
           metadata: _metadata,
           prompt: _prompt,
           model: _model,
+          updateFixedProfile: _updateFixedProfile,
           navigate: () => navigation.goTo(AppDestination.enhance),
         );
       case ImageHandoffAction.inpaint:
@@ -189,6 +194,7 @@ class ImageHandoffCoordinator extends ChangeNotifier {
     Map<String, dynamic>? metadata,
     String? prompt,
     String? model,
+    bool updateFixedProfile = false,
   }) {
     if (_phase == ImageHandoffPhase.preparing &&
         _action == action &&
@@ -203,6 +209,7 @@ class ImageHandoffCoordinator extends ChangeNotifier {
     _metadata = metadata;
     _prompt = prompt;
     _model = model;
+    _updateFixedProfile = updateFixedProfile;
     _error = null;
     final targetImageState = _targetImageState(action);
     navigate();
@@ -246,6 +253,9 @@ class ImageHandoffCoordinator extends ChangeNotifier {
 
       switch (action) {
         case ImageHandoffAction.imageToImage:
+          if (payloadConfig.batchToolKind != null) {
+            payloadConfig.deactivateBatchTool();
+          }
           final replacing = payloadConfig.i2iConfig.hasImage;
           payloadConfig.i2iConfig.setPreparedImage(
             bytes,
@@ -258,17 +268,29 @@ class ImageHandoffCoordinator extends ChangeNotifier {
             explicitUse: true,
           );
         case ImageHandoffAction.enhance:
-          payloadConfig.importMetadataToFixedProfile(
-            _metadata ?? const {},
-            prompt: _prompt,
-            model: _model,
-          );
+          if (_updateFixedProfile) {
+            payloadConfig.importMetadataToFixedProfile(
+              _metadata ?? const {},
+              prompt: _prompt,
+              model: _model,
+            );
+          }
+          final modelName = _model ??
+              baseModelForInpaintTransport(
+                  _metadata?['model']?.toString() ?? '') ??
+              modelFromSource(_metadata?['Source']);
+          final promptText = _prompt ?? _metadata?['input']?.toString();
           payloadConfig.enhanceConfig.setPreparedImage(
             bytes,
             width: dimensions.width,
             height: dimensions.height,
+            prompt: promptText,
+            model: modelName,
           );
         case ImageHandoffAction.inpaint:
+          if (payloadConfig.batchToolKind != null) {
+            payloadConfig.deactivateBatchTool();
+          }
           final replacing = payloadConfig.i2iConfig.hasImage;
           payloadConfig.i2iConfig.setPreparedImage(
             bytes,

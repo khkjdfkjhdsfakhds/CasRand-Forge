@@ -253,7 +253,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
       characterConfigList: profile.characterConfigList,
       savedPromptConfigList: profile.savedPromptConfigList,
       paramConfig: parameters,
-      settings: source.settings,
+      // Temporary prompt resolution must not synchronize into live settings.
+      settings: Settings.fromJson(source.settings.toJson()),
       overridePrompt: '',
       useOverridePrompt: false,
       useCharacterPromptWithOverride: false,
@@ -360,9 +361,27 @@ class GenerationPageViewmodel extends ChangeNotifier {
         return false;
       }
       if (promptMetadata != null) {
+        final previousSizes =
+            List<GenerationSize>.from(owner.fixedProfile.paramConfig.sizes);
+        final sanitizedMetadata = Map<String, dynamic>.from(promptMetadata)
+          ..remove('width')
+          ..remove('height');
         final imported = _toolPromptConfig(snapshot, owner);
-        imported.importMetadataToFixedProfile(promptMetadata,
+        imported.importMetadataToFixedProfile(sanitizedMetadata,
             prompt: promptText, model: snapshot.parameters.model);
+        if (previousSizes.isNotEmpty) {
+          imported.fixedProfile.paramConfig.sizes = previousSizes;
+        }
+        // Sending image parameters must preserve destination scheduling and
+        // saved configs rather than carrying the source mode's library across.
+        imported.fixedProfile.generationCount =
+            owner.fixedProfile.generationCount;
+        imported.fixedProfile.generationIntervalSec =
+            owner.fixedProfile.generationIntervalSec;
+        imported.fixedProfile.lockToAllCombinations =
+            owner.fixedProfile.lockToAllCombinations;
+        imported.fixedProfile.savedPromptConfigList =
+            owner.fixedProfile.savedPromptConfigList;
         owner.fixedProfile = imported.fixedProfile;
         owner.fixedProfile.paramConfig.randomSeed = true;
       } else {
@@ -488,7 +507,6 @@ class GenerationPageViewmodel extends ChangeNotifier {
   String? _cachedRetryFingerprint;
   GenerationDiagnosticContext? _cachedDiagnosticContext;
   int _primaryConsecutiveFailures = 0;
-  final Map<int, Duration> _workerRetryDelays = {};
   bool _primaryWorkerPaused = false;
   Timer? _generationIntervalTimer;
 
@@ -888,15 +906,21 @@ class GenerationPageViewmodel extends ChangeNotifier {
   void setGenerationInterval(String value) {
     final parseResult = int.tryParse(value);
     if (parseResult == null || parseResult < 0) return;
-    payloadConfig.settings.generationIntervalSec = parseResult;
+    payloadConfig.generationIntervalSec = parseResult;
+    if (GetIt.I.isRegistered<ConfigService>()) {
+      GetIt.I<ConfigService>().saveConfig(payloadConfig.toJson());
+    }
     notifyListeners();
   }
 
+  int get generationCount => payloadConfig.generationCount;
+  int get generationIntervalSec => payloadConfig.generationIntervalSec;
+
   bool get lockToAllCombinations =>
-      payloadConfig.settings.lockToAllCombinations &&
+      payloadConfig.promptMode == PromptMode.random &&
+      payloadConfig.lockToAllCombinations &&
       (activeBatchTool == null ||
-          activeBatchTool!.kind == BatchToolKind.enhance &&
-              payloadConfig.promptMode == PromptMode.random);
+          activeBatchTool!.kind == BatchToolKind.enhance);
 
   int get totalCombinations => payloadConfig.totalCombinations;
   BigInt get totalCombinationCycle => payloadConfig.totalCombinationCycle;
@@ -904,7 +928,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
       payloadConfig.totalCombinationTaskCount == null;
 
   void setLockToAllCombinations(bool value) {
-    payloadConfig.settings.lockToAllCombinations = value;
+    payloadConfig.lockToAllCombinations = value;
     final count = value ? payloadConfig.totalCombinationTaskCount : null;
     if (count != null) {
       setGenerationCount(count.toString());
@@ -917,7 +941,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
   void setGenerationCount(String value) {
     final parseResult = int.tryParse(value);
     if (parseResult == null || parseResult < 0) return;
-    payloadConfig.settings.generationCount = parseResult;
+    payloadConfig.generationCount = parseResult;
     if (GetIt.I.isRegistered<ConfigService>()) {
       GetIt.I<ConfigService>().saveConfig(payloadConfig.toJson());
     }
@@ -966,7 +990,28 @@ class GenerationPageViewmodel extends ChangeNotifier {
     if (_activeBatch != null && workerIndex < _activeTokens.length) {
       return _activeTokens[workerIndex];
     }
-    return payloadConfig.settings.apiKey;
+    final tokens = payloadConfig.settings.effectiveApiTokens;
+    // One-off actions (Generate once, Enhance, Director Tools) do not create
+    // batch workers. Prefer an eligible account for the current request.
+    final preferred = tokens.where((entry) {
+      if (!isTokenEligibleForCurrentGeneration(entry.token)) return false;
+      final cost = estimateCurrentGenerationCostForToken(entry.token);
+      if (cost > 0) {
+        return _lastAnlasBalances[entry.token] == null ||
+            _lastAnlasBalances[entry.token]! > 0;
+      }
+      return true;
+    }).firstOrNull;
+    if (preferred != null && preferred.token.isNotEmpty) {
+      return preferred.token;
+    }
+    final anyEligible = tokens
+        .where((entry) => isTokenEligibleForCurrentGeneration(entry.token))
+        .firstOrNull;
+    if (anyEligible != null && anyEligible.token.isNotEmpty) {
+      return anyEligible.token;
+    }
+    return tokens.firstOrNull?.token ?? payloadConfig.settings.apiKey;
   }
 
   /// Runs a split-mask inpaint: every focus tile is requested and composited
@@ -1095,9 +1140,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
         : _enhancePreparationFingerprint();
     final batchAccounting = _activeBatch;
     final stopRevision = _stopRevision;
-    var requestSuspended = false;
-    bool shouldSend() =>
-        !_disposed && !requestSuspended && stopRevision == _stopRevision;
+    bool shouldSend() => !_disposed && stopRevision == _stopRevision;
     final token = _tokenForWorker(workerIndex);
     final scheduledLease = _leaseForWorker(workerIndex);
     final schedulerContext = _scheduler;
@@ -1140,11 +1183,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
       I2iRequestBatch? i2iBatch;
       GenerationDiagnosticContext? diagnosticContext;
       final receivedResponses = <ReceivedGenerationResponse>[];
-      var outcomeWasUnknown = false;
       void markOutcomeUnknown(NovelAiApiException error) {
-        if (outcomeWasUnknown || _disposed) return;
-        outcomeWasUnknown = true;
-        requestSuspended = true;
+        if (_disposed) return;
         final card = logicalTask?.cardCommand ?? command;
         card.value = InfoCardContent(
           title: tr('generation_outcome_unknown'),
@@ -1154,7 +1194,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
           tokenLabel: tokenLabel,
           receivedResponses: List.unmodifiable(receivedResponses),
         );
-        commandStatus.setOutcomeUnknown(card, message: error.toString());
+        commandStatus.setOutcomeUnknown(card,
+            message: error.toString(), phase: GenerationOutcomePhase.unknown);
         if (scheduledLease != null) {
           schedulerContext?.suspendOutcome(scheduledLease);
         }
@@ -1333,13 +1374,28 @@ class GenerationPageViewmodel extends ChangeNotifier {
           batch: i2iBatch,
           vibeExtractionAnlas: 0,
         );
-        if (!settings.debugApiEnabled &&
-            _hasFreshInsufficientBalance(token, estimatedGenerationCost)) {
-          throw const NovelAiApiException(
-            'The freshly refreshed Anlas balance is insufficient for this '
-            'estimated request.',
-            statusCode: 402,
-          );
+        final totalEstimatedCost =
+            estimatedGenerationCost + vibeExtractionAnlas;
+        if (!settings.debugApiEnabled) {
+          if (totalEstimatedCost > 0 && !settings.allowsPointsForToken(token)) {
+            throw NovelAiApiException(
+              tr('api_token_points_blocked_error'),
+              statusCode: 403,
+            );
+          }
+          if (totalEstimatedCost == 0 && !settings.allowsFreeForToken(token)) {
+            throw NovelAiApiException(
+              tr('api_token_free_blocked_error'),
+              statusCode: 403,
+            );
+          }
+          if (_hasFreshInsufficientBalance(token, totalEstimatedCost)) {
+            throw const NovelAiApiException(
+              'The freshly refreshed Anlas balance is insufficient for this '
+              'estimated request.',
+              statusCode: 402,
+            );
+          }
         }
 
         final headers = payloadConfig.getHeadersForToken(token);
@@ -1365,17 +1421,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
             diagnosticContext: diagnosticContext,
             shouldSend: shouldSend,
           );
-          ApiResponse response;
-          try {
-            response = await _apiService.fetchData(request);
-          } on NovelAiApiException catch (error) {
-            if (!error.isOutcomeUnknown) rethrow;
-            markOutcomeUnknown(error);
-            final pendingResponse = error.lateResponse;
-            if (pendingResponse == null) rethrow;
-            // Await the very same submitted request, never issue another POST.
-            response = await pendingResponse;
-          }
+          final response = await _apiService.fetchData(request);
           final data = ApiService.requireSuccessfulData(
             response,
             operation: 'generate the image',
@@ -1436,6 +1482,10 @@ class GenerationPageViewmodel extends ChangeNotifier {
           return processed[imageZero];
         }
 
+        final inpaintPlan = i2iBatch?.plans.firstOrNull;
+        final hasInpaintComposite = inpaintPlan?.composite != null ||
+            i2iBatch?.compositeBaseImageB64 != null;
+
         List<Uint8List> imageResults;
         List<int> responseSampleIndices;
         if (i2iBatch != null && i2iBatch.isSplit) {
@@ -1454,8 +1504,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
           responseSampleIndices = processed.sampleIndices;
           // NovelAI returns raw infill pixels. Match the official frontend by
           // blending every infill response locally with its feathered mask.
-          final plan = i2iBatch?.plans.first;
-          if (plan?.isInpaint == true) {
+          if (inpaintPlan?.isInpaint == true) {
             final useCase = PrepareI2iRequestUseCase(
               config: payloadConfig.i2iConfig,
             );
@@ -1463,7 +1512,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
               for (final responseBytes in imageResults)
                 useCase.compositeInpaintResponse(
                   responseBytes: responseBytes,
-                  plan: plan!,
+                  plan: inpaintPlan!,
                   compositeBaseImageB64: i2iBatch?.compositeBaseImageB64,
                 ),
             ]);
@@ -1528,6 +1577,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
           final submission = _generatedImageStorage.submit(storageRequest);
           submissions.add(submission);
           late Command<void, InfoCardContent> resultCommand;
+          final rawParams =
+              payloadResult.payload['parameters'] as Map<dynamic, dynamic>?;
           final content = InfoCardContent(
             title: fileName,
             info: payloadResult.comment,
@@ -1548,8 +1599,15 @@ class GenerationPageViewmodel extends ChangeNotifier {
                     (payloadResult.payload['parameters'] as Map)['width'],
                 'enhance_request_height':
                     (payloadResult.payload['parameters'] as Map)['height'],
-                'width': displayedImageSize(imageBytes).width,
-                'height': displayedImageSize(imageBytes).height,
+                'width': displayedImageSize(imageBytes).width.round(),
+                'height': displayedImageSize(imageBytes).height.round(),
+              } else if (hasInpaintComposite) ...{
+                if (rawParams != null) ...{
+                  'inpaint_request_width': rawParams['width'],
+                  'inpaint_request_height': rawParams['height'],
+                },
+                'width': displayedImageSize(imageBytes).width.round(),
+                'height': displayedImageSize(imageBytes).height.round(),
               },
               'sample_index': responseSampleIndex,
               'sample_count': imageResults.length,
@@ -1619,6 +1677,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
         }
         return previewContent;
       } catch (error) {
+        if (_disposed) return InfoCardContent.fromEmpty();
         final cause = error is _PartialInpaintFailure ? error.cause : error;
         // A successful response is already billable. Decoding, compositing or
         // other local processing failures cannot put that request back in the
@@ -1671,49 +1730,31 @@ class GenerationPageViewmodel extends ChangeNotifier {
         final currentBatch = identical(schedulerContext, _scheduler);
         final unknown = e is NovelAiApiException && e.isOutcomeUnknown;
         final cancelled = e is RequestNotSentException;
-        final accountBlocked = e is NovelAiApiException && e.isAccountBlocked;
         var failureCount = 0;
         if (unknown) {
           markOutcomeUnknown(e);
-          if (e is VibeEncodingException && e.lateEncoding != null) {
-            final card = logicalTask?.cardCommand ?? command;
-            unawaited(e.lateEncoding!.then<void>((_) {
-              if (_disposed) return;
-              commandStatus.clearState(card);
-              commandStatus.unbindAttempt(card);
-              card.value = InfoCardContent(
-                  title: 'Vibe',
-                  info: tr('generation_vibe_ready_after_delay'),
-                  additionalInfo: card.value.additionalInfo,
-                  anlasCost: 2,
-                  anlasCostIsEstimated: true,
-                  tokenLabel: tokenLabel);
-              notifyListeners();
-            }, onError: (Object _) {}));
-          }
         } else if (cancelled) {
           if (scheduledLease != null) schedulerContext?.cancel(scheduledLease);
-        } else if (!outcomeWasUnknown) {
-          if (currentBatch &&
-              e is NovelAiApiException &&
-              e.retryAfter != null) {
-            _workerRetryDelays[workerIndex] = e.retryAfter!;
-          }
+        } else {
           final scheduledFailure = scheduledLease == null
               ? null
-              : schedulerContext?.completeFailure(scheduledLease,
-                  pauseWorker: accountBlocked);
+              : schedulerContext?.completeFailure(
+                  scheduledLease,
+                  // A 402/403 is account-specific for a paid operation.
+                  // Quarantine this worker so the requeued task is claimed by
+                  // another enabled account immediately.
+                  pauseWorker: _isPointsFailure(cause),
+                );
           if (currentBatch) {
             failureCount = scheduledFailure == null
                 ? _recordAttemptFailure(workerIndex)
                 : _recordScheduledFailure(workerIndex, scheduledFailure);
           }
         }
-        final pauseNotice = accountBlocked
-            ? '\n${tr('generation_account_paused')}'
-            : commandStatus.isGenerationActive.value && failureCount >= 5
-                ? '\nAutomatic attempts for this token will pause after five consecutive failures.'
-                : '';
+        final pauseNotice = commandStatus.isGenerationActive.value &&
+                failureCount >= 5
+            ? '\nAutomatic attempts for this token will pause after five consecutive failures.'
+            : '';
         if (cancelled) {
           commandStatus.clearState(logicalTask?.cardCommand ?? command);
         }
@@ -1883,9 +1924,12 @@ class GenerationPageViewmodel extends ChangeNotifier {
       final vibeCount =
           (parameters['reference_image_multiple'] as List?)?.length ?? 0;
       final snapshot = _freshSubscriptionSnapshot(token);
-      final tier = snapshot?.tier;
-      final subscriptionActive = snapshot?.active ?? false;
-      final opusUsageAvailable = snapshot?.usage?.isNegative == false;
+      final tier = snapshot?.tier ?? payloadConfig.settings.subscriptionTier;
+      final subscriptionActive =
+          snapshot?.active ?? payloadConfig.settings.subscriptionActive;
+      final opusUsageAvailable = snapshot != null
+          ? (snapshot.usage == null || !snapshot.usage!.isNegative)
+          : (payloadConfig.settings.opusUsageAvailable != false);
       final model = payloadResult.payload['model']?.toString() ?? '';
       final sm = parameters['sm'] == true;
       final smDyn = parameters['sm_dyn'] == true;
@@ -1941,6 +1985,100 @@ class GenerationPageViewmodel extends ChangeNotifier {
     }
   }
 
+  int estimateCurrentGenerationCostForToken(String token) {
+    if (_runningBatchTool != null) {
+      final tool = _runningBatchTool!;
+      if (tool.kind == BatchToolKind.director) {
+        return estimateDirectorToolAnlas(
+          tool: tool.directorType.isEmpty ? 'bg-removal' : tool.directorType,
+          width: tool.outputWidth,
+          height: tool.outputHeight,
+        );
+      }
+      if (tool.kind == BatchToolKind.enhance && tool.enhanceBatch != null) {
+        final plan = tool.enhanceBatch!.plans.first;
+        final size = tool.upscale
+            ? EnhanceRequestOptions.costSize(plan.width, plan.height)
+            : EnhanceRequestOptions.apiSize(plan.width, plan.height);
+        final snapshot = _freshSubscriptionSnapshot(token);
+        final tier = snapshot?.tier ?? payloadConfig.settings.subscriptionTier;
+        final active =
+            snapshot?.active ?? payloadConfig.settings.subscriptionActive;
+        final opusAvailable = snapshot != null
+            ? (snapshot.usage == null || !snapshot.usage!.isNegative)
+            : (payloadConfig.settings.opusUsageAvailable != false);
+        return estimateAnlasCost(
+          width: size.width,
+          height: size.height,
+          steps: tool.parameters.steps,
+          action: 'img2img',
+          strength: plan.strength,
+          tier: tier,
+          subscriptionActive: active,
+          model: tool.parameters.model,
+          opusUsageAvailable: opusAvailable,
+        ).anlas;
+      }
+    }
+    final paramConfig = payloadConfig.paramConfig;
+    final i2i = payloadConfig.i2iConfig;
+    final useI2i = payloadConfig.i2iEnabled && i2i.hasImage;
+    final sizes = useI2i ? [i2i.requestSize] : paramConfig.sizes;
+    var largest = sizes.isNotEmpty
+        ? sizes.first
+        : const GenerationSize(width: 832, height: 1216);
+    for (final size in sizes) {
+      if (size.width * size.height > largest.width * largest.height) {
+        largest = size;
+      }
+    }
+    final snapshot = _freshSubscriptionSnapshot(token);
+    final tier = snapshot?.tier ?? payloadConfig.settings.subscriptionTier;
+    final active =
+        snapshot?.active ?? payloadConfig.settings.subscriptionActive;
+    final opusAvailable = snapshot != null
+        ? (snapshot.usage == null || !snapshot.usage!.isNegative)
+        : (payloadConfig.settings.opusUsageAvailable != false);
+    final sm = _smActive && paramConfig.sm;
+    final smDyn = _smActive && paramConfig.smDyn;
+    final capabilities = ImageImportCapabilities.forModel(paramConfig.model);
+    final preciseCount = payloadConfig.preciseReferenceEnabled &&
+            capabilities.supports(ImageImportAction.preciseReference)
+        ? payloadConfig.preciseReferenceConfigList.length
+        : 0;
+    final vibeCount = payloadConfig.vibeEnabled && capabilities.isV4Family
+        ? payloadConfig.vibeConfigListV4.length
+        : 0;
+
+    return estimateAnlasCost(
+      width: largest.width,
+      height: largest.height,
+      steps: paramConfig.steps,
+      action: useI2i ? 'img2img' : 'generate',
+      nSamples: paramConfig.nSamples,
+      sm: sm,
+      smDyn: smDyn,
+      tier: tier,
+      subscriptionActive: active,
+      model: paramConfig.model,
+      opusUsageAvailable: opusAvailable,
+      preciseReferenceCount: preciseCount,
+      vibeCount: vibeCount,
+    ).anlas;
+  }
+
+  bool isTokenEligibleForCurrentGeneration(String token) {
+    if (payloadConfig.settings.debugApiEnabled) {
+      return true;
+    }
+    final cost = estimateCurrentGenerationCostForToken(token);
+    if (cost > 0) {
+      return payloadConfig.settings.allowsPointsForToken(token);
+    } else {
+      return payloadConfig.settings.allowsFreeForToken(token);
+    }
+  }
+
   SubscriptionInfo? _freshSubscriptionSnapshot(String token) {
     final fetchedAt = _subscriptionSnapshotTimes[token];
     if (fetchedAt == null ||
@@ -1987,6 +2125,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
     required _BatchAccounting? batch,
   }) {
     if (batch != null) batch.activeRequests--;
+    if (_disposed) return;
     final content = command.value;
     if (content.imageBytes != null && batch != null) {
       batch.lastCommands[token] = command;
@@ -2385,35 +2524,13 @@ class GenerationPageViewmodel extends ChangeNotifier {
             informationExtracted: info,
             encoding: encoding,
           );
-        } on VibeEncodingException catch (error) {
-          if (!error.isOutcomeUnknown) {
-            if (identical(_vibeEncodingFutures[cacheKey], future)) {
-              _vibeEncodingFutures.remove(cacheKey);
-            }
-            rethrow;
-          }
-          if (ownsExtraction && error.lateEncoding != null) {
-            unawaited(error.lateEncoding!.then<void>((encoding) {
-              vibe.cacheEncoding(
-                  model: model, informationExtracted: info, encoding: encoding);
-              if (identical(_vibeEncodingFutures[cacheKey], future)) {
-                _vibeEncodingFutures.remove(cacheKey);
-              }
-              if (!_disposed) notifyListeners();
-            }, onError: (Object _) {
-              // Retain the uncertainty tombstone. A later attempt must not
-              // silently repeat extraction on the same original image.
-            }));
-          }
-          rethrow;
         } catch (_) {
           if (identical(_vibeEncodingFutures[cacheKey], future)) {
             _vibeEncodingFutures.remove(cacheKey);
           }
           rethrow;
         } finally {
-          // Successful encodings are cached above. Unknown errors deliberately
-          // remain shared; deterministic failures may be retried normally.
+          // Successful encodings stay cached; failures can be retried.
           if (vibe.encodingFor(model, informationExtracted: info) != null &&
               identical(_vibeEncodingFutures[cacheKey], future)) {
             _vibeEncodingFutures.remove(cacheKey);
@@ -2648,7 +2765,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
     final batch = _activeBatch;
     commandStatus.bindAttempt(card, command);
     command.isExecuting.addListener(() {
-      if (command.isExecuting.value) return;
+      if (_disposed || command.isExecuting.value) return;
       commandStatus.unbindAttempt(card);
       final content = command.value;
       if (content.title.isEmpty && content.imageBytes == null) return;
@@ -2677,7 +2794,6 @@ class GenerationPageViewmodel extends ChangeNotifier {
   }
 
   void _recordAttemptSuccess(int workerIndex) {
-    _workerRetryDelays.remove(workerIndex);
     if (workerIndex == 0) {
       _primaryConsecutiveFailures = 0;
       _primaryWorkerPaused = false;
@@ -2700,16 +2816,20 @@ class GenerationPageViewmodel extends ChangeNotifier {
     return state.consecutiveFailures;
   }
 
+  /// Point-consuming requests cannot succeed on this account until its
+  /// balance/allowance changes.  In a multi-account batch the logical task
+  /// must therefore move to another worker instead of retrying the same
+  /// account indefinitely.  Restrict this to the point/permission statuses;
+  /// authentication and transport failures retain their normal retry policy.
+  bool _isPointsFailure(Object error) {
+    if (error is! NovelAiApiException) return false;
+    return error.statusCode == 402 || error.statusCode == 403;
+  }
+
   Duration _failureBackoff(int consecutiveFailures) {
     if (consecutiveFailures >= 2) return const Duration(seconds: 15);
     if (consecutiveFailures == 1) return const Duration(seconds: 5);
     return Duration.zero;
-  }
-
-  Duration _retryDelay(int workerIndex, int consecutiveFailures) {
-    final fallback = _failureBackoff(consecutiveFailures);
-    final suggested = _workerRetryDelays[workerIndex];
-    return suggested != null && suggested > fallback ? suggested : fallback;
   }
 
   bool get _allWorkersPaused =>
@@ -2750,11 +2870,15 @@ class GenerationPageViewmodel extends ChangeNotifier {
     }
     _primaryLease = lease;
     final command = lease == null
-        ? createGenerationCommand(workerIndex: 0)
+        ? createGenerationCommand(
+            workerIndex: 0,
+            toolSnapshot: _runningBatchTool,
+          )
         : createScheduledGenerationCommand(workerIndex: 0, lease: lease);
     final addTaskCard = lease == null ||
         _prepareScheduledTaskCard(command, lease, _tokenForWorker(0));
     command.isExecuting.addListener(() {
+      if (_disposed) return;
       notifyListeners();
       // Only update after execution
       if (command.isExecuting.value) return;
@@ -2798,9 +2922,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
     final sourceWidth = config.width;
     final sourceHeight = config.height;
     final settings = payloadConfig.settings;
-    final apiKey = settings.apiKey;
+    final token = _tokenForWorker(0);
     final proxy = settings.proxy;
-    final headers = payloadConfig.getHeadersForToken(apiKey);
+    final headers = payloadConfig.getHeadersForToken(token);
     final storagePolicy = _storagePolicySnapshot(settings);
     final metadataEraseEnabled = settings.metadataEraseEnabled;
     final customMetadataEnabled = settings.customMetadataEnabled;
@@ -2852,31 +2976,28 @@ class GenerationPageViewmodel extends ChangeNotifier {
     DateTime? startingBalanceTime;
     late final Command<void, InfoCardContent> command;
     commandFunc() async {
-      startingBalance = _lastAnlasBalances[apiKey];
-      startingBalanceTime = _lastAnlasBalanceTimes[apiKey];
+      startingBalance = _lastAnlasBalances[token];
+      startingBalanceTime = _lastAnlasBalanceTimes[token];
       try {
         if (!shouldSend()) throw const RequestNotSentException();
-        ApiResponse response;
-        try {
-          response = await _apiService.fetchData(ApiRequest(
-            endpoint: augmentImageEndpoint,
-            proxy: proxy,
-            headers: headers,
-            payload: payload,
-            shouldSend: shouldSend,
-          ));
-        } on NovelAiApiException catch (error) {
-          if (!error.isOutcomeUnknown) rethrow;
-          command.value = InfoCardContent(
-              title: tr('generation_outcome_unknown'),
-              info: error.toString(),
-              additionalInfo: const {});
-          commandStatus.setOutcomeUnknown(command, message: error.toString());
-          if (identical(currentCommand, command)) currentCommand = null;
-          if (!_disposed) notifyListeners();
-          if (error.lateResponse == null) rethrow;
-          response = await error.lateResponse!;
+        final estimatedCost = estimateDirectorToolAnlas(
+          tool: toolType,
+          width: requestWidth,
+          height: requestHeight,
+        );
+        if (estimatedCost > 0 && !settings.allowsPointsForToken(token)) {
+          throw NovelAiApiException(
+            tr('api_token_points_blocked_error'),
+            statusCode: 403,
+          );
         }
+        final response = await _apiService.fetchData(ApiRequest(
+          endpoint: augmentImageEndpoint,
+          proxy: proxy,
+          headers: headers,
+          payload: payload,
+          shouldSend: shouldSend,
+        ));
         final data = ApiService.requireSuccessfulData(
           response,
           operation: 'run Director Tools',
@@ -2894,11 +3015,6 @@ class GenerationPageViewmodel extends ChangeNotifier {
             : [unpacked.first];
         // The request carries the source image inline; keep it out of the card.
         final info = Map<String, dynamic>.from(payload)..remove('image');
-        final estimatedCost = estimateDirectorToolAnlas(
-          tool: toolType,
-          width: requestWidth,
-          height: requestHeight,
-        );
         final results = <InfoCardContent>[];
         for (final (index, imageBytes) in responseImages.indexed) {
           final variant =
@@ -2962,6 +3078,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
         commandStatus.clearState(command);
         return results.first;
       } catch (e) {
+        if (_disposed) return InfoCardContent.fromEmpty();
         return InfoCardContent(
           title: 'Error occurred in Director Tools.',
           info: e.toString(),
@@ -2975,12 +3092,13 @@ class GenerationPageViewmodel extends ChangeNotifier {
       initialValue: InfoCardContent.fromEmpty(),
     );
     command.isExecuting.addListener(() {
+      if (_disposed) return;
       notifyListeners();
       if (command.isExecuting.value) return;
       if (command.value.imageBytes != null && !debugApiEnabled) {
         unawaited(_refreshSingleResultBalance(
           command: command,
-          token: apiKey,
+          token: token,
           startingBalance: startingBalance,
           startingBalanceTime: startingBalanceTime,
         ));
@@ -3028,9 +3146,34 @@ class GenerationPageViewmodel extends ChangeNotifier {
     if (!paramConfig.randomSeed && paramConfig.seed == null) {
       paramConfig.seed = 0;
     }
+    final candidateTokens = payloadConfig.settings.effectiveApiTokens;
+    final eligibleTokens = candidateTokens
+        .where((entry) => isTokenEligibleForCurrentGeneration(entry.token))
+        .toList(growable: false);
+    if (eligibleTokens.isEmpty &&
+        candidateTokens.isNotEmpty &&
+        !payloadConfig.settings.debugApiEnabled) {
+      final sampleToken =
+          candidateTokens.firstOrNull?.token ?? payloadConfig.settings.apiKey;
+      final cost = estimateCurrentGenerationCostForToken(sampleToken);
+      final errorInfo = cost > 0
+          ? '${tr('generation_no_eligible_points_accounts')}\n${tr('api_token_points_blocked_error')}'
+          : '${tr('generation_no_eligible_free_accounts')}\n${tr('api_token_free_blocked_error')}';
+      final errorContent = InfoCardContent(
+        title: 'Error occurred in generation process.',
+        info: errorInfo,
+        additionalInfo: const {},
+      );
+      final command = Command.createAsyncNoParam(
+        () async => errorContent,
+        initialValue: errorContent,
+      );
+      currentCommand = command;
+      addAndRunCommand(command);
+      return;
+    }
     commandStatus.generationTimestamp = DateTime.now();
-    final command =
-        createGenerationCommand(workerIndex: 0, toolSnapshot: activeBatchTool);
+    final command = createGenerationCommand(workerIndex: 0);
     command.isExecuting.addListener(notifyListeners);
     currentCommand = command;
     addAndRunCommand(command);
@@ -3060,7 +3203,9 @@ class GenerationPageViewmodel extends ChangeNotifier {
     final showIndividualSettings = enhance.showIndividualSettings;
     final strength = enhance.strength;
     final noise = enhance.noise;
-    final model = payloadConfig.paramConfig.model;
+    final model = enhance.sourceModel ??
+        baseModelForInpaintTransport(payloadConfig.paramConfig.model) ??
+        payloadConfig.paramConfig.model;
     final useMax = enhance.usesMax(model);
     if (!useMax && !enhance.availableScales.contains(scale)) return false;
     final target = enhance.requestSize(model);
@@ -3167,7 +3312,10 @@ class GenerationPageViewmodel extends ChangeNotifier {
     }
     state.lease = lease;
     final command = lease == null
-        ? createGenerationCommand(workerIndex: workerIndex)
+        ? createGenerationCommand(
+            workerIndex: workerIndex,
+            toolSnapshot: _runningBatchTool,
+          )
         : createScheduledGenerationCommand(
             workerIndex: workerIndex,
             lease: lease,
@@ -3179,6 +3327,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
           _tokenForWorker(workerIndex),
         );
     command.isExecuting.addListener(() {
+      if (_disposed) return;
       notifyListeners();
       if (command.isExecuting.value) return;
       if (identical(_extraWorkers[workerIndex], state) &&
@@ -3237,7 +3386,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
     final configuredDelay = Duration(
       seconds: payloadConfig.settings.generationIntervalSec,
     );
-    final backoff = _retryDelay(workerIndex, state.consecutiveFailures);
+    final backoff = _failureBackoff(state.consecutiveFailures);
     final delay =
         configuredDelay.compareTo(backoff) >= 0 ? configuredDelay : backoff;
     if (delay == Duration.zero) {
@@ -3252,13 +3401,10 @@ class GenerationPageViewmodel extends ChangeNotifier {
   }
 
   void _startExtraWorkers() {
-    final generationCount = payloadConfig.settings.generationCount;
-    var workerCount = _activeTokens.length;
-    // No point running more workers than requested images.
-    if (generationCount != 0) {
-      workerCount = min(workerCount, generationCount);
-    }
-    for (var index = 1; index < workerCount; index++) {
+    // Keep every enabled account available even for a one-image batch.  A
+    // task rejected by the first account for lack of Anlas must be able to
+    // move to a second account rather than retrying the same worker.
+    for (var index = 1; index < _activeTokens.length; index++) {
       _extraWorkers[index] = _WorkerState();
       _nextCommandForExtraWorker(index);
     }
@@ -3300,7 +3446,6 @@ class GenerationPageViewmodel extends ChangeNotifier {
     _generationIntervalTimer?.cancel();
     commandStatus.isWaitingForNextGeneration.value = false;
     _primaryConsecutiveFailures = 0;
-    _workerRetryDelays.clear();
     _primaryWorkerPaused = false;
     if (!payloadConfig.settings.rememberSequentialProgress) {
       if (activeBatchTool == null ||
@@ -3315,13 +3460,40 @@ class GenerationPageViewmodel extends ChangeNotifier {
     }
     _clearExtraWorkers();
     if (lockToAllCombinations) {
-      payloadConfig.settings.generationCount = cycleCount!;
+      payloadConfig.generationCount = cycleCount!;
     }
-    final tokens = payloadConfig.settings.effectiveApiTokens;
+    final candidateTokens = payloadConfig.settings.effectiveApiTokens;
+    final eligibleEntries = candidateTokens
+        .where((entry) => isTokenEligibleForCurrentGeneration(entry.token))
+        .toList(growable: false);
+    if (eligibleEntries.isEmpty &&
+        candidateTokens.isNotEmpty &&
+        !payloadConfig.settings.debugApiEnabled) {
+      final sampleToken =
+          candidateTokens.firstOrNull?.token ?? payloadConfig.settings.apiKey;
+      final cost = estimateCurrentGenerationCostForToken(sampleToken);
+      final errorInfo = cost > 0
+          ? '${tr('generation_no_eligible_points_accounts')}\n${tr('api_token_points_blocked_error')}'
+          : '${tr('generation_no_eligible_free_accounts')}\n${tr('api_token_free_blocked_error')}';
+      final errorContent = InfoCardContent(
+        title: 'Error occurred in generation process.',
+        info: errorInfo,
+        additionalInfo: const {},
+      );
+      final command = Command.createAsyncNoParam(
+        () async => errorContent,
+        initialValue: errorContent,
+      );
+      currentCommand = command;
+      addAndRunCommand(command);
+      return;
+    }
     final generationCount = payloadConfig.settings.generationCount;
-    var workerCount = tokens.length;
-    if (generationCount != 0) workerCount = min(workerCount, generationCount);
-    final activeEntries = tokens.take(workerCount).toList(growable: false);
+    // Do not cap workers by generationCount: spare accounts are required as
+    // failover workers when the first account cannot pay for a request.
+    final workerCount = eligibleEntries.length;
+    final activeEntries =
+        eligibleEntries.take(workerCount).toList(growable: false);
     _activeTokens =
         activeEntries.map((entry) => entry.token).toList(growable: false);
     _activeTokenLabels =
@@ -3448,7 +3620,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
       return;
     }
     scheduleNextGeneration(
-      minimumDelay: _retryDelay(0, _primaryConsecutiveFailures),
+      minimumDelay: _failureBackoff(_primaryConsecutiveFailures),
     );
   }
 

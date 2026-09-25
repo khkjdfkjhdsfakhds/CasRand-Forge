@@ -45,6 +45,7 @@ PayloadConfig _config() => PayloadConfig(
             'token': 'pst-secondary-account-token',
             'enabled': true,
             'is_primary': false,
+            'allow_points': false,
           },
         ],
       }),
@@ -81,6 +82,9 @@ void main() {
     expect(find.byType(Switch), findsWidgets);
     expect(find.byIcon(Icons.delete_outline), findsOneWidget);
     expect(find.byIcon(Icons.drag_handle), findsNWidgets(2));
+    expect(find.byIcon(Icons.account_balance_wallet_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.card_giftcard_outlined), findsNWidgets(2));
+    expect(find.byIcon(Icons.block_outlined), findsOneWidget);
     viewmodel.dispose();
   });
 }

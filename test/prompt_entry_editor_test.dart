@@ -1599,7 +1599,7 @@ void main() {
   });
 
   testWidgets(
-      'Control selection midpoint preserves candidates and supports undo and IME',
+      'Control exact selection preserves candidates and supports undo and IME',
       (tester) async {
     var entries = <String>[];
     await pumpEditor(tester,
@@ -1609,9 +1609,8 @@ void main() {
     await tester.tap(field);
     await tester.pump();
     final controller = controllerFor(tester);
-    // Both selection endpoints may cross a candidate boundary. Only the
-    // midpoint's candidate is editable; reversed selections resolve identically.
-    const selection = TextSelection(baseOffset: 13, extentOffset: 1);
+    // Reversed selections stay selected through repeat, undo and redo.
+    const selection = TextSelection(baseOffset: 8, extentOffset: 5);
     controller.selection = selection;
     await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
@@ -1619,7 +1618,8 @@ void main() {
     await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
     await tester.pump();
     expect(entries, ['one, 1.2::two::', 'three']);
-    expect(controller.selection.isCollapsed, isTrue);
+    expect(controller.selection,
+        const TextSelection(baseOffset: 13, extentOffset: 10));
     await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
     await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
@@ -1641,6 +1641,99 @@ void main() {
     await tester.pump();
     expect(controller.text, before);
     expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
+  });
+
+  testWidgets('cross-entry selection is blocked with a hint and no data change',
+      (tester) async {
+    var changes = 0;
+    await pumpEditor(tester,
+        entries: const ['one, two', 'three'], onChanged: (_) => changes++);
+    final field = find.byKey(const Key('prompt-entry-editor'));
+    await tester.tap(field);
+    await tester.pump();
+    final controller = controllerFor(tester);
+    controller.selection = const TextSelection(baseOffset: 13, extentOffset: 1);
+    final before = controller.value;
+    final baseline = changes;
+    for (final key in [
+      LogicalKeyboardKey.arrowUp,
+      LogicalKeyboardKey.arrowLeft
+    ]) {
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(key);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(controller.value, before);
+      expect(changes, baseline);
+      expect(find.byKey(const Key('prompt-selection-hint')), findsOneWidget);
+      expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
+    }
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('prompt-selection-hint')), findsNothing);
+  });
+
+  testWidgets(
+      'selected block movement preserves later entries and undo selection',
+      (tester) async {
+    var entries = <String>[];
+    await pumpEditor(tester,
+        entries: const ['zero, one, two, three', 'later'],
+        onChanged: (value) => entries = value);
+    await tester.tap(find.byKey(const Key('prompt-entry-editor')));
+    await tester.pump();
+    final controller = controllerFor(tester);
+    const selection = TextSelection(baseOffset: 6, extentOffset: 14);
+    controller.selection = selection;
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    expect(entries, ['zero, three, one, two', 'later']);
+    expect(controller.selection.textInside(controller.text), 'one, two');
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pump();
+    expect(entries, ['zero, one, two, three', 'later']);
+    expect(controller.selection, selection);
+  });
+
+  testWidgets(
+      'selected tags keep their group through neutral weight and movement',
+      (tester) async {
+    var entries = <String>[];
+    await pumpEditor(tester,
+        entries: const ['zero, one, two, three', 'later'],
+        onChanged: (value) => entries = value);
+    await tester.tap(find.byKey(const Key('prompt-entry-editor')));
+    await tester.pump();
+    final controller = controllerFor(tester);
+    controller.selection = const TextSelection(baseOffset: 14, extentOffset: 6);
+    for (final step in [
+      (LogicalKeyboardKey.arrowUp, 'zero, 1.1::one, two::, three'),
+      (LogicalKeyboardKey.arrowDown, 'zero, 1::one, two::, three'),
+      (LogicalKeyboardKey.arrowRight, 'zero, three, 1::one, two::'),
+      (LogicalKeyboardKey.arrowDown, 'zero, three, 0.9::one, two::'),
+      (LogicalKeyboardKey.arrowUp, 'zero, three, 1::one, two::'),
+      (LogicalKeyboardKey.arrowLeft, 'zero, 1::one, two::, three'),
+    ]) {
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(step.$1);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      expect(entries, [step.$2, 'later']);
+      expect(controller.selection.textInside(controller.text), 'one, two');
+      expect(controller.selection.baseOffset,
+          greaterThan(controller.selection.extentOffset));
+    }
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pump();
+    expect(entries, ['zero, three, 1::one, two::', 'later']);
+    expect(controller.selection.textInside(controller.text), 'one, two');
   });
 
   testWidgets('cascade editor keeps digit-ending tags intact while typing', (

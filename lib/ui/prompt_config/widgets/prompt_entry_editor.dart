@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/ui/prompt_assistance/prompt_editing_assistance.dart';
 import 'package:nai_casrand/ui/prompt_assistance/prompt_editing_transform.dart';
+import 'package:nai_casrand/ui/prompt_assistance/prompt_selection_hint.dart';
 import 'package:nai_casrand/ui/prompt_assistance/prompt_weight_syntax.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_entry_divider.dart';
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_search_replace_bar.dart';
@@ -220,6 +221,8 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
       _rememberSelection(selection);
       _assistedFieldKey.currentState?.setEditingValue(result.value);
       _emitAndRecord();
+    } else if (result.unsafeSelection && event is KeyDownEvent) {
+      showPromptSelectionHint(context);
     }
     // Consume a Control-arrow at a boundary as well; otherwise native word
     // navigation would move the caret despite the transform being a no-op.

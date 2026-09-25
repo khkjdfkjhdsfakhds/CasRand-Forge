@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
+import 'package:nai_casrand/ui/generation_page/widgets/info_card.dart';
 
 void openFullscreenImage(
   BuildContext context,
   InfoCardContent content,
 ) {
-  if (content.imageBytes == null) return;
+  if (!content.hasImage) return;
   Navigator.of(context).push(
     MaterialPageRoute(
       fullscreenDialog: true,
@@ -67,8 +68,8 @@ class _FullscreenImageViewState extends State<FullscreenImageView> {
             key: const Key('fullscreen-image-viewer'),
             minScale: 1.0,
             maxScale: 8.0,
-            child: Image.memory(
-              widget.content.imageBytes!,
+            child: buildInfoCardImage(
+              widget.content,
               fit: BoxFit.contain,
               filterQuality: FilterQuality.high,
             ),

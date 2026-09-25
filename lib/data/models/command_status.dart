@@ -18,9 +18,18 @@ class GenerationCardWaiting {
   final String message;
 }
 
+enum GenerationOutcomePhase { unknown, receiving, disconnected }
+
 class GenerationCardOutcomeUnknown {
-  const GenerationCardOutcomeUnknown({this.message});
+  const GenerationCardOutcomeUnknown(
+      {this.message,
+      this.phase = GenerationOutcomePhase.unknown,
+      this.onRetry,
+      this.onDismiss});
   final String? message;
+  final GenerationOutcomePhase phase;
+  final VoidCallback? onRetry;
+  final VoidCallback? onDismiss;
 }
 
 class CommandStatus extends ChangeNotifier {
@@ -83,15 +92,19 @@ class CommandStatus extends ChangeNotifier {
   }
 
   void setOutcomeUnknown(Command<void, InfoCardContent> card,
-      {String? message}) {
+      {String? message,
+      GenerationOutcomePhase phase = GenerationOutcomePhase.unknown,
+      VoidCallback? onRetry,
+      VoidCallback? onDismiss}) {
     _waiting.remove(card);
-    _unknown[card] = GenerationCardOutcomeUnknown(message: message);
+    _unknown[card] = GenerationCardOutcomeUnknown(
+        message: message, phase: phase, onRetry: onRetry, onDismiss: onDismiss);
     notifyListeners();
   }
 
   void clearState(Command<void, InfoCardContent> card) {
     _waiting.remove(card);
-    _unknown.remove(card);
+    _unknown.remove(card)?.onDismiss?.call();
     notifyListeners();
   }
 
@@ -136,6 +149,9 @@ class CommandStatus extends ChangeNotifier {
     }
     _attempts.clear();
     _waiting.clear();
+    for (final state in _unknown.values.toList()) {
+      state.onDismiss?.call();
+    }
     _unknown.clear();
     _generationCardProgress.clear();
     super.dispose();

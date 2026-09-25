@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:get_it/get_it.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:nai_casrand/data/models/batch_tool_snapshot.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/models/i2i_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
@@ -21,6 +22,9 @@ class I2iPageViewmodel extends ChangeNotifier {
 
   bool loadImageBytes(Uint8List bytes) {
     try {
+      if (payloadConfig.batchToolKind == BatchToolKind.enhance) {
+        payloadConfig.deactivateBatchTool();
+      }
       final replacing = config.hasImage;
       config.setImage(bytes);
       payloadConfig.noteI2iImported(replacing: replacing);

@@ -88,7 +88,7 @@ AnlasCost estimateAnlasCost({
 
   final free = subscriptionActive &&
       (tier ?? 0) >= opusTier &&
-      (!model.contains('diffusion-5') || opusUsageAvailable == true) &&
+      (!model.contains('diffusion-5') || opusUsageAvailable != false) &&
       fitsOpusFreeWindow(width: width, height: height, steps: steps);
   final freeImages = free ? 1 : 0;
   final int imageCost = perImage * max(nSamples - freeImages, 0);

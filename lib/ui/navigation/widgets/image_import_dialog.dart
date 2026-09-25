@@ -225,7 +225,7 @@ class _ImageImportDialogState extends State<ImageImportDialog> {
     _importUndesired = _metadataAvailability.undesiredContent;
     _importCharacters = _metadataAvailability.characters;
     _importSettings = _metadataAvailability.settings;
-    _importSeed = _metadataAvailability.seed;
+    _importSeed = false;
   }
 
   Future<void> _loadMetadata() async {
@@ -278,16 +278,69 @@ class _ImageImportDialogState extends State<ImageImportDialog> {
     }
   }
 
+  bool get _hasSelectedMetadata =>
+      _importPrompt ||
+      _importUndesired ||
+      _importCharacters ||
+      _importSettings ||
+      _importSeed;
+
+  Future<int> _importSelectedMetadataIfAny() async {
+    final metadata = _candidate.metadata;
+    if (metadata == null || !_hasSelectedMetadata) return 0;
+    return widget.viewmodel.importSelectedMetadata(
+      context,
+      metadata,
+      prompt: _candidate.prompt,
+      model: _candidate.model,
+      options: MetadataImportOptions(
+        prompt: _importPrompt,
+        undesiredContent: _importUndesired,
+        characters: _importCharacters,
+        settings: _importSettings,
+        seed: _importSeed,
+        append: _append,
+        cleanImports: _cleanImports,
+      ),
+    );
+  }
+
   Future<void> _useAsImageToImage() => _runAction(
-        () async => widget.viewmodel.useAsImageToImage(
-          _candidate.bytes,
-        ),
+        () async {
+          await _importSelectedMetadataIfAny();
+          return widget.viewmodel.useAsImageToImage(
+            _candidate.bytes,
+          );
+        },
       );
 
   Future<void> _useAsInpaint() => _runAction(
-        () async => widget.viewmodel.useAsInpaint(
-          _candidate.bytes,
-        ),
+        () async {
+          await _importSelectedMetadataIfAny();
+          return widget.viewmodel.useAsInpaint(
+            _candidate.bytes,
+          );
+        },
+      );
+
+  Future<void> _useAsEnhance() => _runAction(
+        () async {
+          await _importSelectedMetadataIfAny();
+          return widget.viewmodel.useAsEnhance(
+            _candidate.bytes,
+            metadata:
+                _candidate.metadataError == null ? _candidate.metadata : null,
+            prompt: _candidate.metadataError == null ? _candidate.prompt : null,
+            model: _candidate.metadataError == null ? _candidate.model : null,
+          );
+        },
+      );
+
+  Future<void> _useAsDirectorTools() => _runAction(
+        () async {
+          await _importSelectedMetadataIfAny();
+          return widget.viewmodel.useAsDirectorTools(_candidate.bytes);
+        },
       );
 
   Future<void> _useAsVibeTransfer() => _runAction(
@@ -304,32 +357,9 @@ class _ImageImportDialogState extends State<ImageImportDialog> {
         ),
       );
 
-  bool get _hasSelectedMetadata =>
-      _importPrompt ||
-      _importUndesired ||
-      _importCharacters ||
-      _importSettings ||
-      _importSeed;
-
   Future<void> _importMetadata() => _runAction(() async {
-        final metadata = _candidate.metadata;
-        if (metadata == null) return false;
-        return widget.viewmodel.importSelectedMetadata(
-              context,
-              metadata,
-              prompt: _candidate.prompt,
-              model: _candidate.model,
-              options: MetadataImportOptions(
-                prompt: _importPrompt,
-                undesiredContent: _importUndesired,
-                characters: _importCharacters,
-                settings: _importSettings,
-                seed: _importSeed,
-                append: _append,
-                cleanImports: _cleanImports,
-              ),
-            ) >
-            0;
+        final count = await _importSelectedMetadataIfAny();
+        return count > 0;
       });
 
   @override
@@ -365,6 +395,19 @@ class _ImageImportDialogState extends State<ImageImportDialog> {
                   spacing: 12,
                   runSpacing: 12,
                   children: [
+                    FilledButton.icon(
+                      key: const Key('image-import-enhance'),
+                      onPressed:
+                          _busy || _metadataLoading ? null : _useAsEnhance,
+                      icon: const Icon(Icons.auto_awesome),
+                      label: Text(context.tr('enhance_section')),
+                    ),
+                    FilledButton.icon(
+                      key: const Key('image-import-director'),
+                      onPressed: _busy ? null : _useAsDirectorTools,
+                      icon: const Icon(Icons.movie_filter_outlined),
+                      label: Text(context.tr('director_tool_section')),
+                    ),
                     if (capabilities.supports(ImageImportAction.imageToImage))
                       FilledButton.icon(
                         key: const Key('image-import-i2i'),
@@ -379,21 +422,18 @@ class _ImageImportDialogState extends State<ImageImportDialog> {
                         icon: const Icon(Icons.brush_outlined),
                         label: Text(context.tr('inpaint_section')),
                       ),
-                    if (capabilities.supports(ImageImportAction.vibeTransfer))
-                      FilledButton.icon(
-                        key: const Key('image-import-vibe'),
-                        onPressed: _busy ? null : _useAsVibeTransfer,
-                        icon: const Icon(Icons.auto_awesome_motion_outlined),
-                        label: Text(context.tr('image_import_vibe_transfer')),
-                      ),
-                    if (capabilities
-                        .supports(ImageImportAction.preciseReference))
-                      FilledButton.icon(
-                        key: const Key('image-import-precise-reference'),
-                        onPressed: _busy ? null : _useAsPreciseReference,
-                        icon: const Icon(Icons.center_focus_strong),
-                        label: Text(context.tr('precise_reference')),
-                      ),
+                    FilledButton.icon(
+                      key: const Key('image-import-vibe'),
+                      onPressed: _busy ? null : _useAsVibeTransfer,
+                      icon: const Icon(Icons.auto_awesome_motion_outlined),
+                      label: Text(context.tr('image_import_vibe_transfer')),
+                    ),
+                    FilledButton.icon(
+                      key: const Key('image-import-precise-reference'),
+                      onPressed: _busy ? null : _useAsPreciseReference,
+                      icon: const Icon(Icons.center_focus_strong),
+                      label: Text(context.tr('precise_reference')),
+                    ),
                   ],
                 ),
                 if (_busy) ...[

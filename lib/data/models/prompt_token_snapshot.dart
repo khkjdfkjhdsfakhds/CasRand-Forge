@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
+import 'package:nai_casrand/core/constants/parameters.dart' as parameters;
 import 'package:nai_casrand/data/models/batch_tool_snapshot.dart';
 import 'package:nai_casrand/data/models/character_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
@@ -40,6 +41,38 @@ class PromptTokenSnapshot {
         negative: List.unmodifiable(captions('v4_negative_prompt',
             parameters['negative_prompt'] as String? ?? '')),
         recentTask: true);
+  }
+
+  /// Read the viewed result only; never fall back to the active editor/task.
+  /// Detail metadata is the flattened request retained by digestPayloadResult.
+  static PromptTokenSnapshot? fromMetadata(Map<String, dynamic> metadata) {
+    final model = metadata['model'];
+    if (metadata.containsKey('req_type') ||
+        model is! String ||
+        !(parameters.models.contains(model) ||
+            parameters.inpaintModelMapping.containsValue(model)) ||
+        !(metadata['input'] is String || metadata['v4_prompt'] is Map)) {
+      return null;
+    }
+    try {
+      final snapshot = PromptTokenSnapshot.fromPayload({
+        'model': model,
+        'input': metadata['input'],
+        'parameters': metadata,
+      });
+      final length = max(snapshot.positive.length, snapshot.negative.length);
+      List<String> pad(List<String> values) => List.unmodifiable([
+            ...values,
+            ...List.filled(length - values.length, ''),
+          ]);
+      return PromptTokenSnapshot(
+        model: model,
+        positive: pad(snapshot.positive),
+        negative: pad(snapshot.negative),
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Pure fixed-editor projection. Never selects candidates or advances a

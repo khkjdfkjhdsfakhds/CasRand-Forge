@@ -42,6 +42,22 @@ class MetadataDropAreaViewmodel extends ChangeNotifier {
     return handoff.useAsBaseImage(bytes);
   }
 
+  bool useAsEnhance(
+    Uint8List bytes, {
+    Map<String, dynamic>? metadata,
+    String? prompt,
+    String? model,
+  }) {
+    final handoff = _imageHandoff ?? GetIt.I<ImageHandoffCoordinator>();
+    return handoff.sendToEnhance(bytes,
+        metadata: metadata, prompt: prompt, model: model);
+  }
+
+  bool useAsDirectorTools(Uint8List bytes) {
+    final handoff = _imageHandoff ?? GetIt.I<ImageHandoffCoordinator>();
+    return handoff.sendToDirectorTools(bytes);
+  }
+
   bool useAsInpaint(Uint8List bytes) {
     if (!imageImportCapabilities.supports(ImageImportAction.inpaint)) {
       return false;
@@ -51,8 +67,6 @@ class MetadataDropAreaViewmodel extends ChangeNotifier {
   }
 
   Future<bool> useAsVibeTransfer(Uint8List bytes, String fileName) async {
-    final capabilities = imageImportCapabilities;
-    if (!capabilities.supports(ImageImportAction.vibeTransfer)) return false;
     if (payloadConfig.addVibeImage(bytes, fileName) == 0) return false;
     (_navigation ?? GetIt.I<NavigationRequest>())
         .goTo(AppDestination.vibeReference);
@@ -64,9 +78,6 @@ class MetadataDropAreaViewmodel extends ChangeNotifier {
     Uint8List bytes,
     String fileName,
   ) async {
-    if (!imageImportCapabilities.supports(ImageImportAction.preciseReference)) {
-      return false;
-    }
     final navigation = _navigation ?? GetIt.I<NavigationRequest>();
     final imported = await (_preciseReferenceImporter?.call(bytes, fileName) ??
         payloadConfig.addPreciseReferenceImage(bytes, fileName));

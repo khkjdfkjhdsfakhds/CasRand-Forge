@@ -21,7 +21,7 @@ import 'package:nai_casrand/ui/i2i_page/widgets/i2i_page_view.dart';
 import 'package:nai_casrand/ui/i2i_tab/widgets/vibe_reference_page_view.dart';
 import 'package:nai_casrand/ui/navigation/view_models/navigation_view_model.dart';
 import 'package:nai_casrand/ui/navigation/widgets/application_navigation_shell.dart';
-import 'package:nai_casrand/ui/navigation/widgets/metadata_drop_area.dart';
+import 'package:nai_casrand/ui/navigation/widgets/image_import_area.dart';
 import 'package:nai_casrand/ui/navigation/widgets/navigation_appbar.dart';
 import 'package:nai_casrand/ui/settings_page/widgets/settings_page_view.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -60,7 +60,9 @@ class NavigationViewState extends State<NavigationView>
     AppDestination.enhance: EnhancePageView(viewmodel: EnhancePageViewmodel()),
     AppDestination.directorTools:
         DirectorPageView(viewmodel: DirectorPageViewmodel()),
-    AppDestination.settings: SettingsPageView(),
+    AppDestination.settings: ImageImportArea(
+      child: SettingsPageView(),
+    ),
   };
 
   NavigationRequest get _navigationRequest => GetIt.I<NavigationRequest>();
@@ -115,9 +117,7 @@ class NavigationViewState extends State<NavigationView>
             unawaited(_exitAfterStorageIsReady());
           }
         },
-        child: MetadataDropArea(
-          childBuilder: (context) => getBody(),
-        ));
+        child: getBody());
   }
 
   Future<void> _exitAfterStorageIsReady() async {

@@ -1,3 +1,4 @@
+import 'package:flutter/widgets.dart' show StringCharacters;
 import 'package:flutter/services.dart';
 import 'package:nai_casrand/ui/prompt_assistance/prompt_weight_syntax.dart';
 
@@ -10,9 +11,16 @@ enum PromptMoveDirection { backward, forward }
 class PromptTextEditResult {
   final TextEditingValue value;
   final bool changed;
-  const PromptTextEditResult({required this.value, required this.changed});
+  final bool unsafeSelection;
+  const PromptTextEditResult({
+    required this.value,
+    required this.changed,
+    this.unsafeSelection = false,
+  });
   static PromptTextEditResult unchanged(TextEditingValue value) =>
       PromptTextEditResult(value: value, changed: false);
+  static PromptTextEditResult blocked(TextEditingValue value) =>
+      PromptTextEditResult(value: value, changed: false, unsafeSelection: true);
 }
 
 /// Lossless local edits: the parser locates source spans; it never serializes
@@ -29,6 +37,9 @@ class PromptEditingTransform {
     PromptEditingScope scope = PromptEditingScope.fixedPrompt,
     TextRange? editableRange,
   }) {
+    if (value.selection.isValid && !value.selection.isCollapsed) {
+      return _adjustSelection(value, direction, scope, editableRange);
+    }
     final target = _target(value, scope, editableRange);
     if (target == null) return PromptTextEditResult.unchanged(value);
     final (node, caret) = target;
@@ -42,9 +53,8 @@ class PromptEditingTransform {
           ((old + delta).clamp(minimumWeight, maximumWeight) * 10).round() / 10;
       if (next == old) return PromptTextEditResult.unchanged(value);
       final body = value.text.substring(group.bodyStart, group.bodyEnd);
-      final prefix = next == 1 ? '' : '${_number(next)}::';
-      final suffix =
-          next == 1 ? '' : value.text.substring(group.bodyEnd, group.end);
+      final prefix = '${_number(next)}::';
+      final suffix = value.text.substring(group.bodyEnd, group.end);
       return _replace(
           value,
           group.start,
@@ -73,9 +83,18 @@ class PromptEditingTransform {
     PromptEditingScope scope = PromptEditingScope.fixedPrompt,
     TextRange? editableRange,
   }) {
+    if (value.selection.isValid && !value.selection.isCollapsed) {
+      return _moveSelection(value, direction, scope, editableRange);
+    }
     final target = _target(value, scope, editableRange);
     if (target == null) return PromptTextEditResult.unchanged(value);
     final (leaf, caret) = target;
+    return _moveNode(value, leaf, caret, direction);
+  }
+
+  static PromptTextEditResult _moveNode(TextEditingValue value, _Node leaf,
+      int caret, PromptMoveDirection direction,
+      {bool enterWeight = true, bool selectedBlock = false}) {
     var current = leaf;
     var parent = current.parent!;
     final originallyWrapped = parent.kind != _Kind.root;
@@ -98,7 +117,8 @@ class PromptEditingTransform {
       final gap = text.substring(left.end, right.start);
       // Random choices and prompt chunks are boundaries, never neighbours.
       if (gap.contains('|')) return PromptTextEditResult.unchanged(value);
-      if (!originallyWrapped &&
+      if (enterWeight &&
+          !originallyWrapped &&
           neighbour.kind == _Kind.weight &&
           !gap.contains('#')) {
         final prefix = text.substring(neighbour.start, neighbour.bodyStart);
@@ -109,8 +129,11 @@ class PromptEditingTransform {
         final caretIn = prefix.length +
             (step < 0 ? body.length + joining.length : 0) +
             relativeCaret;
-        return _replace(value, left.start, right.end, '$prefix$inside$close',
-            left.start + caretIn);
+        final replacement = selectedBlock && close == '::'
+            ? _appendWeightClose('$prefix$inside')
+            : '$prefix$inside$close';
+        return _replace(
+            value, left.start, right.end, replacement, left.start + caretIn);
       }
       final other = text.substring(neighbour.start, neighbour.end);
       // An open group moved before another item needs a local closing marker,
@@ -168,6 +191,331 @@ class PromptEditingTransform {
             relativeCaret);
   }
 
+  /// Explicit selections are source ranges, never midpoint targets. Only
+  /// descend through a wrapper when both endpoints are inside its body.
+  /// Crossing half a wrapper or a candidate boundary is an atomic no-op.
+  static _SelectedRange? _selectedRange(
+      TextEditingValue value, PromptEditingScope scope, TextRange? range) {
+    final text = value.text;
+    if (value.selection.end > text.length) return null;
+    var start = value.selection.start;
+    var end = value.selection.end;
+    final lower = range?.start ?? 0;
+    final upper = range?.end ?? text.length;
+    if (start < lower || end > upper || lower < 0 || upper > text.length) {
+      return null;
+    }
+    // Do not split an emoji, combining sequence or surrogate pair.
+    var offset = 0;
+    var startAligned = start == 0;
+    var endAligned = false;
+    for (final character in text.characters) {
+      offset += character.length;
+      if (offset == start) startAligned = true;
+      if (offset >= end) {
+        endAligned = offset == end;
+        break;
+      }
+    }
+    if (!startAligned || !endAligned) return null;
+    while (start < end && text[start].trim().isEmpty) {
+      start++;
+    }
+    while (end > start && text[end - 1].trim().isEmpty) {
+      end--;
+    }
+    if (start == end) return null;
+    final parser =
+        _Parser(text, upper, scope == PromptEditingScope.fixedPrompt);
+    final root = _Node(_Kind.root, lower, upper, lower, upper);
+    parser.sequence(root, lower, null, 0);
+    if (parser.comments.any((c) => start < c.end && end > c.start) ||
+        text.substring(start, end).contains('|')) {
+      return null;
+    }
+    _SelectedRange? locate(_Node parent) {
+      final nodes =
+          parent.children.where((n) => n.start < end && n.end > start).toList();
+      if (nodes.isEmpty) return null;
+      for (var i = 1; i < nodes.length; i++) {
+        if (!RegExp(r'^[\s,，]*$')
+            .hasMatch(text.substring(nodes[i - 1].end, nodes[i].start))) {
+          return null;
+        }
+      }
+      for (final n in nodes) {
+        if (n.kind != _Kind.tag) {
+          if (n.end == n.bodyEnd) return null;
+          if (start >= n.bodyStart && end <= n.bodyEnd) return locate(n);
+          if (start > n.start || end < n.end) return null;
+        } else if (text.substring(n.start, n.end).contains(RegExp(r'[()]')) &&
+            (start > n.start || end < n.end)) {
+          return null;
+        }
+      }
+      var parentheses = 0;
+      for (final unit in text.substring(start, end).codeUnits) {
+        if (unit == 40) parentheses++;
+        if (unit == 41 && --parentheses < 0) return null;
+      }
+      if (parentheses != 0) return null;
+      // Delimiters at the outer edges are not movable text. Interior commas
+      // stay in the block; surrounding spacing stays in its original gap.
+      if (start < nodes.first.start || end > nodes.last.end) return null;
+      return _SelectedRange(parent, nodes, start, end);
+    }
+
+    return locate(root);
+  }
+
+  static bool _composing(TextEditingValue value) =>
+      value.composing.isValid && !value.composing.isCollapsed;
+
+  static PromptTextEditResult _adjustSelection(
+      TextEditingValue value,
+      PromptWeightDirection direction,
+      PromptEditingScope scope,
+      TextRange? range) {
+    if (_composing(value)) return PromptTextEditResult.unchanged(value);
+    final selected = _selectedRange(value, scope, range);
+    if (selected == null) return PromptTextEditResult.blocked(value);
+    final delta =
+        direction == PromptWeightDirection.increase ? weightStep : -weightStep;
+    final parent = selected.parent;
+    final text = value.text;
+    if (parent.kind == _Kind.weight) {
+      // Numeric nesting does not restore the enclosing active weight after a
+      // close. Split flat groups explicitly, and decline ambiguous nesting.
+      if (parent.children.any((n) => n.kind != _Kind.tag) ||
+          text.substring(parent.bodyStart, parent.bodyEnd).contains('\n') ||
+          _hasWeightAncestor(parent)) {
+        return PromptTextEditResult.blocked(value);
+      }
+      final old = _weightOf(text, parent);
+      final next = _nextWeight(old, delta);
+      if (next == old) return PromptTextEditResult.unchanged(value);
+      final before = text.substring(parent.bodyStart, selected.start);
+      final body = text.substring(selected.start, selected.end);
+      final after = text.substring(selected.end, parent.bodyEnd);
+      if (before.trim().isEmpty && after.trim().isEmpty) {
+        final prefix = '${_number(next)}::';
+        final suffix = text.substring(parent.bodyEnd, parent.end);
+        return _replaceSelected(
+            value,
+            parent.start,
+            parent.end,
+            '$prefix$before$body$after$suffix',
+            prefix.length + before.length,
+            prefix.length + before.length + body.length);
+      }
+      final left = _weightedRun(before, old);
+      final middle =
+          _weightedRun(body + (after.trim().isEmpty ? after : ''), next);
+      final right = _weightedRun(after.trim().isEmpty ? '' : after, old);
+      final joinLeft = _weightJoiner(left.text, middle.text);
+      final joinRight = _weightJoiner(middle.text, right.text);
+      final replacement =
+          '${left.text}$joinLeft${middle.text}$joinRight${right.text}';
+      return _replaceSelected(
+          value,
+          parent.start,
+          parent.end,
+          replacement,
+          left.text.length + joinLeft.length + middle.start,
+          left.text.length + joinLeft.length + middle.end);
+    }
+    if (_hasWeightAncestor(parent)) {
+      return PromptTextEditResult.blocked(value);
+    }
+    final rendered =
+        _weightSequence(text, parent, selected.start, selected.end, delta);
+    if (rendered == null) return PromptTextEditResult.blocked(value);
+    return _replaceSelected(value, selected.start, selected.end, rendered.text,
+        rendered.start, rendered.end);
+  }
+
+  static bool _hasWeightAncestor(_Node node) {
+    for (var p = node.parent; p != null; p = p.parent) {
+      if (p.kind == _Kind.weight) return true;
+    }
+    return false;
+  }
+
+  static double _weightOf(String text, _Node node) =>
+      double.parse(text.substring(node.start, node.bodyStart - 2));
+  static double _nextWeight(double old, double delta) =>
+      ((old + delta).clamp(minimumWeight, maximumWeight) * 10).round() / 10;
+
+  static _SelectedText _weightedRun(String body, double weight) {
+    final leading = body.length - body.trimLeft().length;
+    final trailing = body.length - body.trimRight().length;
+    if (RegExp(r'^[\s,，]*$').hasMatch(body)) {
+      return _SelectedText(body, 0, body.length);
+    }
+    final content = body.substring(leading, body.length - trailing);
+    final prefix = '${body.substring(0, leading)}${_number(weight)}::';
+    final text = _appendWeightClose(
+        '$prefix$content${body.substring(body.length - trailing)}');
+    return _SelectedText(text, prefix.length, prefix.length + content.length);
+  }
+
+  // A neutral fragment may end immediately before a newly inserted opener.
+  // Give that opener a lexical boundary without normalizing unrelated text.
+  static String _weightJoiner(String left, String right) => left.isNotEmpty &&
+          right.isNotEmpty &&
+          RegExp(r'[\p{L}\p{N}_.]$', unicode: true).hasMatch(left) &&
+          PromptWeightSyntax.numericOpenerAt(right, 0) != null
+      ? ' '
+      : '';
+
+  static _SelectedText? _weightSequence(
+      String text, _Node parent, int start, int end, double delta) {
+    final pieces = <_SelectedText>[];
+    var safe = true;
+    var cursor = start;
+    void plain(int stop) {
+      if (stop <= cursor) return;
+      if (text.substring(cursor, stop).contains('::')) {
+        safe = false;
+        return;
+      }
+      // A fixed prompt line resets numeric weight; do not wrap across it.
+      final lines = text.substring(cursor, stop).split('\n');
+      for (var i = 0; i < lines.length; i++) {
+        if (i > 0) pieces.add(const _SelectedText('\n', 0, 1));
+        if (lines[i].isNotEmpty) {
+          pieces.add(_weightedRun(lines[i], 1 + delta));
+        }
+      }
+    }
+
+    for (final n in parent.children) {
+      if (n.kind == _Kind.tag || n.end <= start || n.start >= end) continue;
+      if (n.start < start || n.end > end || n.end == n.bodyEnd) return null;
+      plain(n.start);
+      if (n.kind == _Kind.weight) {
+        if (n.children.any((c) => c.kind != _Kind.tag) ||
+            text.substring(n.bodyStart, n.bodyEnd).contains('\n')) {
+          return null;
+        }
+        final old = _weightOf(text, n);
+        final next = _nextWeight(old, delta);
+        pieces.add(next == old
+            ? _SelectedText(text.substring(n.start, n.end),
+                n.bodyStart - n.start, n.bodyEnd - n.start)
+            : _weightedRun(text.substring(n.bodyStart, n.bodyEnd), next));
+      } else if (n.kind == _Kind.brace) {
+        final body = _weightSequence(text, n, n.bodyStart, n.bodyEnd, delta);
+        if (body == null) return null;
+        final wrapped = text.substring(n.start, n.bodyStart) +
+            body.text +
+            text.substring(n.bodyEnd, n.end);
+        pieces.add(_SelectedText(wrapped, 0, wrapped.length));
+      } else {
+        return null;
+      }
+      cursor = n.end;
+    }
+    plain(end);
+    if (!safe) return null;
+    if (pieces.isEmpty) return null;
+    if (pieces.length == 1) return pieces.single;
+    final output = StringBuffer();
+    var previous = '';
+    for (final piece in pieces) {
+      output.write(_weightJoiner(previous, piece.text));
+      output.write(piece.text);
+      if (piece.text.isNotEmpty) previous = piece.text;
+    }
+    final rendered = output.toString();
+    // Include complete inner wrappers for repeat presses on a mixed block.
+    return _SelectedText(rendered, 0, rendered.length);
+  }
+
+  static PromptTextEditResult _moveSelection(
+      TextEditingValue value,
+      PromptMoveDirection direction,
+      PromptEditingScope scope,
+      TextRange? range) {
+    if (_composing(value)) return PromptTextEditResult.unchanged(value);
+    final selected = _selectedRange(value, scope, range);
+    if (selected == null) return PromptTextEditResult.blocked(value);
+    final parent = selected.parent;
+    final nodes = selected.nodes;
+    final text = value.text;
+    if (_hasWeightAncestor(parent) ||
+        (parent.kind == _Kind.weight &&
+            parent.children.any((n) => n.kind != _Kind.tag))) {
+      return PromptTextEditResult.blocked(value);
+    }
+    // Split tag fragments into siblings, then move the selected block with
+    // exactly the same structural rules as a caret-targeted item.
+    final block = _Node(
+        _Kind.tag, selected.start, selected.end, selected.start, selected.end);
+    final replacements = <_Node>[];
+    void fragment(int start, int end) {
+      while (start < end && text[start].trim().isEmpty) {
+        start++;
+      }
+      while (end > start && text[end - 1].trim().isEmpty) {
+        end--;
+      }
+      if (start < end) {
+        replacements.add(_Node(_Kind.tag, start, end, start, end));
+      }
+    }
+
+    fragment(nodes.first.start, selected.start);
+    replacements.add(block);
+    fragment(selected.end, nodes.last.end);
+    final first = parent.children.indexOf(nodes.first);
+    parent.children.replaceRange(first, first + nodes.length, replacements);
+    for (final n in replacements) {
+      n.parent = parent;
+    }
+    final result = _moveNode(value, block, selected.start, direction,
+        enterWeight: nodes.every((n) => n.kind == _Kind.tag),
+        selectedBlock: true);
+    if (!result.changed) return result;
+    final start = result.value.selection.extentOffset;
+    return PromptTextEditResult(
+      value: result.value.copyWith(
+          selection: _selectionAt(
+              value.selection, start, start + selected.end - selected.start)),
+      changed: true,
+    );
+  }
+
+  static TextSelection _selectionAt(
+          TextSelection original, int start, int end) =>
+      TextSelection(
+        baseOffset: original.baseOffset <= original.extentOffset ? start : end,
+        extentOffset:
+            original.baseOffset <= original.extentOffset ? end : start,
+        affinity: original.affinity,
+        isDirectional: original.isDirectional,
+      );
+
+  static PromptTextEditResult _replaceSelected(TextEditingValue value,
+      int start, int end, String text, int selectionStart, int selectionEnd) {
+    final leftJoin = _weightJoiner(value.text.substring(0, start), text);
+    final rightJoin = _weightJoiner(text, value.text.substring(end));
+    final replacement =
+        value.text.replaceRange(start, end, '$leftJoin$text$rightJoin');
+    if (replacement == value.text) return PromptTextEditResult.unchanged(value);
+    return PromptTextEditResult(
+      value: value.copyWith(
+        text: replacement,
+        selection: _selectionAt(
+            value.selection,
+            start + leftJoin.length + selectionStart,
+            start + leftJoin.length + selectionEnd),
+        composing: TextRange.empty,
+      ),
+      changed: true,
+    );
+  }
+
   static String _closedForFollowing(_Node node, String source) =>
       node.kind == _Kind.weight && node.end == node.bodyEnd
           ? _appendWeightClose(source)
@@ -217,6 +565,21 @@ class PromptEditingTransform {
 }
 
 enum _Kind { root, tag, weight, brace, random }
+
+class _SelectedRange {
+  final _Node parent;
+  final List<_Node> nodes;
+  final int start;
+  final int end;
+  const _SelectedRange(this.parent, this.nodes, this.start, this.end);
+}
+
+class _SelectedText {
+  final String text;
+  final int start;
+  final int end;
+  const _SelectedText(this.text, this.start, this.end);
+}
 
 class _Node {
   final _Kind kind;

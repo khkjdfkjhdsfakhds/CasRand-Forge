@@ -78,9 +78,34 @@ const Map<String, String> inpaintModelMapping = {
   'nai-diffusion-furry-3': 'nai-diffusion-furry-3-inpainting',
 };
 
+/// Resolve a transport-only `*-inpainting` model back to the base model used
+/// by ordinary generation, img2img and Enhance. Returns `null` when [model] is
+/// not a known transport name.
+String? baseModelForInpaintTransport(String model) {
+  // Legacy V5 inpainting responses predate the full transport naming scheme.
+  if (model == 'nai-diffusion-5-inpainting') return 'nai-diffusion-5-full';
+  for (final entry in inpaintModelMapping.entries) {
+    if (entry.value == model) return entry.key;
+  }
+  if (model.endsWith('-inpainting')) {
+    final stripped = model.substring(0, model.length - '-inpainting'.length);
+    if (inpaintModelMapping.containsKey(stripped)) {
+      return stripped;
+    }
+  }
+  return null;
+}
+
 /// Resolve the request model before preparing pixels, captions or costs.
+///
+/// Inpaint requests replace the user-facing base model with the matching
+/// `*-inpainting` transport name. Non-inpaint requests must also undo a leaked
+/// transport name (for example an Enhance source imported from an inpaint
+/// result), otherwise the API rejects `img2img` for the transport model.
 String effectiveGenerationModel(String model, {required bool inpaint}) =>
-    inpaint ? inpaintModelMapping[model] ?? model : model;
+    inpaint
+        ? inpaintModelMapping[model] ?? model
+        : baseModelForInpaintTransport(model) ?? model;
 
 const Map<String, String> sourceToModel = {
   'NovelAI Diffusion V5 0ADF9AB7': 'nai-diffusion-5-full',

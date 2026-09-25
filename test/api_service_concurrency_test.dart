@@ -10,7 +10,7 @@ class _LocalSocketOverrides extends HttpOverrides {}
 void main() {
   for (final sameToken in [true, false]) {
     test(
-        'NET-06 ${sameToken ? 'same' : 'different'} token sibling survives another request timeout',
+        'build117 timeout closes only the failed account route (sameToken=$sameToken)',
         () async {
       await HttpOverrides.runWithHttpOverrides(() async {
         final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -61,8 +61,19 @@ void main() {
         await server.close(force: true);
         await subscription.cancel();
         await Future.wait(handlers);
-        expect(resultB, isA<ApiResponse>(),
-            reason: 'B should have its own full response deadline');
+        expect(
+            resultA,
+            isA<NovelAiApiException>()
+                .having((e) => e.isTransient, 'timeout retries', true));
+        if (sameToken) {
+          expect(
+              resultB,
+              isA<NovelAiApiException>().having(
+                  (e) => e.isTransient, 'closed sibling retries', true));
+        } else {
+          expect(resultB, isA<ApiResponse>(),
+              reason: 'Another account route must remain independent.');
+        }
       }, _LocalSocketOverrides());
     });
   }

@@ -20,20 +20,25 @@ class I2iTabView extends StatelessWidget {
   }
 
   Widget _buildContent(BuildContext context) {
-    if (viewmodel.isV5) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Text(
-            tr('nai5_reference_unavailable'),
-            textAlign: TextAlign.center,
-          ),
-        ),
-      );
-    }
-    final vibeWidget = viewmodel.isV4
+    final vibeWidget = !viewmodel.isLegacy
         ? VibeConfigV4ListView(viewmodel: VibeConfigV4ListViewmodel())
         : VibeConfigListView(viewmodel: VibeConfigListViewmodel());
+
+    if (viewmodel.isV5) {
+      return Column(
+        children: [
+          Card(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            margin: const EdgeInsets.fromLTRB(4.0, 4.0, 4.0, 0.0),
+            child: ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: Text(tr('nai5_reference_unavailable')),
+            ),
+          ),
+          Expanded(child: vibeWidget),
+        ],
+      );
+    }
 
     return vibeWidget;
   }

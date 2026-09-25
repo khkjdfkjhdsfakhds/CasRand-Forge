@@ -173,7 +173,8 @@ void main() {
     expect(posts, 1);
   });
 
-  testWidgets('late Vibe extraction retains its encoding without another POST',
+  testWidgets(
+      'timed-out Vibe extraction becomes retryable without immediate replay',
       (tester) async {
     final response = Completer<http.Response>();
     var posts = 0;
@@ -200,13 +201,10 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     await operation;
     final error = outcome as VibeEncodingException;
-    expect(error.isOutcomeUnknown, isTrue);
-    expect(error.isTransient, isFalse);
-    expect(error.lateResponse, isNull,
-        reason: 'Encoded Vibe bytes must never enter the image ZIP pipeline.');
+    expect(error.isOutcomeUnknown, isFalse);
+    expect(error.isTransient, isTrue);
     response.complete(http.Response.bytes([10, 20, 30], 200));
     await tester.pump();
-    expect(await error.lateEncoding!, base64Encode([10, 20, 30]));
     expect(posts, 1);
   });
 

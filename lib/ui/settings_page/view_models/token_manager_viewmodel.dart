@@ -75,6 +75,18 @@ class TokenManagerViewmodel extends ChangeNotifier {
     _persist();
   }
 
+  void setTokenAllowPoints(int index, bool allowPoints) {
+    if (index < 0 || index >= tokens.length) return;
+    tokens[index].allowPoints = allowPoints;
+    _persist();
+  }
+
+  void setTokenAllowFree(int index, bool allowFree) {
+    if (index < 0 || index >= tokens.length) return;
+    tokens[index].allowFree = allowFree;
+    _persist();
+  }
+
   void setParallelApiEnabled(bool enabled) {
     payloadConfig.settings.parallelApiEnabled =
         enabled && tokens.any((entry) => entry.enabled);

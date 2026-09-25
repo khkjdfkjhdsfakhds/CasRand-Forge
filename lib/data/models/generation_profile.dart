@@ -12,6 +12,9 @@ class GenerationProfile {
   List<CharacterConfig> characterConfigList;
   List<PromptConfig> savedPromptConfigList;
   ParamConfig paramConfig;
+  int generationCount;
+  int generationIntervalSec;
+  bool lockToAllCombinations;
 
   GenerationProfile({
     required this.rootPromptConfig,
@@ -19,6 +22,9 @@ class GenerationProfile {
     required this.characterConfigList,
     required this.savedPromptConfigList,
     required this.paramConfig,
+    this.generationCount = 0,
+    this.generationIntervalSec = 2,
+    this.lockToAllCombinations = false,
   });
 
   GenerationProfile copy() => GenerationProfile.fromJson(toJson());
@@ -32,10 +38,18 @@ class GenerationProfile {
       'saved_config':
           savedPromptConfigList.map((config) => config.toJson()).toList(),
       'param_config': paramConfig.toJson(),
+      'generation_count': generationCount,
+      'generation_interval': generationIntervalSec,
+      'lock_to_all_combinations': lockToAllCombinations,
     };
   }
 
-  factory GenerationProfile.fromJson(Map<String, dynamic> json) {
+  factory GenerationProfile.fromJson(
+    Map<String, dynamic> json, {
+    int defaultGenerationCount = 0,
+    int defaultGenerationIntervalSec = 2,
+    bool defaultLockToAllCombinations = false,
+  }) {
     final characters = (json['character_config'] as List<dynamic>? ?? [])
         .whereType<Map<String, dynamic>>()
         .map(CharacterConfig.fromJson)
@@ -57,6 +71,12 @@ class GenerationProfile {
       paramConfig: ParamConfig.fromJson(
         json['param_config'] as Map<String, dynamic>? ?? {},
       ),
+      generationCount:
+          json['generation_count'] as int? ?? defaultGenerationCount,
+      generationIntervalSec:
+          json['generation_interval'] as int? ?? defaultGenerationIntervalSec,
+      lockToAllCombinations:
+          json['lock_to_all_combinations'] as bool? ?? defaultLockToAllCombinations,
     );
   }
 

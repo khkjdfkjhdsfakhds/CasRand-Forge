@@ -45,6 +45,14 @@ class EnhanceConfig with ChangeNotifier {
   /// Magnification applied to the source image size.
   double scale;
   bool maxSelected = false;
+  String? sourcePrompt;
+  String? sourceModel;
+
+  void setSourceMetadata({String? prompt, String? model}) {
+    sourcePrompt = prompt;
+    sourceModel = model;
+    notifyListeners();
+  }
 
   bool canUseMax(String model) {
     if (!hasImage ||
@@ -118,18 +126,13 @@ class EnhanceConfig with ChangeNotifier {
   GenerationSize get targetSize => targetSizeFor(scale);
 
   List<double> get availableScales {
-    if (!hasImage) return const [];
-    if ((width == 832 && height == 1216) || (width == 1216 && height == 832)) {
-      return const [1.0, 1.5];
-    }
+    if (!hasImage || width <= 0 || height <= 0) return const [];
     return enhanceScaleOptions.where((option) {
-      final scaledWidth = width * option;
-      final scaledHeight = height * option;
-      return scaledWidth > 0 &&
-          scaledHeight > 0 &&
-          scaledWidth % 64 == 0 &&
-          scaledHeight % 64 == 0 &&
-          scaledWidth * scaledHeight <= officialEnhanceMaxPixels;
+      final target = targetSizeFor(option);
+      if (target.width <= 0 || target.height <= 0) return false;
+      if (target.width * target.height > officialEnhanceMaxPixels) return false;
+      final api = EnhanceRequestOptions.apiSize(target.width, target.height);
+      return api.width * api.height <= officialEnhanceMaxPixels;
     }).toList(growable: false);
   }
 
@@ -142,11 +145,15 @@ class EnhanceConfig with ChangeNotifier {
     Uint8List bytes, {
     required int width,
     required int height,
+    String? prompt,
+    String? model,
   }) {
     maxSelected = false;
     this.width = width;
     this.height = height;
     _imageBytes = bytes;
+    sourcePrompt = prompt;
+    sourceModel = model;
     // Like the official panel, a newly imported size starts at the largest
     // valid magnification. The choice remains user-adjustable afterwards.
     final options = availableScales;
@@ -161,6 +168,8 @@ class EnhanceConfig with ChangeNotifier {
     _imageBytes = null;
     width = 0;
     height = 0;
+    sourcePrompt = null;
+    sourceModel = null;
     _imageRevision++;
     notifyListeners();
   }

@@ -28,6 +28,8 @@ class GenerationPerformanceEvent {
   final bool? cacheHit;
   final int? statusCode;
   final String? errorClass;
+  final String? transportPhase;
+  final int? responseBytes;
 
   const GenerationPerformanceEvent({
     required this.correlationId,
@@ -38,6 +40,8 @@ class GenerationPerformanceEvent {
     this.cacheHit,
     this.statusCode,
     this.errorClass,
+    this.transportPhase,
+    this.responseBytes,
   });
 
   Map<String, Object> toJson() => {
@@ -50,6 +54,8 @@ class GenerationPerformanceEvent {
         if (cacheHit != null) 'cache_hit': cacheHit!,
         if (statusCode != null) 'status_code': statusCode!,
         if (errorClass != null) 'error_class': errorClass!,
+        if (transportPhase != null) 'transport_phase': transportPhase!,
+        if (responseBytes != null) 'response_bytes': responseBytes!,
       };
 }
 

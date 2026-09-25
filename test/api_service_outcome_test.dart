@@ -23,8 +23,60 @@ class _StreamingClient extends http.BaseClient {
       http.StreamedResponse(body, 200);
 }
 
+class _LifecycleClient extends http.BaseClient {
+  final pending = <Completer<http.StreamedResponse>>[];
+  int closes = 0;
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) {
+    final result = Completer<http.StreamedResponse>();
+    pending.add(result);
+    return result.future;
+  }
+
+  @override
+  void close() {
+    closes++;
+  }
+}
+
 void main() {
-  test('timed-out POST exposes its original late response, not a retry',
+  testWidgets(
+      'expired retired transport closes without removing its replacement',
+      (tester) async {
+    final old = _LifecycleClient();
+    final replacement = _LifecycleClient();
+    var created = 0;
+    final api = ApiService(
+        requestTimeout: const Duration(seconds: 1),
+        clientFactory: (_) => created++ == 0 ? old : replacement);
+    addTearDown(api.close);
+    final first = api
+        .fetchData(_request)
+        .then<Object>((v) => v, onError: (Object e) => e);
+    final second = api
+        .fetchData(_request)
+        .then<Object>((v) => v, onError: (Object e) => e);
+    await tester.pump();
+    old.pending[1].completeError(http.ClientException('closed sibling'));
+    await tester.pump();
+    await second;
+    expect(old.closes, 0);
+    await tester.pump(const Duration(milliseconds: 500));
+    final next = api.fetchData(_request);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(await first, isA<NovelAiApiException>());
+    expect(old.closes, 1);
+    expect(replacement.closes, 0);
+    expect(api.pooledClientCount, 1);
+    replacement.pending.single
+        .complete(http.StreamedResponse(Stream.value([9]), 200));
+    expect((await next).data, [9]);
+    old.pending[0].completeError(http.ClientException('late close'));
+    await tester.pump();
+  });
+
+  test('timed-out POST becomes a retryable failure without immediate replay',
       () async {
     final response = Completer<http.Response>();
     var posts = 0;
@@ -43,12 +95,8 @@ void main() {
     // Finish the underlying response even if the regression assertion fails.
     response.complete(http.Response.bytes([10, 20, 30], 200));
     expect(error, isA<NovelAiApiException>());
-    expect(error.isTransient, isFalse,
-        reason: 'A POST may already be accepted; automatic replay is unsafe.');
-    expect(error.isOutcomeUnknown, isTrue);
-    final late = await error.lateResponse!;
-    expect(late.status, '200');
-    expect(late.data, [10, 20, 30]);
+    expect(error.isTransient, isTrue);
+    expect(error.isOutcomeUnknown, isFalse);
     expect(posts, 1);
   });
   for (final sample in <int, String>{
@@ -56,7 +104,8 @@ void main() {
     504: 'Gateway Timeout',
     500: 'upstream timed out after accepting generation',
   }.entries) {
-    test('HTTP ${sample.key} timeout is not proof the POST failed', () {
+    test('HTTP ${sample.key} timeout follows build117 retry classification',
+        () {
       final response = ApiResponse(
           status: '${sample.key}',
           data: Uint8List.fromList(utf8.encode(sample.value)));
@@ -64,14 +113,14 @@ void main() {
           () => ApiService.requireSuccessfulData(response),
           throwsA(
             isA<NovelAiApiException>()
-                .having((e) => e.isOutcomeUnknown, 'unknown outcome', isTrue)
-                .having((e) => e.isTransient, 'automatic retry', isFalse)
-                .having((e) => e.lateResponse, 'no pending response', isNull),
+                .having((e) => e.isOutcomeUnknown, 'manual suspension', isFalse)
+                .having((e) => e.isTransient, 'automatic retry', isTrue),
           ));
     });
   }
 
-  test('response-body timeout preserves all eventual bytes', () async {
+  test('response-body timeout becomes retryable and observes late completion',
+      () async {
     final body = StreamController<List<int>>();
     final api = ApiService(
       requestTimeout: const Duration(milliseconds: 20),
@@ -85,12 +134,11 @@ void main() {
     final error = await outcome as NovelAiApiException;
     body.add([3, 4]);
     await body.close();
-    expect(error.isOutcomeUnknown, isTrue);
-    expect((await error.lateResponse!).data, [1, 2, 3, 4]);
+    expect(error.isOutcomeUnknown, isFalse);
+    expect(error.isTransient, isTrue);
   });
 
-  test('partial response disconnect stays unknown and is not replayable',
-      () async {
+  test('partial response disconnect returns to automatic retry', () async {
     final body = StreamController<List<int>>();
     final api = ApiService(clientFactory: (_) => _StreamingClient(body.stream));
     addTearDown(api.close);
@@ -101,9 +149,8 @@ void main() {
     body.addError(http.ClientException('fixture incomplete body'));
     await body.close();
     final error = await outcome as NovelAiApiException;
-    expect(error.isOutcomeUnknown, isTrue);
-    expect(error.isTransient, isFalse);
-    expect(error.lateResponse, isNull);
+    expect(error.isOutcomeUnknown, isFalse);
+    expect(error.isTransient, isTrue);
   });
 
   test('unobserved late disconnect does not become an unhandled async error',
@@ -121,8 +168,7 @@ void main() {
     // flutter_test reports any unhandled asynchronous error as a test failure.
   });
 
-  test('new calls use a fresh route while the original late call can finish',
-      () async {
+  test('next attempt uses a fresh route after a timeout', () async {
     final firstResponse = Completer<http.Response>();
     var connections = 0;
     var posts = 0;
@@ -145,7 +191,7 @@ void main() {
     final second = await api.fetchData(_request);
     firstResponse.complete(http.Response.bytes([1], 200));
     expect(second.data, [9]);
-    expect((await error.lateResponse!).data, [1]);
+    expect(error.isTransient, isTrue);
     expect(posts, 2,
         reason: 'Only the two explicit public calls sent requests.');
     expect(connections, 2);
@@ -194,7 +240,7 @@ void main() {
         '{"message":"INVALID_CACHE_KEYS","details":{"invalidKeys":["fixture-key"]}}',
         400));
     final error = outcome as NovelAiApiException;
-    expect((await error.lateResponse!).status, '400');
+    expect(error.isTransient, isTrue);
     expect(posts, 1);
   });
 

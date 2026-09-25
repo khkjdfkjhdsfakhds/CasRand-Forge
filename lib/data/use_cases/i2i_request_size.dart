@@ -29,6 +29,7 @@ GenerationSize closestI2iRequestSize({
   required int sourceWidth,
   required int sourceHeight,
   required int maxPixels,
+  bool scaleUp = false,
 }) {
   if (sourceWidth <= 0 || sourceHeight <= 0 || maxPixels < 64 * 64) {
     return const GenerationSize(width: 64, height: 64);
@@ -38,12 +39,14 @@ GenerationSize closestI2iRequestSize({
     width: _snapToStep(sourceWidth),
     height: _snapToStep(sourceHeight),
   );
-  if (directlySnapped.width * directlySnapped.height <= maxPixels) {
+  if (!scaleUp && directlySnapped.width * directlySnapped.height <= maxPixels) {
     return directlySnapped;
   }
 
   final sourceArea = sourceWidth.toDouble() * sourceHeight;
-  final scale = sourceArea > maxPixels ? sqrt(maxPixels / sourceArea) : 1.0;
+  final scale = (scaleUp || sourceArea > maxPixels)
+      ? sqrt(maxPixels / sourceArea)
+      : 1.0;
   final targetWidth = sourceWidth * scale;
   final targetHeight = sourceHeight * scale;
   final sourceRatio = sourceWidth / sourceHeight;
@@ -87,10 +90,14 @@ GenerationSize closestI2iRequestSize({
 }
 
 GenerationSize automaticI2iRequestSize(int width, int height) {
+  if (width <= 0 || height <= 0) {
+    return const GenerationSize(width: 1024, height: 1024);
+  }
   return closestI2iRequestSize(
     sourceWidth: width,
     sourceHeight: height,
     maxPixels: novelAiNormalMaxPixels,
+    scaleUp: true,
   );
 }
 

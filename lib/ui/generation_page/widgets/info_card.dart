@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:easy_localization/easy_localization.dart';
@@ -13,6 +14,8 @@ import 'package:nai_casrand/ui/core/utils/flushbar.dart';
 import 'package:nai_casrand/ui/core/widgets/fullscreen_image_view.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/generated_image_view.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/result_actions.dart';
+import 'package:nai_casrand/ui/generation_page/widgets/prompt_token_usage.dart';
+import 'package:nai_casrand/ui/navigation/widgets/image_import_area.dart';
 import 'package:flutter_command/flutter_command.dart';
 
 class InfoCard extends StatelessWidget {
@@ -103,7 +106,7 @@ class InfoCard extends StatelessWidget {
   }
 
   Widget _buildCardContentBody(BuildContext context, InfoCardContent content) {
-    return content.imageBytes == null
+    return !content.hasImage
         ? //Without image
         Column(
             mainAxisSize: MainAxisSize.min,
@@ -140,11 +143,7 @@ class InfoCard extends StatelessWidget {
               ),
               GeneratedImageView(
                 content: content,
-                child: Image.memory(
-                  fit: BoxFit.contain,
-                  content.imageBytes!,
-                  filterQuality: FilterQuality.medium,
-                ),
+                child: buildInfoCardImage(content),
               ),
             ],
           );
@@ -259,7 +258,12 @@ class _GenerationCardStatusViewState extends State<GenerationCardStatusView> {
   Widget build(BuildContext context) {
     final unknown = widget.unknown;
     final title = unknown != null
-        ? tr('generation_outcome_unknown')
+        ? tr(switch (unknown.phase) {
+            GenerationOutcomePhase.receiving => 'generation_response_receiving',
+            GenerationOutcomePhase.disconnected =>
+              'generation_response_disconnected',
+            GenerationOutcomePhase.unknown => 'generation_outcome_unknown',
+          })
         : tr('generation_retry_waiting', namedArgs: {
             'message': widget.waiting?.message ?? '',
             'seconds': '$_seconds',
@@ -271,9 +275,32 @@ class _GenerationCardStatusViewState extends State<GenerationCardStatusView> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            Icon(unknown == null ? Icons.hourglass_empty : Icons.help_outline),
+            Icon(switch (unknown?.phase) {
+              GenerationOutcomePhase.receiving => Icons.downloading,
+              GenerationOutcomePhase.disconnected => Icons.wifi_off,
+              GenerationOutcomePhase.unknown => Icons.help_outline,
+              null => Icons.hourglass_empty,
+            }),
             const SizedBox(width: 8),
             Expanded(child: Text(title)),
+            if (unknown?.message != null &&
+                unknown?.phase != GenerationOutcomePhase.unknown)
+              IconButton(
+                tooltip: tr('generation_error_details'),
+                icon: const Icon(Icons.info_outline, size: 20),
+                onPressed: () => showDialog<void>(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                          title: Text(tr('generation_error_details')),
+                          content: SingleChildScrollView(
+                              child: SelectableText(unknown!.message!)),
+                          actions: [
+                            TextButton(
+                                onPressed: () => Navigator.pop(context),
+                                child: const Text('OK'))
+                          ],
+                        )),
+              ),
           ]),
           if (widget.tokenLabel case final label?) ...[
             const SizedBox(height: 6),
@@ -281,8 +308,24 @@ class _GenerationCardStatusViewState extends State<GenerationCardStatusView> {
           ],
           if (unknown != null) ...[
             const SizedBox(height: 6),
-            Text(tr('generation_outcome_unknown_detail')),
-            if (unknown.message != null) ...[
+            Text(tr(switch (unknown.phase) {
+              GenerationOutcomePhase.receiving =>
+                'generation_response_receiving_detail',
+              GenerationOutcomePhase.disconnected =>
+                'generation_response_disconnected_detail',
+              GenerationOutcomePhase.unknown =>
+                'generation_outcome_unknown_detail',
+            })),
+            if (unknown.onRetry != null) ...[
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: unknown.onRetry,
+                icon: const Icon(Icons.refresh),
+                label: Text(tr('generation_regenerate_original')),
+              ),
+            ],
+            if (unknown.message != null &&
+                unknown.phase == GenerationOutcomePhase.unknown) ...[
               const SizedBox(height: 6),
               Text(unknown.message!),
             ],
@@ -291,6 +334,47 @@ class _GenerationCardStatusViewState extends State<GenerationCardStatusView> {
       ),
     );
   }
+}
+
+Widget buildInfoCardImage(
+  InfoCardContent content, {
+  BoxFit fit = BoxFit.contain,
+  FilterQuality filterQuality = FilterQuality.medium,
+}) {
+  final filePath =
+      content.currentImageFile?.path ?? content.originalImageFile?.path;
+  if (filePath != null && filePath.isNotEmpty) {
+    return Image.file(
+      File(filePath),
+      fit: fit,
+      filterQuality: filterQuality,
+      gaplessPlayback: true,
+      errorBuilder: (context, error, stackTrace) {
+        if (content.imageBytes != null && content.imageBytes!.isNotEmpty) {
+          return Image.memory(
+            content.imageBytes!,
+            fit: fit,
+            filterQuality: filterQuality,
+            gaplessPlayback: true,
+          );
+        }
+        return const Center(
+          child: Padding(
+            padding: EdgeInsets.all(24.0),
+            child: Icon(Icons.broken_image, size: 48, color: Colors.grey),
+          ),
+        );
+      },
+    );
+  } else if (content.imageBytes != null && content.imageBytes!.isNotEmpty) {
+    return Image.memory(
+      content.imageBytes!,
+      fit: fit,
+      filterQuality: filterQuality,
+      gaplessPlayback: true,
+    );
+  }
+  return const SizedBox.shrink();
 }
 
 /// Width at which the detail page switches from a stacked layout to image
@@ -312,10 +396,12 @@ const List<(String, String)> _detailParamKeys = [
 
 class InfoDetailPage extends StatefulWidget {
   final List<InfoCardContent> contents;
+  final PromptTokenCounter? tokenCounter;
   final int initialIndex;
   final ValueChanged<int>? onIndexChanged;
 
-  InfoDetailPage({super.key, required InfoCardContent content})
+  InfoDetailPage(
+      {super.key, required InfoCardContent content, this.tokenCounter})
       : contents = [content],
         initialIndex = 0,
         onIndexChanged = null;
@@ -323,6 +409,7 @@ class InfoDetailPage extends StatefulWidget {
   const InfoDetailPage.gallery({
     super.key,
     required this.contents,
+    this.tokenCounter,
     required this.initialIndex,
     this.onIndexChanged,
   });
@@ -391,7 +478,7 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
   KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     if (event.logicalKey == LogicalKeyboardKey.space &&
-        content.imageBytes != null) {
+        content.hasImage) {
       openFullscreenImage(context, content);
       return KeyEventResult.handled;
     }
@@ -424,58 +511,60 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
   @override
   Widget build(BuildContext context) {
     final showShortcutHint = MediaQuery.sizeOf(context).width >= 720;
-    return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          children: [
-            Expanded(
-              child: Text(
-                content.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            if (widget.contents.length > 1)
-              Padding(
-                padding: const EdgeInsets.only(left: 12),
-                child: Center(
-                  child: Text(
-                    '${_currentIndex + 1} / ${widget.contents.length}',
-                    key: const Key('detail-gallery-position'),
-                    style: Theme.of(context).textTheme.labelMedium,
-                  ),
+    return ImageImportArea(
+      child: Scaffold(
+        appBar: AppBar(
+          title: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  content.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
-            if (content.imageBytes != null && showShortcutHint)
-              Flexible(
-                child: Padding(
+              if (widget.contents.length > 1)
+                Padding(
                   padding: const EdgeInsets.only(left: 12),
-                  child: Text(
-                    tr('detail_shortcut_hint'),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.end,
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: Theme.of(context).colorScheme.outline,
-                        ),
+                  child: Center(
+                    child: Text(
+                      '${_currentIndex + 1} / ${widget.contents.length}',
+                      key: const Key('detail-gallery-position'),
+                      style: Theme.of(context).textTheme.labelMedium,
+                    ),
                   ),
                 ),
-              ),
-          ],
+              if (content.hasImage && showShortcutHint)
+                Flexible(
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 12),
+                    child: Text(
+                      tr('detail_shortcut_hint'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.end,
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                            color: Theme.of(context).colorScheme.outline,
+                          ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
-      ),
-      body: Focus(
-        focusNode: _focusNode,
-        autofocus: true,
-        onKeyEvent: _handleKey,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final wide = constraints.maxWidth >= detailWideLayoutBreakpoint &&
-                content.imageBytes != null;
-            return wide
-                ? _buildWideLayout(context)
-                : _buildStackedLayout(context);
-          },
+        body: Focus(
+          focusNode: _focusNode,
+          autofocus: true,
+          onKeyEvent: _handleKey,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final wide = constraints.maxWidth >= detailWideLayoutBreakpoint &&
+                  content.hasImage;
+              return wide
+                  ? _buildWideLayout(context)
+                  : _buildStackedLayout(context);
+            },
+          ),
         ),
       ),
     );
@@ -516,7 +605,7 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
-        if (content.imageBytes != null) ...[
+        if (content.hasImage) ...[
           // Fixed-height stage so the layout does not jump while the image
           // decodes; the dark surface absorbs the letterboxing.
           SizedBox(height: 420, child: _buildImagePane(context)),
@@ -531,7 +620,7 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
 
   /// The image on a dark rounded stage, like the official result viewer.
   Widget _buildImagePane(BuildContext context) {
-    if (content.imageBytes == null) return const SizedBox.shrink();
+    if (!content.hasImage) return const SizedBox.shrink();
     return GestureDetector(
       key: const Key('detail-gallery-swipe-target'),
       behavior: HitTestBehavior.opaque,
@@ -559,11 +648,10 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
               child: GestureDetector(
                 key: const Key('detail-image-zoom-target'),
                 onTap: () => openFullscreenImage(context, content),
-                child: Image.memory(
-                  content.imageBytes!,
+                child: buildInfoCardImage(
+                  content,
                   fit: BoxFit.contain,
                   filterQuality: FilterQuality.medium,
-                  gaplessPlayback: true,
                 ),
               ),
             ),
@@ -618,10 +706,21 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
     return [
       if (content.info.isNotEmpty)
         _buildTextCard(context, tr('detail_prompt_blocks'), content.info),
-      if (input is String && input.isNotEmpty)
-        _buildTextCard(context, tr('detail_prompt_final'), input),
-      if (negative is String && negative.isNotEmpty)
-        _buildTextCard(context, tr('detail_negative'), negative),
+      PromptTokenUsage(
+        metadata: additional,
+        counter: widget.tokenCounter,
+        builder: (positiveBar, negativeBar) => Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (input is String)
+              _buildTextCard(context, tr('detail_prompt_final'), input,
+                  footer: positiveBar),
+            if (negative is String)
+              _buildTextCard(context, tr('detail_negative'), negative,
+                  footer: negativeBar),
+          ],
+        ),
+      ),
       _buildParamsCard(context),
       if (remaining.isNotEmpty)
         Card(
@@ -651,10 +750,11 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
   }
 
   /// A prompt-style card: selectable body text with a copy affordance.
-  Widget _buildTextCard(BuildContext context, String title, String body) {
+  Widget _buildTextCard(BuildContext context, String title, String body,
+      {Widget? footer}) {
     return Card(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 8, 12),
+        padding: EdgeInsets.fromLTRB(16, 8, 8, footer == null ? 12 : 4),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -677,6 +777,11 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
               body,
               style: Theme.of(context).textTheme.bodyMedium,
             ),
+            if (footer != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4, right: 8),
+                child: footer,
+              ),
           ],
         ),
       ),

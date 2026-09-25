@@ -109,4 +109,9 @@ class InfoCardContent {
         info: '',
         additionalInfo: {},
       );
+
+  bool get hasImage =>
+      (imageBytes != null && imageBytes!.isNotEmpty) ||
+      currentImageFile != null ||
+      originalImageFile != null;
 }

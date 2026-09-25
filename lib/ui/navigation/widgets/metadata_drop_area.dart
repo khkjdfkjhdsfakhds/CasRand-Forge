@@ -11,11 +11,14 @@ import 'package:nai_casrand/ui/navigation/widgets/image_import_dialog.dart';
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 
 class MetadataDropArea extends StatefulWidget {
-  final viewmodel =
-      MetadataDropAreaViewmodel(); // viewmodel 保持 final 并在 createState 中传递
+  final MetadataDropAreaViewmodel viewmodel;
   final WidgetBuilder childBuilder;
 
-  MetadataDropArea({super.key, required this.childBuilder});
+  MetadataDropArea({
+    super.key,
+    MetadataDropAreaViewmodel? viewmodel,
+    required this.childBuilder,
+  }) : viewmodel = viewmodel ?? MetadataDropAreaViewmodel();
 
   @override
   State<MetadataDropArea> createState() => _MetadataDropAreaState();
@@ -30,13 +33,16 @@ class _MetadataDropAreaState extends State<MetadataDropArea> {
       return widget.childBuilder(context);
     }
 
+    final routeCurrent = ModalRoute.of(context)?.isCurrent ?? true;
+    final enabled = routeCurrent && TickerMode.valuesOf(context).enabled;
+
     return ListenableBuilder(
       listenable: widget.viewmodel,
       builder: (context, _) => DropRegion(
         formats: Formats.standardFormats,
-        onDropOver: (_) => DropOperation.copy,
+        onDropOver: (_) => enabled ? DropOperation.copy : DropOperation.none,
         onDropEnter: (_) {
-          if (_isDragging) return;
+          if (!enabled || _isDragging) return;
           setState(() {
             _isDragging = true;
           });
@@ -47,7 +53,10 @@ class _MetadataDropAreaState extends State<MetadataDropArea> {
             _isDragging = false;
           });
         },
-        onPerformDrop: (event) => _handleDropEvent(context, event),
+        onPerformDrop: (event) async {
+          if (!enabled) return;
+          await _handleDropEvent(context, event);
+        },
         child: Stack(
           // 使用 Stack 来叠加遮罩层
           children: [

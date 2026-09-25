@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +13,17 @@ import 'package:nai_casrand/ui/prompt_assistance/prompt_editing_assistance.dart'
 import 'package:nai_casrand/ui/prompt_assistance/prompt_weight_syntax.dart';
 import 'package:nai_casrand/ui/prompt_tab/view_models/prompt_tab_viewmodel.dart';
 import 'package:nai_casrand/ui/prompt_tab/widgets/prompt_tab_view.dart';
+
+class _PromptTestTranslations extends AssetLoader {
+  final Map<String, dynamic> translations;
+  _PromptTestTranslations()
+      : translations =
+            jsonDecode(File('assets/l10n/en.json').readAsStringSync())
+                as Map<String, dynamic>;
+  @override
+  Future<Map<String, dynamic>> load(String path, Locale locale) async =>
+      translations;
+}
 
 List<TextSpan> leafTextSpans(TextSpan span) {
   final result = <TextSpan>[];
@@ -43,16 +57,18 @@ void main() {
       EasyLocalization(
         supportedLocales: const [Locale('en')],
         path: 'assets/l10n',
+        assetLoader: _PromptTestTranslations(),
         fallbackLocale: const Locale('en'),
         child: Builder(
           builder: (context) => MaterialApp(
             localizationsDelegates: context.localizationDelegates,
             supportedLocales: context.supportedLocales,
             locale: context.locale,
-            home: PromptTabView(
+            home: Scaffold(
+                body: PromptTabView(
               viewmodel: PromptTabViewmodel(payloadConfig: payload),
               promptAssistance: assistance,
-            ),
+            )),
           ),
         ),
       ),
@@ -72,6 +88,60 @@ void main() {
       await tester.pumpAndSettle();
     }
   }
+
+  testWidgets(
+      'both fixed fields adjust only selected text and undo the whole edit',
+      (tester) async {
+    final payload = PayloadConfig(
+      rootPromptConfig: PromptConfig(strs: [], prompts: []),
+      negativePromptConfig: PromptConfig(strs: [], prompts: []),
+      characterConfigList: [],
+      savedPromptConfigList: [],
+      paramConfig: ParamConfig(),
+      settings: Settings.fromJson({}),
+      overridePrompt: '',
+      useOverridePrompt: true,
+      useCharacterPromptWithOverride: false,
+      promptMode: PromptMode.fixed,
+    );
+    await pumpFixedPrompt(tester,
+        payload: payload,
+        assistance: PromptEditingAssistance.fromCandidates([]));
+    for (final key in ['fixed-positive-prompt', 'fixed-negative-prompt']) {
+      final finder = find.byKey(Key(key), skipOffstage: false);
+      await tester.ensureVisible(finder);
+      await tester.tap(finder);
+      await tester.enterText(finder, '1.2::blue eyes, red hair::');
+      await tester.pump(const Duration(milliseconds: 600));
+      final controller = tester.widget<TextField>(finder).controller!;
+      controller.selection =
+          const TextSelection(baseOffset: 14, extentOffset: 5);
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(controller.text, '1.3::blue eyes::1.2::, red hair::');
+      expect(controller.selection,
+          const TextSelection(baseOffset: 14, extentOffset: 5));
+      final saved = key == 'fixed-positive-prompt'
+          ? payload.fixedProfile.rootPromptConfig.strs
+          : payload.fixedProfile.negativePromptConfig.strs;
+      expect(saved, [controller.text]);
+      final undo = tester.state<UndoHistoryState<TextEditingValue>>(
+          find.descendant(
+              of: finder,
+              matching: find.byType(UndoHistory<TextEditingValue>)));
+      undo.undo();
+      await tester.pump();
+      expect(controller.text, '1.2::blue eyes, red hair::');
+      undo.redo();
+      await tester.pump();
+      expect(controller.text, '1.3::blue eyes::1.2::, red hair::');
+      expect(controller.selection,
+          const TextSelection(baseOffset: 14, extentOffset: 5));
+    }
+  });
 
   testWidgets(
       'fixed negative prompt shares completion and both fixed fields apply Control shortcuts',
@@ -261,7 +331,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 600));
     expect(structuralController.text, '1.2::one, two, three::');
     expect(structuralController.selection,
-        const TextSelection.collapsed(offset: 6));
+        const TextSelection(baseOffset: 8, extentOffset: 5));
     expect(
         tester.widget<TextField>(structuralField).focusNode!.hasFocus, isTrue);
     final structuralUndo = tester.state<UndoHistoryState<TextEditingValue>>(

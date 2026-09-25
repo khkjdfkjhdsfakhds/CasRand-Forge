@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:http/io_client.dart';
+import 'package:nai_casrand/data/services/generation_http_client.dart';
 import 'package:nai_casrand/data/models/api_request.dart';
 import 'package:nai_casrand/data/models/generation_performance_diagnostics.dart';
 import 'package:nai_casrand/data/services/novelai_image_cache.dart';
@@ -14,14 +14,11 @@ class NovelAiApiException implements Exception {
   final int? statusCode;
   final bool isTransient;
 
-  /// The POST was handed to the transport but its final outcome is unknown.
-  /// It must not be automatically replayed without server-side deduplication.
+  /// A successful paid response could not be processed locally.
+  /// Network failures use the build117 automatic retry policy instead.
   final bool isOutcomeUnknown;
+  final bool isRequestNotSent;
   final Duration? retryAfter;
-
-  /// The same in-flight request can still complete after the UI deadline.
-  /// This future never submits a new request and already has an error observer.
-  final Future<ApiResponse>? lateResponse;
 
   bool get isAccountBlocked =>
       statusCode == 401 || statusCode == 402 || statusCode == 403;
@@ -32,8 +29,8 @@ class NovelAiApiException implements Exception {
     this.statusCode,
     this.isTransient = false,
     this.isOutcomeUnknown = false,
+    this.isRequestNotSent = false,
     this.retryAfter,
-    this.lateResponse,
   });
 
   @override
@@ -102,28 +99,19 @@ class ApiService {
         request.headers,
         attempt,
         diagnosticContext,
+        request.shouldSend,
       );
       try {
         return await responseFuture.timeout(requestTimeout);
       } on TimeoutException {
-        _emitFailure(diagnosticContext, 'outcome_unknown');
-        _discardClient(routeKey, client);
-        final lateResponse =
-            responseFuture.then((response) => _completeResponse(
-                  response,
-                  sessionKey,
-                  attempt,
-                  diagnosticContext,
-                ));
-        // A caller may dismiss the card rather than await this future. Observe
-        // transport errors now while preserving the future for interested UIs.
-        unawaited(lateResponse.then<void>((_) {}, onError: (Object _) {}));
-        throw NovelAiApiException(
-          'NovelAI has not returned a complete response before the deadline. '
-          'The result is unknown; retrying may consume credits again. '
-          'The original request is still being received.',
-          isOutcomeUnknown: true,
-          lateResponse: lateResponse,
+        _emitFailure(diagnosticContext, 'client_timeout');
+        // Restore build117: end the failed transport and let the scheduler
+        // retry after its normal backoff. Do not hold a manual-recovery future.
+        _discardClient(routeKey, client, force: true);
+        throw const NovelAiApiException(
+          'NovelAI did not respond before the request timed out. '
+          'The next automatic attempt will use a fresh connection.',
+          isTransient: true,
         );
       }
     }
@@ -137,22 +125,9 @@ class ApiService {
         prepared = await _imageCache.prepare(request.payload, sessionKey);
         response = await send(prepared);
       }
-    } on http.ClientException {
-      _emitFailure(diagnosticContext, 'outcome_unknown');
-      _discardClient(routeKey, client);
-      throw const NovelAiApiException(
-        'NovelAI connection closed before a complete response was received. '
-        'The result is unknown; retrying may consume credits again.',
-        isOutcomeUnknown: true,
-      );
-    } on SocketException {
-      _emitFailure(diagnosticContext, 'outcome_unknown');
-      _discardClient(routeKey, client);
-      throw const NovelAiApiException(
-        'NovelAI connection closed before a complete response was received. '
-        'The result is unknown; retrying may consume credits again.',
-        isOutcomeUnknown: true,
-      );
+    } on NovelAiApiException catch (error) {
+      if (error is! RequestNotSentException) _discardClient(routeKey, client);
+      rethrow;
     }
     return _completeResponse(response, sessionKey, prepared, diagnosticContext);
   }
@@ -190,6 +165,7 @@ class ApiService {
     Map<String, String> headers,
     PreparedImageRequest prepared,
     GenerationDiagnosticContext? diagnosticContext,
+    bool Function()? shouldSend,
   ) async {
     final body = json.encode(prepared.payload);
     final stopwatch = Stopwatch()..start();
@@ -206,33 +182,81 @@ class ApiService {
         stage: GenerationPerformanceStage.requestStarted,
       ));
     }
-    final request = http.Request('POST', url)
+    var transportPhase = 'handed_to_client';
+    var receivedBytes = 0;
+    final request = GenerationHttpRequest('POST', url,
+        shouldSend: shouldSend, onPhase: (phase) => transportPhase = phase)
       ..headers.addAll(headers)
       ..body = body;
     _retainClient(client);
-    final response = await (() async {
-      final streamedResponse = await client.send(request);
+    try {
+      final response = await (() async {
+        final streamedResponse = await client.send(request);
+        if (diagnosticContext != null) {
+          _emit(GenerationPerformanceEvent(
+            correlationId: diagnosticContext.correlationId,
+            stage: GenerationPerformanceStage.responseStarted,
+            elapsedMicroseconds: stopwatch.elapsedMicroseconds,
+            statusCode: streamedResponse.statusCode,
+          ));
+        }
+        transportPhase = 'receiving';
+        return http.Response.fromStream(http.StreamedResponse(
+          streamedResponse.stream.map((bytes) {
+            receivedBytes += bytes.length;
+            return bytes;
+          }),
+          streamedResponse.statusCode,
+          headers: streamedResponse.headers,
+          contentLength: streamedResponse.contentLength,
+          request: streamedResponse.request,
+          reasonPhrase: streamedResponse.reasonPhrase,
+        ));
+      })()
+          .whenComplete(() => _releaseClient(client));
+      stopwatch.stop();
       if (diagnosticContext != null) {
         _emit(GenerationPerformanceEvent(
           correlationId: diagnosticContext.correlationId,
-          stage: GenerationPerformanceStage.responseStarted,
+          stage: GenerationPerformanceStage.responseCompleted,
           elapsedMicroseconds: stopwatch.elapsedMicroseconds,
-          statusCode: streamedResponse.statusCode,
+          statusCode: response.statusCode,
         ));
       }
-      return http.Response.fromStream(streamedResponse);
-    })()
-        .whenComplete(() => _releaseClient(client));
-    stopwatch.stop();
-    if (diagnosticContext != null) {
-      _emit(GenerationPerformanceEvent(
-        correlationId: diagnosticContext.correlationId,
-        stage: GenerationPerformanceStage.responseCompleted,
-        elapsedMicroseconds: stopwatch.elapsedMicroseconds,
-        statusCode: response.statusCode,
-      ));
+      return response;
+    } catch (error) {
+      final unsent = error is GenerationRequestNotSent ? error : null;
+      if (unsent?.reason == 'cancelled') throw const RequestNotSentException();
+      final transportError = unsent != null ||
+          error is http.ClientException ||
+          error is SocketException ||
+          error is HttpException;
+      if (!transportError) rethrow;
+      if (diagnosticContext != null) {
+        _emit(GenerationPerformanceEvent(
+          correlationId: diagnosticContext.correlationId,
+          stage: GenerationPerformanceStage.failed,
+          elapsedMicroseconds: stopwatch.elapsedMicroseconds,
+          errorClass: unsent?.reason ?? 'connection_interrupted',
+          transportPhase: transportPhase,
+          responseBytes: receivedBytes,
+        ));
+      }
+      if (unsent != null) {
+        throw NovelAiApiException(
+          unsent.reason == 'tls_handshake'
+              ? 'The secure connection could not be verified. The generation request was not sent.'
+              : 'Could not connect to NovelAI. The generation request was not sent.',
+          isTransient: unsent.retryable,
+          isRequestNotSent: true,
+        );
+      }
+      throw const NovelAiApiException(
+        'NovelAI connection closed before a complete response was received. '
+        'The next automatic attempt will use a fresh connection.',
+        isTransient: true,
+      );
     }
-    return response;
   }
 
   void _emit(GenerationPerformanceEvent event) {
@@ -285,13 +309,10 @@ class ApiService {
     final lowerMessage = serverMessage.toLowerCase();
     final serverTimedOut =
         lowerMessage.contains('timeout') || lowerMessage.contains('timed out');
-    // A timeout generated by an intermediary is not evidence that the paid
-    // operation stopped on the origin. Keep it separate from explicit errors.
-    final isOutcomeUnknown = statusCode == 408 ||
-        statusCode == 504 ||
-        (statusCode >= 500 && serverTimedOut);
-    final isTransient = !isOutcomeUnknown &&
-        (statusCode == 425 || statusCode == 429 || statusCode >= 500);
+    final isTransient = statusCode == 408 ||
+        statusCode == 425 ||
+        statusCode == 429 ||
+        statusCode >= 500;
 
     final summary = statusCode >= 500 && serverTimedOut
         ? 'NovelAI server timed out while trying to $operation '
@@ -300,10 +321,9 @@ class ApiService {
     final detail =
         serverMessage.isEmpty ? '' : '\nServer message: $serverMessage';
     throw NovelAiApiException(
-      '$summary$detail${isOutcomeUnknown ? '\nThe result is unknown; retrying may consume credits again.' : ''}',
+      '$summary$detail',
       statusCode: statusCode == 0 ? null : statusCode,
       isTransient: isTransient,
-      isOutcomeUnknown: isOutcomeUnknown,
       retryAfter: _retryAfter(response),
     );
   }
@@ -390,10 +410,19 @@ class ApiService {
     return '$key\u0000${authorization ?? ''}';
   }
 
-  void _discardClient(String routeKey, http.Client failedClient) {
-    if (!identical(_clients[routeKey], failedClient)) return;
-    _clients.remove(routeKey);
-    _retireClient(failedClient);
+  void _discardClient(String routeKey, http.Client failedClient,
+      {bool force = false}) {
+    if (identical(_clients[routeKey], failedClient)) {
+      _clients.remove(routeKey);
+    } else if (!force) {
+      return;
+    }
+    if (force) {
+      _retiredClients.remove(failedClient);
+      failedClient.close();
+    } else {
+      _retireClient(failedClient);
+    }
   }
 
   void _retainClient(http.Client client) {
@@ -422,12 +451,12 @@ class ApiService {
     if (kIsWeb) return http.Client();
     final ioClient = _ioHttpClientFactory?.call() ?? HttpClient();
     ioClient.connectionTimeout = const Duration(seconds: 15);
-    ioClient.idleTimeout = const Duration(minutes: 2);
+    ioClient.idleTimeout = const Duration(seconds: 15);
     ioClient.maxConnectionsPerHost = 6;
     if (proxy.isNotEmpty) {
       ioClient.findProxy = (uri) => 'PROXY $proxy';
     }
-    return IOClient(ioClient);
+    return GenerationHttpClient(ioClient);
   }
 
   Future<http.Response> get(

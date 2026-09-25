@@ -4,6 +4,7 @@ import 'dart:ui' show Offset;
 import 'package:flutter/foundation.dart';
 import 'package:nai_casrand/data/models/displayed_image_size.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
+import 'package:nai_casrand/data/models/scribble_document.dart';
 import 'package:nai_casrand/data/use_cases/autocrop_planner.dart'
     show CropRect, defaultContextPx, normalizeContextPx;
 import 'package:nai_casrand/data/use_cases/i2i_request_size.dart';
@@ -28,6 +29,7 @@ class MaskStroke {
 }
 
 class I2IConfig with ChangeNotifier {
+  ScribbleDocument? scribbleDocument;
   // Base image
   Uint8List? _imageBytes;
   Uint8List? _previewImageBytes;
@@ -90,7 +92,7 @@ class I2IConfig with ChangeNotifier {
 
   Uint8List? get imageBytes => _imageBytes;
   Uint8List? get previewImageBytes => _previewImageBytes;
-  Uint8List? get displayImageBytes => _previewImageBytes ?? _imageBytes;
+  Uint8List? get displayImageBytes => _imageBytes;
   Uint8List? get maskBytes => _maskBytes;
   Uint8List? get maskBaseBytes => _maskBaseBytes;
 
@@ -133,6 +135,7 @@ class I2IConfig with ChangeNotifier {
     required int height,
     Uint8List? previewBytes,
   }) {
+    scribbleDocument = null;
     this.width = width;
     this.height = height;
     _imageBytes = bytes;
@@ -153,6 +156,7 @@ class I2IConfig with ChangeNotifier {
   }
 
   void removeImage() {
+    scribbleDocument = null;
     _imageBytes = null;
     _previewImageBytes = null;
     _imageB64Cache = null;
@@ -167,6 +171,27 @@ class I2IConfig with ChangeNotifier {
     revision++;
     planRevision++;
     notifyListeners();
+  }
+
+  /// Canvas edits retain the image coordinate system, existing mask and size
+  /// settings. A replaced source invalidates the editor's pending result.
+  bool applyScribble(
+      Uint8List bytes, ScribbleDocument document, int expectedRevision) {
+    if (_imageRevision != expectedRevision ||
+        !hasImage ||
+        width != document.width ||
+        height != document.height) {
+      return false;
+    }
+    _imageBytes = bytes;
+    _previewImageBytes = null;
+    _imageB64Cache = null;
+    scribbleDocument = document;
+    _imageRevision++;
+    revision++;
+    planRevision++;
+    notifyListeners();
+    return true;
   }
 
   void setMask(

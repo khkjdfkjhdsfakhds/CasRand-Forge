@@ -79,12 +79,15 @@ class EnhancePageViewmodel extends ChangeNotifier {
       final rawDescription = decodedOuter['Description'];
       final modelSource = decodedOuter['Source']?.toString() ?? '';
       if (comment.isEmpty && rawDescription is! String) return;
-      payloadConfig.importMetadataToFixedProfile(
-        comment,
-        prompt: rawDescription is String ? rawDescription : null,
-        model: modelFromSource(modelSource),
+      final model = modelFromSource(modelSource) ??
+          baseModelForInpaintTransport(comment['model']?.toString() ?? '');
+      source.setSourceMetadata(
+        prompt: rawDescription is String
+            ? rawDescription
+            : comment['prompt']?.toString(),
+        model: model,
       );
-      _lastImportActivatedFixedMode = true;
+      _lastImportActivatedFixedMode = false;
     } catch (_) {
       // The image remains usable even if its embedded metadata is malformed.
     }
@@ -121,7 +124,10 @@ class EnhancePageViewmodel extends ChangeNotifier {
     return EnhanceRequestOptions.apiSize(size.width, size.height);
   }
 
-  String get model => payloadConfig.paramConfig.model;
+  String get model =>
+      config.sourceModel ??
+      (baseModelForInpaintTransport(payloadConfig.paramConfig.model) ??
+          payloadConfig.paramConfig.model);
   bool get canUseMax => config.canUseMax(model);
   bool get usesMax => config.usesMax(model);
   bool get canGenerate =>
@@ -179,7 +185,7 @@ class EnhancePageViewmodel extends ChangeNotifier {
       smDyn: false,
       tier: payloadConfig.settings.subscriptionTier,
       subscriptionActive: payloadConfig.settings.subscriptionActive,
-      model: paramConfig.model,
+      model: model,
       opusUsageAvailable: payloadConfig.settings.opusUsageAvailable,
     );
   }

@@ -11,4 +11,5 @@ class I2iTabViewmodel extends ChangeNotifier {
       ImageImportCapabilities.forModel(paramConfig.model);
   bool get isV4 => capabilities.isV4Family;
   bool get isV5 => capabilities.isV5Family;
+  bool get isLegacy => capabilities.usesLegacyVibe;
 }

@@ -4,12 +4,16 @@ class ApiTokenConfig {
   String token;
   bool enabled;
   bool isPrimary;
+  bool allowPoints;
+  bool allowFree;
 
   ApiTokenConfig({
     required this.label,
     required this.token,
     this.enabled = true,
     this.isPrimary = false,
+    this.allowPoints = true,
+    this.allowFree = true,
   });
 
   Map<String, dynamic> toJson() {
@@ -18,6 +22,8 @@ class ApiTokenConfig {
       'token': token,
       'enabled': enabled,
       'is_primary': isPrimary,
+      'allow_points': allowPoints,
+      'allow_free': allowFree,
     };
   }
 
@@ -27,6 +33,8 @@ class ApiTokenConfig {
       token: json['token'] ?? '',
       enabled: json['enabled'] ?? true,
       isPrimary: json['is_primary'] ?? false,
+      allowPoints: json['allow_points'] ?? true,
+      allowFree: json['allow_free'] ?? true,
     );
   }
 

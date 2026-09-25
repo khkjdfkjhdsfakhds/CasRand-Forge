@@ -25,6 +25,14 @@ import 'package:nai_casrand/data/use_cases/autocrop_planner.dart'
 import 'package:super_clipboard/super_clipboard.dart';
 
 typedef ClipboardMaskImageReader = Future<Uint8List?> Function();
+typedef ClipboardMaskImageWriter = Future<void> Function(Uint8List bytes);
+
+Future<void> writeClipboardMaskImage(Uint8List bytes) async {
+  final clipboard = SystemClipboard.instance;
+  if (clipboard == null) throw StateError('Clipboard unavailable');
+  final item = DataWriterItem()..add(Formats.png(bytes));
+  await clipboard.write([item]);
+}
 
 Future<Uint8List?> readClipboardMaskImage() async {
   final clipboard = SystemClipboard.instance;
@@ -103,6 +111,7 @@ class MaskEditorView extends StatefulWidget {
   final CropRect? initialFocusFrame;
   final int initialContextPx;
   final ClipboardMaskImageReader? clipboardImageReader;
+  final ClipboardMaskImageWriter? clipboardImageWriter;
 
   const MaskEditorView({
     super.key,
@@ -115,6 +124,7 @@ class MaskEditorView extends StatefulWidget {
     this.initialFocusFrame,
     this.initialContextPx = defaultContextPx,
     this.clipboardImageReader,
+    this.clipboardImageWriter,
   });
 
   static Future<MaskEditorResult?> open(
@@ -204,93 +214,147 @@ class _MaskEditorViewState extends State<MaskEditorView> {
 
   @override
   Widget build(BuildContext context) {
-    final compactAppBar = MediaQuery.sizeOf(context).width < 600;
-    return CallbackShortcuts(
-      bindings: {
-        const SingleActivator(LogicalKeyboardKey.keyV, meta: true): () {
-          if (!_isImporting) unawaited(_pasteMask());
+    return LayoutBuilder(builder: (context, constraints) {
+      final compactAppBar = constraints.maxWidth < 600;
+      return CallbackShortcuts(
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.keyC, meta: true): _copyMask,
+          const SingleActivator(LogicalKeyboardKey.keyC, control: true):
+              _copyMask,
+          const SingleActivator(LogicalKeyboardKey.keyV, meta: true): () {
+            if (!_isImporting) unawaited(_pasteMask());
+          },
+          const SingleActivator(LogicalKeyboardKey.keyV, control: true): () {
+            if (!_isImporting) unawaited(_pasteMask());
+          },
         },
-        const SingleActivator(LogicalKeyboardKey.keyV, control: true): () {
-          if (!_isImporting) unawaited(_pasteMask());
-        },
-      },
-      child: Focus(
-        autofocus: true,
-        child: Scaffold(
-          appBar: AppBar(
-            title: compactAppBar ? null : Text(tr('mask_editor_title')),
-            leading: IconButton(
-              key: const Key('mask-editor-cancel'),
-              icon: const Icon(Icons.close),
-              tooltip: tr('cancel'),
-              onPressed: () => Navigator.of(context).pop(),
-            ),
-            actions: [
-              IconButton(
-                key: const Key('mask-editor-import'),
-                icon: _isImporting
-                    ? const SizedBox.square(
-                        dimension: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.file_open_outlined),
-                tooltip: tr('mask_import_title'),
-                onPressed: _isImporting ? null : _importMask,
+        child: Focus(
+          autofocus: true,
+          child: Scaffold(
+            appBar: AppBar(
+              title: compactAppBar ? null : Text(tr('mask_editor_title')),
+              leading: IconButton(
+                key: const Key('mask-editor-cancel'),
+                icon: const Icon(Icons.close),
+                tooltip: tr('cancel'),
+                onPressed: () => Navigator.of(context).pop(),
               ),
-              IconButton(
-                key: const Key('mask-editor-undo'),
-                icon: const Icon(Icons.undo),
-                tooltip: tr('mask_editor_undo'),
-                onPressed: _undoStack.isEmpty ? null : _undo,
-              ),
-              IconButton(
-                key: const Key('mask-editor-redo'),
-                icon: const Icon(Icons.redo),
-                tooltip: tr('mask_editor_redo'),
-                onPressed: _redoStack.isEmpty ? null : _redo,
-              ),
-              IconButton(
-                key: const Key('mask-editor-clear'),
-                icon: const Icon(Icons.delete_sweep_outlined),
-                tooltip: tr('mask_editor_clear'),
-                onPressed:
-                    _strokes.isEmpty && _baseMaskBytes == null ? null : _clear,
-              ),
-              const SizedBox(width: 8),
-              if (compactAppBar)
-                IconButton(
-                  key: const Key('mask-editor-done'),
-                  onPressed: _finish,
-                  icon: const Icon(Icons.check),
-                  tooltip: tr('confirm'),
-                )
-              else
-                FilledButton.icon(
-                  key: const Key('mask-editor-done'),
-                  onPressed: _finish,
-                  icon: const Icon(Icons.check),
-                  label: Text(tr('confirm')),
-                ),
-              const SizedBox(width: 8),
-            ],
-          ),
-          body: Column(
-            children: [
-              Expanded(
-                child: Container(
-                  color: Colors.black26,
-                  child: LayoutBuilder(
-                    builder: (context, constraints) =>
-                        _buildCanvas(constraints),
+              actions: [
+                if (compactAppBar)
+                  PopupMenuButton<String>(
+                    key: const Key('mask-editor-actions'),
+                    enabled: !_isImporting,
+                    icon: _isImporting
+                        ? const SizedBox.square(
+                            dimension: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.more_horiz),
+                    onSelected: (action) {
+                      switch (action) {
+                        case 'copy':
+                          unawaited(_copyMask());
+                        case 'invert':
+                          unawaited(_invertMask());
+                        case 'import':
+                          unawaited(_importMask());
+                      }
+                    },
+                    itemBuilder: (_) => [
+                      PopupMenuItem(
+                          value: 'copy', child: Text(tr('mask_editor_copy'))),
+                      PopupMenuItem(
+                          value: 'invert',
+                          child: Text(tr('mask_import_invert'))),
+                      PopupMenuItem(
+                          value: 'import',
+                          child: Text(tr('mask_import_title'))),
+                    ],
+                  )
+                else ...[
+                  IconButton(
+                    key: const Key('mask-editor-copy'),
+                    icon: const Icon(Icons.copy_outlined),
+                    tooltip: tr('mask_editor_copy'),
+                    onPressed: _isImporting ? null : _copyMask,
                   ),
+                  IconButton(
+                    key: const Key('mask-editor-invert'),
+                    icon: const Icon(Icons.invert_colors),
+                    tooltip: tr('mask_import_invert'),
+                    onPressed: _isImporting ? null : _invertMask,
+                  ),
+                  IconButton(
+                    key: const Key('mask-editor-import'),
+                    icon: _isImporting
+                        ? const SizedBox.square(
+                            dimension: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.file_open_outlined),
+                    tooltip: tr('mask_import_title'),
+                    onPressed: _isImporting ? null : _importMask,
+                  ),
+                ],
+                IconButton(
+                  key: const Key('mask-editor-undo'),
+                  icon: const Icon(Icons.undo),
+                  tooltip: tr('mask_editor_undo'),
+                  onPressed: _isImporting || _undoStack.isEmpty ? null : _undo,
                 ),
+                IconButton(
+                  key: const Key('mask-editor-redo'),
+                  icon: const Icon(Icons.redo),
+                  tooltip: tr('mask_editor_redo'),
+                  onPressed: _isImporting || _redoStack.isEmpty ? null : _redo,
+                ),
+                IconButton(
+                  key: const Key('mask-editor-clear'),
+                  icon: const Icon(Icons.delete_sweep_outlined),
+                  tooltip: tr('mask_editor_clear'),
+                  onPressed: _isImporting ||
+                          (_strokes.isEmpty && _baseMaskBytes == null)
+                      ? null
+                      : _clear,
+                ),
+                const SizedBox(width: 8),
+                if (compactAppBar)
+                  IconButton(
+                    key: const Key('mask-editor-done'),
+                    onPressed: _isImporting ? null : _finish,
+                    icon: const Icon(Icons.check),
+                    tooltip: tr('confirm'),
+                  )
+                else
+                  FilledButton.icon(
+                    key: const Key('mask-editor-done'),
+                    onPressed: _isImporting ? null : _finish,
+                    icon: const Icon(Icons.check),
+                    label: Text(tr('confirm')),
+                  ),
+                const SizedBox(width: 8),
+              ],
+            ),
+            body: AbsorbPointer(
+              absorbing: _isImporting,
+              child: Column(
+                children: [
+                  Expanded(
+                    child: Container(
+                      color: Colors.black26,
+                      child: LayoutBuilder(
+                        builder: (context, constraints) =>
+                            _buildCanvas(constraints),
+                      ),
+                    ),
+                  ),
+                  _buildToolbar(),
+                ],
               ),
-              _buildToolbar(),
-            ],
+            ),
           ),
         ),
-      ),
-    );
+      );
+    });
   }
 
   Widget _buildCanvas(BoxConstraints constraints) {
@@ -373,7 +437,7 @@ class _MaskEditorViewState extends State<MaskEditorView> {
               child: Image.memory(
                 widget.displayImageBytes ?? widget.imageBytes,
                 fit: BoxFit.fill,
-                filterQuality: FilterQuality.medium,
+                filterQuality: FilterQuality.high,
                 gaplessPlayback: true,
               ),
             ),
@@ -698,17 +762,32 @@ class _MaskEditorViewState extends State<MaskEditorView> {
   }
 
   Future<void> _undo() async {
-    if (_undoStack.isEmpty) return;
-    final previous = _undoStack.removeLast();
-    _redoStack.add(_snapshot());
-    await _restoreSnapshot(previous);
+    await _restoreHistory(_undoStack, _redoStack);
   }
 
   Future<void> _redo() async {
-    if (_redoStack.isEmpty) return;
-    final next = _redoStack.removeLast();
-    _undoStack.add(_snapshot());
-    await _restoreSnapshot(next);
+    await _restoreHistory(_redoStack, _undoStack);
+  }
+
+  Future<void> _restoreHistory(
+      List<_EditorSnapshot> from, List<_EditorSnapshot> to) async {
+    if (_isImporting || from.isEmpty) return;
+    final current = _snapshot();
+    setState(() => _isImporting = true);
+    try {
+      await _restoreSnapshot(from.last);
+      if (!mounted) return;
+      from.removeLast();
+      to.add(current);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(tr('mask_editor_operation_failed'))),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isImporting = false);
+    }
   }
 
   void _clear() {
@@ -829,6 +908,47 @@ class _MaskEditorViewState extends State<MaskEditorView> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(tr('mask_import_decode_failed'))),
+      );
+    } finally {
+      if (mounted) setState(() => _isImporting = false);
+    }
+  }
+
+  Future<void> _copyMask() => _processMask(copy: true);
+
+  Future<void> _invertMask() => _processMask(copy: false);
+
+  Future<void> _processMask({required bool copy}) async {
+    if (_isImporting) return;
+    setState(() => _isImporting = true);
+    try {
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+      final bytes = await rasterizeMaskLayers(
+        baseMaskBytes: _baseMaskBytes,
+        strokes: List.of(_strokes),
+        imageWidth: widget.imageWidth,
+        imageHeight: widget.imageHeight,
+      );
+      if (!mounted) return;
+      if (copy) {
+        final exported = await compute(exportInpaintMask, bytes);
+        if (!mounted) return;
+        await (widget.clipboardImageWriter ??
+            writeClipboardMaskImage)(exported);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(tr('mask_editor_copied'))),
+        );
+      } else {
+        final inverted = await compute(invertInpaintMask, bytes);
+        if (!mounted) return;
+        await _replaceBaseMask(inverted);
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(tr('mask_editor_operation_failed'))),
       );
     } finally {
       if (mounted) setState(() => _isImporting = false);

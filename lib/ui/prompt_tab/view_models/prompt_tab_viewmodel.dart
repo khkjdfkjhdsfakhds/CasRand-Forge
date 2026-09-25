@@ -62,6 +62,10 @@ class PromptTabViewmodel extends ChangeNotifier {
 
   void promptModeChanged() => notifyListeners();
 
+  /// Refreshes prompt cards after a nested character editor changes a shared
+  /// character configuration.
+  void notifyConfigChanged() => notifyListeners();
+
   void setFixedPrompt(String value) {
     if (!isFixedMode) return;
     payloadConfig!.fixedProfile.rootPromptConfig =
@@ -121,14 +125,18 @@ class PromptTabViewmodel extends ChangeNotifier {
   void setAutoPosition(bool value) {
     paramConfig.autoPosition = value;
     for (final character in characterConfigList) {
-      if (value) {
-        // The setting is global for the payload. Clear stale V5 points so an
-        // old manual coordinate cannot force use_coords back on.
+      if (value && character.freeCenter != null) {
+        character.rememberedFreeCenter = character.freeCenter;
         character.freeCenter = null;
-      } else {
-        if (character.positions.isEmpty) {
-          character.positions = [CharacterConfig.defaultPosition];
-        }
+      } else if (!value &&
+          character.freeCenter == null &&
+          character.rememberedFreeCenter != null) {
+        character.freeCenter = character.rememberedFreeCenter;
+      }
+      if (!value &&
+          character.positions.isEmpty &&
+          character.freeCenter == null) {
+        character.positions = [CharacterConfig.defaultPosition];
       }
     }
     notifyListeners();

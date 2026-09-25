@@ -85,6 +85,50 @@ void main() {
     expect(candidate.metadataError, isNull);
   });
 
+  testWidgets(
+      'new destinations hand off images and only valid metadata changes settings',
+      (tester) async {
+    final payload = _payloadForModel('nai-diffusion-5-full');
+    final navigation = NavigationRequest();
+    final handoff = ImageHandoffCoordinator(
+      payloadConfig: payload,
+      navigation: navigation,
+      readDimensions: (_) async => const ImageDimensions(width: 2, height: 3),
+    );
+    final viewmodel = MetadataDropAreaViewmodel(
+        payloadConfig: payload, imageHandoff: handoff);
+    final bytes = _testPng();
+    final previousFixed = payload.fixedProfile.paramConfig;
+    handoff.addListener(tester.binding.scheduleFrame);
+    await tester.pumpWidget(const MaterialApp(home: Scaffold()));
+    expect(viewmodel.useAsEnhance(bytes), isTrue);
+    expect(navigation.requestedDestination.value, AppDestination.enhance);
+    await tester.pump();
+    await tester.pump();
+    expect(payload.enhanceConfig.imageBytes, same(bytes));
+    expect(payload.fixedProfile.paramConfig, same(previousFixed));
+    expect(payload.promptMode, PromptMode.random);
+    expect(
+        viewmodel.useAsEnhance(bytes,
+            metadata: {'steps': 22, 'seed': 42},
+            prompt: 'imported',
+            model: 'nai-diffusion-5-full'),
+        isTrue);
+    await tester.pump();
+    await tester.pump();
+    expect(payload.promptMode, PromptMode.random, reason: '${handoff.error}');
+    expect(payload.enhanceConfig.sourcePrompt, 'imported');
+    expect(payload.enhanceConfig.sourceModel, 'nai-diffusion-5-full');
+    expect(payload.fixedProfile.paramConfig, same(previousFixed));
+    expect(viewmodel.useAsDirectorTools(bytes), isTrue);
+    expect(navigation.requestedDestination.value, AppDestination.directorTools);
+    await tester.pump();
+    await tester.pump();
+    expect(payload.directorToolConfig.imageBytes, same(bytes));
+    expect(payload.i2iConfig.imageBytes, isNull);
+    handoff.dispose();
+  });
+
   test('image candidate keeps usable metadata when one field is malformed',
       () async {
     final candidate = await ImageImportCandidate.fromImageBytes(
@@ -210,10 +254,12 @@ void main() {
 
     expect(find.byKey(const Key('image-import-preview')), findsOneWidget);
     expect(find.byKey(const Key('image-import-i2i')), findsOneWidget);
+    expect(find.byKey(const Key('image-import-enhance')), findsOneWidget);
+    expect(find.byKey(const Key('image-import-director')), findsOneWidget);
     expect(find.byKey(const Key('image-import-inpaint')), findsOneWidget);
-    expect(find.byKey(const Key('image-import-vibe')), findsNothing);
+    expect(find.byKey(const Key('image-import-vibe')), findsOneWidget);
     expect(
-        find.byKey(const Key('image-import-precise-reference')), findsNothing);
+        find.byKey(const Key('image-import-precise-reference')), findsOneWidget);
     expect(
         find.byKey(const Key('image-import-metadata-section')), findsNothing);
 
@@ -224,6 +270,7 @@ void main() {
     expect(navigation.requestedDestination.value, AppDestination.imageToImage);
     expect(payload.i2iConfig.imageBytes, bytes);
     expect(payload.promptMode, PromptMode.random);
+    expect(payload.paramConfig.model, 'nai-diffusion-5-full');
   });
 
   testWidgets('NAI5 inpaint action opens the mask-editor entry mode', (
@@ -424,6 +471,129 @@ void main() {
     expect(payload.promptMode, PromptMode.random);
   });
 
+  testWidgets('NAI5 chooser imports an image as a Vibe reference without changing model', (
+    tester,
+  ) async {
+    final payload = _payloadForModel('nai-diffusion-5-full');
+    final navigation = NavigationRequest();
+    final viewmodel = MetadataDropAreaViewmodel(
+      payloadConfig: payload,
+      navigation: navigation,
+    );
+    final bytes = _testPng();
+
+    await tester.pumpWidget(
+      EasyLocalization(
+        supportedLocales: const [Locale('en')],
+        path: 'test',
+        assetLoader: _TestAssetLoader(translations),
+        fallbackLocale: const Locale('en'),
+        startLocale: const Locale('en'),
+        saveLocale: false,
+        child: Builder(
+          builder: (context) => MaterialApp(
+            localizationsDelegates: context.localizationDelegates,
+            supportedLocales: context.supportedLocales,
+            locale: context.locale,
+            home: Scaffold(
+              body: Builder(
+                builder: (context) => TextButton(
+                  onPressed: () => showImageImportDialog(
+                    context,
+                    candidate: ImageImportCandidate(
+                      bytes: bytes,
+                      fileName: 'vibe5.png',
+                    ),
+                    viewmodel: viewmodel,
+                  ),
+                  child: const Text('Open'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('image-import-vibe')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('image-import-vibe')));
+    await tester.pumpAndSettle();
+
+    expect(payload.vibeConfigListV4, hasLength(1));
+    expect(payload.vibeConfigListV4.single.fileName, 'vibe5.png');
+    expect(navigation.requestedDestination.value, AppDestination.vibeReference);
+    expect(payload.paramConfig.model, 'nai-diffusion-5-full');
+  });
+
+  testWidgets('NAI5 chooser imports an image as a Precise Reference without changing model', (
+    tester,
+  ) async {
+    final payload = _payloadForModel('nai-diffusion-5-full');
+    final navigation = NavigationRequest();
+    final viewmodel = MetadataDropAreaViewmodel(
+      payloadConfig: payload,
+      navigation: navigation,
+      preciseReferenceImporter: (bytes, fileName) async {
+        payload.preciseReferenceConfigList.add(
+          PreciseReferenceConfig(
+            imageB64: base64Encode(bytes),
+            fileName: fileName,
+          ),
+        );
+        return true;
+      },
+    );
+    final bytes = _testPng();
+
+    await tester.pumpWidget(
+      EasyLocalization(
+        supportedLocales: const [Locale('en')],
+        path: 'test',
+        assetLoader: _TestAssetLoader(translations),
+        fallbackLocale: const Locale('en'),
+        startLocale: const Locale('en'),
+        saveLocale: false,
+        child: Builder(
+          builder: (context) => MaterialApp(
+            localizationsDelegates: context.localizationDelegates,
+            supportedLocales: context.supportedLocales,
+            locale: context.locale,
+            home: Scaffold(
+              body: Builder(
+                builder: (context) => TextButton(
+                  onPressed: () => showImageImportDialog(
+                    context,
+                    candidate: ImageImportCandidate(
+                      bytes: bytes,
+                      fileName: 'ref5.png',
+                    ),
+                    viewmodel: viewmodel,
+                  ),
+                  child: const Text('Open Reference'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open Reference'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('image-import-precise-reference')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('image-import-precise-reference')));
+    await tester.pumpAndSettle();
+
+    expect(payload.preciseReferenceConfigList, hasLength(1));
+    expect(payload.preciseReferenceConfigList.single.fileName, 'ref5.png');
+    expect(navigation.requestedDestination.value, AppDestination.vibeReference);
+    expect(payload.paramConfig.model, 'nai-diffusion-5-full');
+  });
+
   testWidgets('metadata choices import only selected fixed-profile categories',
       (
     tester,
@@ -510,7 +680,7 @@ void main() {
     await tester.tap(undesired);
     final seed = find.byKey(const Key('metadata-import-seed'));
     await tester.ensureVisible(seed);
-    await tester.tap(seed);
+    expect(tester.widget<CheckboxListTile>(seed).value, isFalse);
     final confirm = find.byKey(const Key('metadata-import-confirm'));
     await tester.ensureVisible(confirm);
     await tester.tap(confirm);
@@ -522,6 +692,70 @@ void main() {
     expect(payload.fixedProfile.paramConfig.steps, 30);
     expect(payload.fixedProfile.paramConfig.model, 'nai-diffusion-4-5-full');
     expect(payload.fixedProfile.paramConfig.seed, 111);
+  });
+
+  testWidgets(
+      'seed import checkbox is unchecked by default and preserves existing seed',
+      (tester) async {
+    final payload = _payloadForModel('nai-diffusion-5-full');
+    payload.fixedProfile.paramConfig
+      ..randomSeed = true
+      ..seed = 12345;
+    final viewmodel = MetadataDropAreaViewmodel(payloadConfig: payload);
+
+    await tester.pumpWidget(
+      EasyLocalization(
+        supportedLocales: const [Locale('en')],
+        path: 'test',
+        assetLoader: _TestAssetLoader(translations),
+        fallbackLocale: const Locale('en'),
+        startLocale: const Locale('en'),
+        saveLocale: false,
+        child: Builder(
+          builder: (context) => MaterialApp(
+            localizationsDelegates: context.localizationDelegates,
+            supportedLocales: context.supportedLocales,
+            locale: context.locale,
+            home: Scaffold(
+              body: Builder(
+                builder: (context) => TextButton(
+                  onPressed: () => showImageImportDialog(
+                    context,
+                    candidate: ImageImportCandidate(
+                      bytes: _testPng(),
+                      fileName: 'seed-test.png',
+                      prompt: 'prompt text',
+                      model: 'nai-diffusion-5-full',
+                      metadata: const {
+                        'seed': 999999,
+                        'steps': 28,
+                      },
+                    ),
+                    viewmodel: viewmodel,
+                  ),
+                  child: const Text('Open Dialog'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open Dialog'));
+    await tester.pumpAndSettle();
+
+    final seedFinder = find.byKey(const Key('metadata-import-seed'));
+    expect(seedFinder, findsOneWidget);
+    expect(tester.widget<CheckboxListTile>(seedFinder).value, isFalse);
+
+    final confirm = find.byKey(const Key('metadata-import-confirm'));
+    await tester.ensureVisible(confirm);
+    await tester.tap(confirm);
+    await tester.pumpAndSettle();
+
+    expect(payload.fixedProfile.paramConfig.randomSeed, isTrue);
+    expect(payload.fixedProfile.paramConfig.seed, 12345);
   });
 
   testWidgets('metadata import clears stale characters and fixes the seed', (
@@ -602,6 +836,10 @@ void main() {
       find.byKey(const Key('metadata-import-characters')),
       findsOneWidget,
     );
+    final seed = find.byKey(const Key('metadata-import-seed'));
+    await tester.ensureVisible(seed);
+    expect(tester.widget<CheckboxListTile>(seed).value, isFalse);
+    await tester.tap(seed);
     final confirm = find.byKey(const Key('metadata-import-confirm'));
     await tester.ensureVisible(confirm);
     await tester.tap(confirm);
@@ -1009,6 +1247,76 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
     expect(find.byType(ImageImportDialog), findsNothing);
+  });
+
+  testWidgets(
+      'using as image to image imports checked metadata and sets i2i base image',
+      (tester) async {
+    final payload = _payloadForModel('nai-diffusion-5-full');
+    payload.promptMode = PromptMode.fixed;
+    final navigation = NavigationRequest();
+    final handoff = ImageHandoffCoordinator(
+      payloadConfig: payload,
+      navigation: navigation,
+      readDimensions: (_) async => const ImageDimensions(width: 2, height: 3),
+      createPreview: (bytes, _) async => bytes,
+    );
+    final viewmodel = MetadataDropAreaViewmodel(
+      payloadConfig: payload,
+      imageHandoff: handoff,
+    );
+    final bytes = _testPng();
+
+    await tester.pumpWidget(
+      EasyLocalization(
+        supportedLocales: const [Locale('en')],
+        path: 'test',
+        assetLoader: _TestAssetLoader(translations),
+        fallbackLocale: const Locale('en'),
+        startLocale: const Locale('en'),
+        saveLocale: false,
+        child: Builder(
+          builder: (context) => MaterialApp(
+            localizationsDelegates: context.localizationDelegates,
+            supportedLocales: context.supportedLocales,
+            locale: context.locale,
+            home: Scaffold(
+              body: Builder(
+                builder: (context) => TextButton(
+                  onPressed: () => showImageImportDialog(
+                    context,
+                    candidate: ImageImportCandidate(
+                      bytes: bytes,
+                      fileName: 'combo.png',
+                      prompt: 'imported prompt',
+                      model: 'nai-diffusion-5-full',
+                      metadata: const {
+                        'uc': 'imported negative',
+                        'steps': 30,
+                      },
+                    ),
+                    viewmodel: viewmodel,
+                  ),
+                  child: const Text('Open Combo'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open Combo'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('image-import-i2i')));
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(navigation.requestedDestination.value, AppDestination.imageToImage);
+    expect(payload.i2iConfig.imageBytes, bytes);
+    expect(payload.promptMode, PromptMode.fixed);
+    expect(payload.fixedProfile.rootPromptConfig.strs.first, 'imported prompt');
   });
 
   test('image import copy exists in both bundled locales', () async {

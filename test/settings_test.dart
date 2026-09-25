@@ -362,4 +362,37 @@ void main() {
     expect(ApiTokenConfig(label: 'two', token: 'xy').maskedToken, 'xy···');
     expect(ApiTokenConfig(label: 'short', token: 'pst').maskedToken, 'ps···');
   });
+
+  test('empty apiKey automatically elects first enabled token in apiTokens', () {
+    final settings = Settings.fromJson({
+      'api_key': '',
+      'api_tokens': [
+        {'label': 'TB2', 'token': 'pst-tb2', 'enabled': true, 'is_primary': false},
+        {'label': 'TB3', 'token': 'pst-tb3', 'enabled': true, 'is_primary': false},
+      ],
+      'parallel_api_enabled': false,
+    });
+
+    expect(settings.apiKey, 'pst-tb2');
+    expect(settings.apiTokens.first.isPrimary, isTrue);
+    expect(settings.effectiveApiTokens, hasLength(1));
+    expect(settings.effectiveApiTokens.single.token, 'pst-tb2');
+  });
+
+  test('clearing apiKey via updatePrimaryApiKey falls back to next available token', () {
+    final settings = Settings.fromJson({
+      'api_key': 'pst-main',
+      'api_tokens': [
+        {'label': 'Main', 'token': 'pst-main', 'enabled': true, 'is_primary': true},
+        {'label': 'Backup', 'token': 'pst-backup', 'enabled': true, 'is_primary': false},
+      ],
+      'parallel_api_enabled': false,
+    });
+
+    settings.updatePrimaryApiKey('');
+    expect(settings.apiKey, 'pst-backup');
+    expect(settings.apiTokens.single.token, 'pst-backup');
+    expect(settings.apiTokens.single.isPrimary, isTrue);
+    expect(settings.effectiveApiTokens.single.token, 'pst-backup');
+  });
 }

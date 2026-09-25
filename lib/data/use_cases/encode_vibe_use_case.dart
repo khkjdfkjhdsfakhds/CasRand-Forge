@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -7,17 +6,13 @@ import 'package:nai_casrand/data/services/api_service.dart';
 import 'package:uuid/uuid.dart';
 
 class VibeEncodingException extends NovelAiApiException {
-  /// Late bytes are an encoding, not a generated-image ZIP. Keep their typed
-  /// continuation separate from the generic image-response continuation.
-  final Future<String>? lateEncoding;
-
   const VibeEncodingException(
     super.message, {
     super.statusCode,
     super.isTransient,
     super.isOutcomeUnknown,
+    super.isRequestNotSent,
     super.retryAfter,
-    this.lateEncoding,
   });
 }
 
@@ -111,17 +106,13 @@ class EncodeVibeUseCase {
   }
 
   static VibeEncodingException _encodingError(NovelAiApiException error) {
-    final lateEncoding = error.lateResponse?.then(_decodeResponse);
-    if (lateEncoding != null) {
-      unawaited(lateEncoding.then<void>((_) {}, onError: (Object _) {}));
-    }
     return VibeEncodingException(
       error.message,
       statusCode: error.statusCode,
       isTransient: error.isTransient,
       isOutcomeUnknown: error.isOutcomeUnknown,
+      isRequestNotSent: error.isRequestNotSent,
       retryAfter: error.retryAfter,
-      lateEncoding: lateEncoding,
     );
   }
 }

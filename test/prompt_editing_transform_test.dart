@@ -72,15 +72,14 @@ void main() {
       expect(result.value.selection.extentOffset, '1.1::haku89'.length);
     });
 
-    test('rounds numeric weights and unwraps exactly at one', () {
+    test('rounds numeric weights and preserves explicit one', () {
       final up = weight('0.9::tag::', 9, PromptWeightDirection.increase);
-      expect(up.value.text, 'tag');
-      // 1 is represented by the original unweighted body, not a redundant
-      // numeric wrapper.
+      expect(up.value.text, '1::tag::');
+      // Neutral weight remains explicit so the group survives repeat edits.
       final down = weight('1.00::tag::', 11, PromptWeightDirection.decrease);
       expect(down.value.text, '0.9::tag::');
       final unwrapped = weight('0.9::tag::', 9, PromptWeightDirection.increase);
-      expect(unwrapped.value.text, 'tag');
+      expect(unwrapped.value.text, '1::tag::');
       final toOne = weight('1.00::tag::', 11, PromptWeightDirection.increase);
       expect(toOne.value.text, '1.1::tag::');
     });

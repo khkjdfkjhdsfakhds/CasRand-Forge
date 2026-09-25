@@ -116,6 +116,31 @@ void main() {
         ? ClassicInfoCard(command: command)
         : InfoCard(command: command);
     testWidgets(
+        '${classic ? "classic" : "waterfall"} distinguishes receiving from disconnected recovery',
+        (tester) async {
+      final status = GetIt.I<CommandStatus>();
+      final command = Command.createAsyncNoParam(() async => _content(''),
+          initialValue: _content(''));
+      addTearDown(command.dispose);
+      await tester.pumpWidget(_app(card(command)));
+      await tester.pumpAndSettle();
+      status.setOutcomeUnknown(command,
+          phase: GenerationOutcomePhase.receiving);
+      await tester.pump();
+      expect(find.text('Response delayed; still receiving'), findsOneWidget);
+      expect(find.text('Regenerate original task'), findsNothing);
+      var retries = 0;
+      status.setOutcomeUnknown(command,
+          phase: GenerationOutcomePhase.disconnected, onRetry: () => retries++);
+      await tester.pump();
+      expect(find.text('Connection interrupted; image not fully received'),
+          findsOneWidget);
+      expect(find.textContaining('may consume credits again'), findsOneWidget);
+      await tester.tap(find.text('Regenerate original task'));
+      expect(retries, 1);
+      expect(tester.takeException(), isNull);
+    });
+    testWidgets(
         '${classic ? 'classic' : 'waterfall'} error card identifies its account',
         (tester) async {
       final command = Command.createAsyncNoParam(() async => _content('failed'),

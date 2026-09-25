@@ -215,7 +215,7 @@ void main() {
 
   for (final status in ['401', '402', '403']) {
     testWidgets(
-        'Account HTTP $status pauses immediately while healthy account continues',
+        'Account HTTP $status allows healthy account to finish queued tasks',
         (tester) async {
       _networkSettings(count: 3);
       final api = _NetworkAuditApi();
@@ -263,7 +263,7 @@ void main() {
     expect(vm.commandStatus.isGenerationActive.value, isFalse);
     vm.dispose();
   });
-  testWidgets('NET-02 timeout must not silently repeat unknown-outcome POST',
+  testWidgets('build117 NET-02 timeout automatically retries the logical task',
       (tester) async {
     _networkSettings(count: 1, parallel: false);
     final transport = _NetworkAuditHttp();
@@ -291,10 +291,10 @@ void main() {
         'NET02 automaticPosts=$count error=$error resultCards=${vm.commandList.length} successes=${vm.commandStatus.currentGenerationCount}');
     vm.dispose();
     api.close();
-    expect(count, 1,
-        reason: 'Client timeout is not proof the server failed to generate');
+    expect(count, 2,
+        reason: 'build117 retries after the first five-second backoff');
   });
-  testWidgets('NET-03 HTTP Retry-After is respected before trying again',
+  testWidgets('build117 NET-03 rate limit uses the original five-second delay',
       (tester) async {
     _networkSettings(count: 1, parallel: false);
     final transport = _NetworkAuditHttp();
@@ -308,9 +308,8 @@ void main() {
     await tester.pump(const Duration(seconds: 5));
     await _networkPump(tester);
     final calls = transport.requests.length;
-    expect(vm.commandStatus.waitingFor(vm.commandList.single), isNotNull);
-    expect(vm.commandStatus.waitingFor(vm.commandList.single)!.message,
-        isNot(contains('{seconds}')));
+    expect(vm.commandStatus.waitingFor(vm.commandList.single), isNull);
+    expect(vm.commandStatus.isExecuting(vm.commandList.single), isTrue);
     vm.stopGeneration();
     expect(vm.commandStatus.waitingFor(vm.commandList.single), isNull);
     if (calls > 1) {
@@ -319,8 +318,8 @@ void main() {
     }
     vm.dispose();
     api.close();
-    debugPrint('NET03 Retry-After=60, POST count at t+5s=$calls');
-    expect(calls, 1);
+    debugPrint('NET03 build117 POST count at t+5s=$calls');
+    expect(calls, 2);
   });
   testWidgets(
       'NET-07 stable task card follows retry execution and account label',

@@ -49,14 +49,14 @@ void main() {
     expect(up(cursor(text, 'three')).value.text,
         '1.2::one, 0.8::two::, 1.1::three::::');
   });
-  test('forward and reversed selections use the same midpoint target', () {
+  test('forward and reversed selections use their exact text range', () {
     const text = 'blue eyes red hair, green eyes';
     for (final selection in const [
       TextSelection(baseOffset: 0, extentOffset: 9),
       TextSelection(baseOffset: 9, extentOffset: 0),
     ]) {
       expect(up(TextEditingValue(text: text, selection: selection)).value.text,
-          '1.1::blue eyes red hair::, green eyes');
+          '1.1::blue eyes:: red hair, green eyes');
     }
   });
   test('prefix, closer and trailing space have a stable weighted target', () {

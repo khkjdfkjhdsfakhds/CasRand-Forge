@@ -1,3 +1,6 @@
+import 'package:nai_casrand/data/services/image_service.dart';
+import 'package:nai_casrand/ui/navigation/view_models/metadata_drop_area_viewmodel.dart';
+import 'package:nai_casrand/ui/navigation/widgets/image_import_dialog.dart';
 import 'package:nai_casrand/data/use_cases/enhance_request_options.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
@@ -6,6 +9,7 @@ import 'package:nai_casrand/data/models/image_handoff_coordinator.dart';
 import 'package:nai_casrand/data/models/enhance_config.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
+import 'package:nai_casrand/core/constants/parameters.dart';
 import 'package:nai_casrand/data/use_cases/anlas_cost.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
 
@@ -42,6 +46,15 @@ class ResultActions {
     return steps is int ? steps : null;
   }
 
+  /// Inpaint responses use a transport-only `*-inpainting` model name. Enhance
+  /// consumes the corresponding base V5 model, so do not let that internal
+  /// request variant disable the V5 Max option on the result card.
+  String? get enhanceSourceModel {
+    final raw = content.additionalInfo['model'];
+    if (raw is! String || raw.isEmpty) return null;
+    return baseModelForInpaintTransport(raw) ?? raw;
+  }
+
   /// Closes the detail page (and any viewer above it) so the navigation
   /// shell, already switched to the target destination, becomes visible.
   void _returnToShell(BuildContext context) {
@@ -65,12 +78,12 @@ class ResultActions {
   void sendToEnhance(BuildContext context) {
     final bytes = content.imageBytes;
     if (bytes == null) return;
-    final rawModel = content.additionalInfo['model'];
     if (!_handoff.sendToEnhance(
       bytes,
       metadata: content.additionalInfo,
       prompt: sourcePrompt,
-      model: rawModel is String ? rawModel : null,
+      model: enhanceSourceModel,
+      updateFixedProfile: true,
     )) {
       return;
     }
@@ -83,6 +96,39 @@ class ResultActions {
     if (bytes == null || !_handoff.sendToDirectorTools(bytes)) return;
     showInfoBar(context, tr('action_director_done'));
     _returnToShell(context);
+  }
+
+  Future<void> importMetadata(BuildContext context) async {
+    final bytes = content.imageBytes;
+    if (bytes == null) return;
+    final viewmodel = MetadataDropAreaViewmodel();
+    // History already holds the generation metadata, even if its preview
+    // has no embedded metadata. Capture this result before opening the dialog.
+    final hasMetadata = content.additionalInfo.isNotEmpty;
+    final candidate = ImageImportCandidate(
+      bytes: bytes,
+      fileName: content.title,
+      metadata: hasMetadata ? content.additionalInfo : null,
+      prompt: sourcePrompt,
+      model: enhanceSourceModel,
+    );
+    try {
+      await showImageImportDialog(
+        context,
+        candidate: candidate,
+        viewmodel: viewmodel,
+        metadataLoader: hasMetadata
+            ? null
+            : () => ImageImportCandidate.fromImageBytes(
+                  bytes: bytes,
+                  fileName: candidate.fileName,
+                  extractMetadata:
+                      ImageService().extractMetadataFromBytesInBackground,
+                ),
+      );
+    } finally {
+      viewmodel.dispose();
+    }
   }
 
   /// Estimates the state after this image is handed off: importing a new
@@ -101,9 +147,7 @@ class ResultActions {
         EnhanceRequestOptions.apiSize(rawTarget.width, rawTarget.height);
     destination.dispose();
     final paramConfig = _payloadConfig.paramConfig;
-    final model = content.additionalInfo['model'] is String
-        ? content.additionalInfo['model'] as String
-        : paramConfig.model;
+    final model = enhanceSourceModel ?? paramConfig.model;
     return estimateAnlasCost(
       width: target.width,
       height: target.height,
@@ -146,9 +190,7 @@ String formatEstimatedAnlasTooltip(AnlasCost? cost) {
   );
 }
 
-/// Action bar shown under a finished image: four evenly weighted tonal
-/// buttons that hand the image off to Enhance / Img2Img / Inpaint / Director
-/// Tools and switch the navigation there.
+/// Actions below a finished image, including selective metadata import.
 class ResultActionBar extends StatelessWidget {
   final InfoCardContent content;
 
@@ -186,12 +228,18 @@ class ResultActionBar extends StatelessWidget {
         label: tr('director_tool'),
         onPressed: () => actions.sendToDirectorTools(context),
       ),
+      _ActionButton(
+        actionKey: const Key('result-action-import-metadata'),
+        icon: Icons.file_download_outlined,
+        label: tr('image_import_metadata_confirm'),
+        onPressed: () => actions.importMetadata(context),
+      ),
     ];
 
     return LayoutBuilder(
       builder: (context, constraints) {
         // Evenly weighted row when there is room; wrap on narrow layouts.
-        final wide = constraints.maxWidth >= 560;
+        final wide = constraints.maxWidth >= 720;
         if (wide) {
           return Row(
             children: [

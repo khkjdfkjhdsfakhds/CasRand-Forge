@@ -39,6 +39,9 @@ class CharacterConfig {
   /// overrides [positions] completely for the generated payload.
   Point<double>? freeCenter;
 
+  /// The last V5 manual center, retained while AI-position mode is active.
+  Point<double>? rememberedFreeCenter;
+
   PromptConfig positivePromptConfig;
   PromptConfig negativePromptConfig;
 
@@ -51,6 +54,7 @@ class CharacterConfig {
     this.name = '',
     required this.positions,
     this.freeCenter,
+    this.rememberedFreeCenter,
     required this.positivePromptConfig,
     required this.negativePromptConfig,
     required this.gender,
@@ -169,6 +173,7 @@ class CharacterConfig {
       name: json['name'] is String ? json['name'] as String : '',
       enabled: json['enabled'] ?? true,
       freeCenter: _freeCenterFromJson(json['freeCenter']),
+      rememberedFreeCenter: _freeCenterFromJson(json['rememberedFreeCenter']),
     );
   }
 
@@ -295,6 +300,9 @@ class CharacterConfig {
       }).toList(),
       'freeCenter':
           freeCenter == null ? null : {'x': freeCenter!.x, 'y': freeCenter!.y},
+      'rememberedFreeCenter': rememberedFreeCenter == null
+          ? null
+          : {'x': rememberedFreeCenter!.x, 'y': rememberedFreeCenter!.y},
       'positivePromptConfig': positivePromptConfig.toJson(),
       'negativePromptConfig': negativePromptConfig.toJson(),
       if (name.isNotEmpty) 'name': name,

@@ -169,8 +169,7 @@ void main() {
     await tester.pump();
   }
 
-  testWidgets(
-      'wheel over an unfocused prompt field still scrolls the parent page',
+  testWidgets('wheel over an unfocused prompt field scrolls its contents first',
       (tester) async {
     final parentController = ScrollController();
     addTearDown(parentController.dispose);
@@ -182,7 +181,7 @@ void main() {
     final field = find.byKey(const Key('nested-prompt-field'));
     final textField = tester.widget<TextField>(field);
     expect(textField.focusNode!.hasFocus, isFalse);
-    expect(textField.scrollPhysics, isA<NeverScrollableScrollPhysics>());
+    expect(textField.scrollPhysics, isNull);
 
     final fieldScrollable = find.descendant(
       of: field,
@@ -199,43 +198,60 @@ void main() {
     );
     await tester.pump();
 
-    expect(parentController.offset, greaterThan(0));
-    expect(fieldPosition.pixels, 0);
-  });
-
-  testWidgets(
-      'wheel over a focused prompt field stays in the field and stops at the bottom',
-      (tester) async {
-    final parentController = ScrollController();
-    addTearDown(parentController.dispose);
-    await pumpNestedPromptField(tester, parentController);
-
-    final field = find.byKey(const Key('nested-prompt-field'));
-    await tester.tap(field);
-    await tester.pump();
-
-    final textField = tester.widget<TextField>(field);
-    expect(textField.focusNode!.hasFocus, isTrue);
-    expect(textField.scrollPhysics, isNull);
-
-    final fieldScrollable = find.descendant(
-      of: field,
-      matching: find.byType(Scrollable),
-    );
-    final fieldPosition =
-        tester.state<ScrollableState>(fieldScrollable).position;
-    expect(fieldPosition.maxScrollExtent, greaterThan(0));
-
-    await tester.sendEventToBinding(
-      PointerScrollEvent(
-        position: tester.getCenter(field),
-        scrollDelta: const Offset(0, 4000),
-      ),
-    );
-    await tester.pump();
-
     expect(parentController.offset, 0);
     expect(fieldPosition.pixels, greaterThan(0));
-    expect(fieldPosition.pixels, fieldPosition.maxScrollExtent);
   });
+
+  for (final focused in [false, true]) {
+    testWidgets('wheel chains at both edges with focused=$focused',
+        (tester) async {
+      final parentController = ScrollController();
+      addTearDown(parentController.dispose);
+      await pumpNestedPromptField(tester, parentController);
+
+      final field = find.byKey(const Key('nested-prompt-field'));
+      if (focused) await tester.tap(field);
+      await tester.pump();
+
+      final textField = tester.widget<TextField>(field);
+      expect(textField.focusNode!.hasFocus, focused);
+      expect(textField.scrollPhysics, isNull);
+
+      final fieldScrollable = find.descendant(
+        of: field,
+        matching: find.byType(Scrollable),
+      );
+      final fieldPosition =
+          tester.state<ScrollableState>(fieldScrollable).position;
+      expect(fieldPosition.maxScrollExtent, greaterThan(0));
+
+      await tester.sendEventToBinding(
+        PointerScrollEvent(
+          position: tester.getCenter(field),
+          scrollDelta: const Offset(0, 4000),
+        ),
+      );
+      await tester.pump();
+
+      expect(parentController.offset, 0);
+      expect(fieldPosition.pixels, greaterThan(0));
+      expect(fieldPosition.pixels, fieldPosition.maxScrollExtent);
+      await tester.sendEventToBinding(PointerScrollEvent(
+        position: tester.getCenter(field),
+        scrollDelta: const Offset(0, 80),
+      ));
+      await tester.pump();
+      expect(parentController.offset, greaterThan(0));
+      final parentOffset = parentController.offset;
+      fieldPosition.jumpTo(0);
+      await tester.pump();
+      await tester.sendEventToBinding(PointerScrollEvent(
+        position: tester.getCenter(field),
+        scrollDelta: const Offset(0, -40),
+      ));
+      await tester.pump();
+      expect(parentController.offset, lessThan(parentOffset));
+      expect(fieldPosition.pixels, 0);
+    });
+  }
 }

@@ -10,6 +10,7 @@ import 'package:get_it/get_it.dart';
 import 'package:image/image.dart' as img;
 import 'package:nai_casrand/data/models/command_status.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
+import 'package:nai_casrand/data/models/image_handoff_coordinator.dart';
 import 'package:nai_casrand/data/models/info_card_content.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
@@ -22,6 +23,7 @@ import 'package:nai_casrand/ui/generation_page/widgets/info_card.dart';
 import 'package:nai_casrand/ui/enhance_page/view_models/enhance_page_viewmodel.dart';
 import 'package:nai_casrand/ui/enhance_page/widgets/enhance_page_view.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
+import 'package:nai_casrand/ui/generation_page/widgets/result_actions.dart';
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 
 import 'drop_test_fakes.dart';
@@ -333,6 +335,107 @@ void main() {
             .widget<ChoiceChip>(find.byKey(const Key('enhance-scale-1.5')))
             .selected,
         isTrue);
+  });
+
+  testWidgets('inpaint result handoff to Enhance keeps Max available', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final payload = GetIt.I<PayloadConfig>();
+    payload.paramConfig.model = 'nai-diffusion-5-full-inpainting';
+    payload.settings
+      ..subscriptionStatusKnown = true
+      ..subscriptionTier = 3
+      ..subscriptionActive = true
+      ..opusUsageAvailable = true;
+    (GetIt.I<GenerationPageViewmodel>() as _RecordingGenerationViewmodel)
+        .freezeSubscriptionSnapshot = true;
+    GetIt.instance.registerSingleton(ImageHandoffCoordinator(
+      payloadConfig: payload,
+      navigation: GetIt.I<NavigationRequest>(),
+      readDimensions: (_) async =>
+          const ImageDimensions(width: 1216, height: 832),
+      createPreview: (bytes, dims) async => bytes,
+    ));
+
+    final bytes = solidPng(1216, 832);
+    final actions = ResultActions(content: InfoCardContent(
+      title: 'inpaint.png',
+      info: '',
+      imageBytes: bytes,
+      additionalInfo: const {
+        'model': 'nai-diffusion-5-full-inpainting',
+        'width': 1216,
+        'height': 832,
+        'steps': 28,
+      },
+    ));
+    expect(actions.enhanceSourceModel, 'nai-diffusion-5-full');
+    GetIt.I<ImageHandoffCoordinator>().sendToEnhance(bytes,
+        metadata: const {
+          'model': 'nai-diffusion-5-full-inpainting',
+          'width': 1216,
+          'height': 832,
+        },
+        prompt: 'cat',
+        model: actions.enhanceSourceModel);
+
+    await tester.pumpWidget(
+        localizedApp(EnhancePageView(viewmodel: EnhancePageViewmodel())));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('enhance-scale-max')), findsOneWidget);
+    expect(payload.enhanceConfig.sourceModel, 'nai-diffusion-5-full');
+    expect(payload.enhanceConfig.hasImage, isTrue);
+  });
+
+  testWidgets('1773x1773 inpaint result handoff to Enhance offers 1.0x and allows generation', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final payload = GetIt.I<PayloadConfig>();
+    payload.paramConfig.model = 'nai-diffusion-5-full-inpainting';
+    payload.settings
+      ..subscriptionStatusKnown = true
+      ..subscriptionTier = 3
+      ..subscriptionActive = true
+      ..opusUsageAvailable = true;
+    (GetIt.I<GenerationPageViewmodel>() as _RecordingGenerationViewmodel)
+        .freezeSubscriptionSnapshot = true;
+    GetIt.instance.registerSingleton(ImageHandoffCoordinator(
+      payloadConfig: payload,
+      navigation: GetIt.I<NavigationRequest>(),
+      readDimensions: (_) async =>
+          const ImageDimensions(width: 1773, height: 1773),
+      createPreview: (bytes, dims) async => bytes,
+    ));
+
+    final bytes = solidPng(1773, 1773);
+    GetIt.I<ImageHandoffCoordinator>().sendToEnhance(bytes,
+        metadata: const {
+          'model': 'nai-diffusion-5-full-inpainting',
+          'width': 1773,
+          'height': 1773,
+        },
+        prompt: 'portrait of a girl',
+        model: 'nai-diffusion-5-full');
+
+    final viewmodel = EnhancePageViewmodel();
+    await tester.pumpWidget(localizedApp(EnhancePageView(viewmodel: viewmodel)));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('enhance_too_large'), findsNothing);
+    expect(find.byKey(const Key('enhance-scale-1.0')), findsOneWidget);
+    expect(find.byKey(const Key('enhance-scale-1.5')), findsNothing);
+    expect(find.byKey(const Key('enhance-scale-2.0')), findsNothing);
+    expect(find.byKey(const Key('enhance-scale-max')), findsNothing);
+    expect(viewmodel.canGenerate, isTrue);
+    expect(viewmodel.targetSize, const GenerationSize(width: 1728, height: 1728));
+
+    final run = tester.widget<FilledButton>(find.byKey(const Key('enhance-run')));
+    expect(run.onPressed, isNotNull);
   });
 
   testWidgets('a typical portrait offers 1.5x but not 2x', (tester) async {

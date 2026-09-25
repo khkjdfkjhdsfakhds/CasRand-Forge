@@ -247,7 +247,8 @@ class PromptConfig {
     return result;
   }
 
-  /// A full deterministic state cycle, not a count of distinct strings.
+  /// A deterministic selection cycle, not a count of distinct strings.
+  /// A single candidate's own repeat counter does not extend the cycle.
   /// Reading this never evaluates prompts or touches selection progress.
   int calculateCombinations() =>
       taskCountForCycle(calculateCombinationCycle()) ??
@@ -298,6 +299,9 @@ class PromptConfig {
       case 'multiple_prob':
         return prob >= 1 ? combineCycles(cycles) : BigInt.one;
       case 'single_sequential':
+        // The only candidate is invoked on every call regardless of repeats.
+        // Preserve its nested/reference cycle without counting this idle counter.
+        if (count == 1) return cycles.single;
         final repeat = BigInt.from(max(1, num));
         // Each child is called r times per parent rotation. Its paused state
         // returns after P/gcd(P,r) rotations, not after P output strings.

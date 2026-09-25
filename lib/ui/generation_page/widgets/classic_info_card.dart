@@ -86,7 +86,7 @@ class ClassicInfoCard extends StatelessWidget {
   }
 
   Widget _buildContent(BuildContext context, InfoCardContent content) {
-    if (content.imageBytes == null) {
+    if (!content.hasImage) {
       return Padding(
         padding: const EdgeInsets.all(8.0),
         child: Column(
@@ -131,11 +131,10 @@ class ClassicInfoCard extends StatelessWidget {
           flex: 5,
           child: GeneratedImageView(
             content: content,
-            child: Image.memory(
-              content.imageBytes!,
+            child: buildInfoCardImage(
+              content,
               fit: BoxFit.contain,
               filterQuality: FilterQuality.medium,
-              gaplessPlayback: true,
             ),
           ),
         ),

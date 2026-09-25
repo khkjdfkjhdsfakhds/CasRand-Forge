@@ -1,7 +1,8 @@
 import 'package:nai_casrand/data/models/prompt_token_snapshot.dart';
-import 'package:nai_casrand/ui/parameters_config/widgets/prompt_token_usage.dart';
+import 'package:nai_casrand/ui/generation_page/widgets/prompt_token_usage.dart';
 import 'package:nai_casrand/data/models/batch_tool_snapshot.dart';
 import 'package:nai_casrand/data/use_cases/enhance_request_options.dart';
+import 'package:nai_casrand/data/use_cases/autocrop_planner.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
@@ -276,6 +277,34 @@ class _TokenSequenceAccountService extends AccountService {
   }
 }
 
+class _FixedPerTokenAccountService extends AccountService {
+  _FixedPerTokenAccountService(this.snapshots);
+
+  final Map<String, SubscriptionInfo> snapshots;
+  final Map<String, int> calls = {};
+
+  @override
+  Future<SubscriptionInfo?> fetchSubscription({
+    required String token,
+    required String proxy,
+    bool forceRefresh = false,
+  }) async {
+    final count = (calls[token] ?? 0) + 1;
+    calls[token] = count;
+    final snapshot = snapshots[token];
+    if (snapshot == null || count == 1 || snapshot.anlas == 0) {
+      return snapshot;
+    }
+    return SubscriptionInfo(
+      anlas: max(0, snapshot.anlas! - 30 * (count - 1)),
+      tier: snapshot.tier,
+      active: snapshot.active,
+      usage: snapshot.usage,
+      expiresAt: snapshot.expiresAt,
+    );
+  }
+}
+
 class _RecordingFileService extends FileService {
   final List<String> savedNames = [];
   final List<Uint8List> savedBytes = [];
@@ -438,6 +467,7 @@ class _WorkerRecordingViewmodel extends GenerationPageViewmodel {
   int? lastSeedOverride;
   String? lastPromptSuffix;
   EnhanceRequestOptions? lastEnhanceOptions;
+  BatchToolSnapshot? lastToolSnapshot;
 
   @override
   Command<void, InfoCardContent> createGenerationCommand({
@@ -453,6 +483,7 @@ class _WorkerRecordingViewmodel extends GenerationPageViewmodel {
     lastSeedOverride = seedOverride;
     lastPromptSuffix = promptSuffix;
     lastEnhanceOptions = enhanceOptions;
+    lastToolSnapshot = toolSnapshot;
     return Command.createAsyncNoParam(
       () async => InfoCardContent(
         title: 'worker-$workerIndex',
@@ -531,7 +562,11 @@ void main() {
     await tester.pumpWidget(MaterialApp(
         home: Scaffold(
             body: PromptTokenUsage(
-                config: config,
+                metadata: const {
+          "model": "nai-diffusion-5-full",
+          "input": "previous image",
+          "negative_prompt": "",
+        },
                 counter: (_, __) {
                   countCalls++;
                   return pendingCount.future;
@@ -830,7 +865,11 @@ void main() {
     expect(error, contains('NovelAI server timed out'));
     expect(error, contains('HTTP 500'));
     expect(error, isNot(contains('End of Central Directory')));
+    expect(
+        viewmodel.commandStatus.outcomeUnknownFor(viewmodel.commandList.single),
+        isNull);
     viewmodel.dispose();
+    await tester.pumpAndSettle();
   });
 
   testWidgets('Director Tools normalizes oversized sources like the website', (
@@ -3183,6 +3222,41 @@ void main() {
     viewmodel.dispose();
   });
 
+  testWidgets('runSingleGeneration ignores an active batch tool', (
+    tester,
+  ) async {
+    final viewmodel = _WorkerRecordingViewmodel();
+    final config = GetIt.I<PayloadConfig>();
+    const plan = I2iRequestPlan(
+      imageB64: 'aW1hZ2U=',
+      maskB64: null,
+      width: 1216,
+      height: 832,
+      strength: 0.5,
+      noise: 0,
+      addOriginalImage: false,
+      composite: null,
+      summary: 'Enhance batch tool',
+    );
+    config.activateBatchTool(BatchToolSnapshot.enhance(
+      enhanceBatch: const I2iRequestBatch(
+        plans: [plan],
+        serial: true,
+        summary: 'Enhance batch tool',
+      ),
+      parameters: ParamConfig(model: 'nai-diffusion-5-full'),
+      upscale: false,
+      outputWidth: 1216,
+      outputHeight: 832,
+    ));
+
+    viewmodel.runSingleGeneration();
+
+    expect(viewmodel.lastToolSnapshot, isNull);
+    await tester.pump();
+    viewmodel.dispose();
+  });
+
   testWidgets('a failed attempt still waits before retrying', (tester) async {
     final viewmodel = _SchedulingViewmodel();
     final commandStatus = GetIt.I<CommandStatus>();
@@ -3201,6 +3275,86 @@ void main() {
     expect(viewmodel.nextCommandCalls, 1);
     viewmodel.dispose();
   });
+  testWidgets('locked single candidate repeat batch dispatches five tasks',
+      (tester) async {
+    final config = GetIt.I<PayloadConfig>();
+    config.rootPromptConfig = PromptConfig(
+        type: 'config',
+        selectionMethod: 'all',
+        shuffled: false,
+        strs: [],
+        prompts: [
+          PromptConfig(selectionMethod: 'single', strs: ['R'], prompts: []),
+          PromptConfig(
+              selectionMethod: 'single_sequential',
+              strs: ['C1', 'C2', 'C3', 'C4', 'C5'],
+              prompts: []),
+          PromptConfig(
+              selectionMethod: 'single_sequential',
+              num: 17,
+              strs: ['A'],
+              prompts: []),
+        ]);
+    final api = _FakeApiService(ApiResponse(
+        status: '200',
+        data: directorResponseZip([
+          Uint8List.fromList(img.encodePng(img.Image(width: 64, height: 64)))
+        ])));
+    final viewmodel = GenerationPageViewmodel(
+        apiService: api,
+        fileService: _RecordingFileService(),
+        accountService: _FakeAccountService());
+    addTearDown(viewmodel.dispose);
+    config.settings
+      ..debugApiEnabled = true
+      ..generationCount = 85
+      ..generationIntervalSec = 0
+      ..lockToAllCombinations = true;
+    viewmodel.startGeneration();
+    for (var attempt = 0;
+        attempt < 500 && viewmodel.commandStatus.isGenerationActive.value;
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 10));
+    }
+    await tester.pump();
+    expect(config.settings.generationCount, 5);
+    expect(viewmodel.commandStatus.isGenerationActive.value, isFalse);
+    expect(api.calls, 5);
+    expect(api.requests.map((r) => r.payload['input']).toList(),
+        List.generate(5, (i) => 'R, C${i + 1}, A'));
+  });
+
+  testWidgets(
+      'one-off paid action skips a primary account that disallows points',
+      (tester) async {
+    final image = img.Image(width: 64, height: 64, numChannels: 3);
+    final api = _FakeApiService(ApiResponse(
+      status: '200',
+      data: directorResponseZip([
+        Uint8List.fromList(img.encodePng(image)),
+      ]),
+    ));
+    final config = GetIt.I<PayloadConfig>();
+    config.settings
+      ..updatePrimaryApiKey('pst-blocked')
+      ..apiTokens.first.allowPoints = false
+      ..apiTokens.add(ApiTokenConfig(label: 'Ready', token: 'pst-ready'))
+      ..parallelApiEnabled = true
+      ..debugApiEnabled = false;
+    final vm = GenerationPageViewmodel(
+      apiService: api,
+      fileService: _RecordingFileService(),
+    );
+    addTearDown(vm.dispose);
+
+    vm.runSingleGeneration();
+    await waitForCurrentCommand(tester, vm);
+
+    expect(api.calls, 1);
+    expect(api.requests.single.headers['authorization'], 'Bearer pst-ready');
+    expect(vm.currentCommand?.value.imageBytes, isNotNull);
+  });
+
   for (final remember in [true, false]) {
     testWidgets(
         'locked full cycle with parallel APIs starts a fresh complete batch remember=$remember',
@@ -3280,6 +3434,333 @@ void main() {
       expect(config.settings.generationCount, 6);
       expect(api.requests.skip(6).map((r) => r.payload['input']),
           api.requests.take(6).map((r) => r.payload['input']));
+    });
+
+    testWidgets('token with allowPoints=false blocks request when cost > 0',
+        (tester) async {
+      final api = _FakeApiService(ApiResponse(
+        status: '200',
+        data: directorResponseZip([Uint8List(0)]),
+      ));
+      final vm = GenerationPageViewmodel(
+        apiService: api,
+        fileService: _RecordingFileService(),
+        preparationFeedbackBarrier: () async {},
+      );
+      final config = GetIt.I<PayloadConfig>();
+      config.settings.debugApiEnabled = false;
+      config.settings.apiTokens.first.allowPoints = false;
+      config.paramConfig
+        ..model = 'nai-diffusion-4-5-curated'
+        ..steps = 50;
+
+      vm.runSingleGeneration();
+      for (var i = 0;
+          i < 100 && (vm.currentCommand?.isExecuting.value ?? true);
+          i++) {
+        await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 2)));
+        await tester.pump(const Duration(milliseconds: 10));
+      }
+
+      expect(api.calls, 0);
+      expect(
+        vm.currentCommand?.value.info,
+        anyOf(
+          contains('This account is configured not to spend Anlas points'),
+          contains('api_token_points_blocked_error'),
+        ),
+      );
+      vm.dispose();
+    });
+
+    testWidgets(
+        'insufficient points reassign a single task to another enabled account',
+        (tester) async {
+      final image = img.Image(width: 64, height: 64, numChannels: 3);
+      final api = _FakeApiService(ApiResponse(
+        status: '200',
+        data: directorResponseZip([
+          Uint8List.fromList(img.encodePng(image)),
+        ]),
+      ));
+      final accounts = _FixedPerTokenAccountService(const {
+        'pst-empty': SubscriptionInfo(anlas: 0, tier: 1, active: true),
+        'pst-ready': SubscriptionInfo(anlas: 100, tier: 1, active: true),
+      });
+      final config = GetIt.I<PayloadConfig>();
+      config.settings
+        ..updatePrimaryApiKey('pst-empty')
+        ..apiTokens.add(ApiTokenConfig(label: 'Ready', token: 'pst-ready'))
+        ..parallelApiEnabled = true
+        ..generationCount = 1
+        ..generationIntervalSec = 0
+        ..debugApiEnabled = false;
+      final vm = GenerationPageViewmodel(
+        apiService: api,
+        accountService: accounts,
+        fileService: _RecordingFileService(),
+      );
+      addTearDown(vm.dispose);
+
+      vm.startGeneration();
+      for (var i = 0;
+          i < 500 && vm.commandStatus.isGenerationActive.value;
+          i++) {
+        await tester.pump(const Duration(milliseconds: 10));
+      }
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(api.calls, 1);
+      expect(api.requests.single.headers['authorization'], 'Bearer pst-ready');
+      expect(vm.commandList.single.value.imageBytes, isNotNull);
+    });
+
+    testWidgets(
+        'startGeneration excludes allowPoints=false accounts from paid generation',
+        (tester) async {
+      final image = img.Image(width: 64, height: 64, numChannels: 3);
+      final api = _FakeApiService(ApiResponse(
+        status: '200',
+        data: directorResponseZip([
+          Uint8List.fromList(img.encodePng(image)),
+        ]),
+      ));
+      final accounts = _FixedPerTokenAccountService(const {
+        'pst-blocked': SubscriptionInfo(anlas: 100, tier: 1, active: true),
+        'pst-allowed': SubscriptionInfo(anlas: 100, tier: 1, active: true),
+      });
+      final config = GetIt.I<PayloadConfig>();
+      config.paramConfig
+        ..model = 'nai-diffusion-4-5-curated'
+        ..steps = 50;
+      config.settings
+        ..updatePrimaryApiKey('pst-blocked')
+        ..apiTokens.first.allowPoints = false
+        ..apiTokens.add(ApiTokenConfig(label: 'Allowed', token: 'pst-allowed', allowPoints: true))
+        ..parallelApiEnabled = true
+        ..generationCount = 1
+        ..generationIntervalSec = 0
+        ..debugApiEnabled = false;
+      final vm = GenerationPageViewmodel(
+        apiService: api,
+        accountService: accounts,
+        fileService: _RecordingFileService(),
+      );
+      addTearDown(vm.dispose);
+
+      vm.startGeneration();
+      for (var i = 0;
+          i < 500 && vm.commandStatus.isGenerationActive.value;
+          i++) {
+        await tester.pump(const Duration(milliseconds: 10));
+      }
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(api.calls, 1);
+      expect(api.requests.single.headers['authorization'], 'Bearer pst-allowed');
+      expect(vm.commandList, hasLength(1));
+      expect(vm.commandList.single.value.imageBytes, isNotNull);
+    });
+
+    testWidgets(
+        'startGeneration emits a single error card when all accounts disallow points for paid generation',
+        (tester) async {
+      final api = _FakeApiService(ApiResponse(
+        status: '200',
+        data: directorResponseZip([Uint8List(0)]),
+      ));
+      final config = GetIt.I<PayloadConfig>();
+      config.paramConfig
+        ..model = 'nai-diffusion-4-5-curated'
+        ..steps = 50;
+      config.settings
+        ..updatePrimaryApiKey('pst-blocked-1')
+        ..apiTokens.first.allowPoints = false
+        ..apiTokens.add(ApiTokenConfig(label: 'Blocked 2', token: 'pst-blocked-2', allowPoints: false))
+        ..parallelApiEnabled = true
+        ..generationCount = 1
+        ..generationIntervalSec = 0
+        ..debugApiEnabled = false;
+      final vm = GenerationPageViewmodel(
+        apiService: api,
+        fileService: _RecordingFileService(),
+      );
+      addTearDown(vm.dispose);
+
+      vm.startGeneration();
+      await waitForCurrentCommand(tester, vm);
+
+      expect(api.calls, 0);
+      expect(vm.commandList, hasLength(1));
+      expect(vm.commandList.single.value.imageBytes, isNull);
+      expect(
+        vm.commandList.single.value.info,
+        anyOf(
+          contains('This account is configured not to spend Anlas points'),
+          contains('api_token_points_blocked_error'),
+        ),
+      );
+    });
+
+    testWidgets(
+        'startGeneration excludes allowFree=false accounts from free generation',
+        (tester) async {
+      final image = img.Image(width: 64, height: 64, numChannels: 3);
+      final api = _FakeApiService(ApiResponse(
+        status: '200',
+        data: directorResponseZip([
+          Uint8List.fromList(img.encodePng(image)),
+        ]),
+      ));
+      final accounts = _FixedPerTokenAccountService(const {
+        'pst-nofree': SubscriptionInfo(anlas: 100, tier: 3, active: true),
+        'pst-free': SubscriptionInfo(anlas: 100, tier: 3, active: true),
+      });
+      final config = GetIt.I<PayloadConfig>();
+      config.paramConfig
+        ..model = 'nai-diffusion-4-5-curated'
+        ..sizes = [const GenerationSize(width: 832, height: 1216)]
+        ..steps = 28;
+      config.settings
+        ..updatePrimaryApiKey('pst-nofree')
+        ..subscriptionTier = 3
+        ..subscriptionActive = true
+        ..apiTokens.first.allowFree = false
+        ..apiTokens.add(ApiTokenConfig(label: 'FreeAllowed', token: 'pst-free', allowFree: true))
+        ..parallelApiEnabled = true
+        ..generationCount = 1
+        ..generationIntervalSec = 0
+        ..debugApiEnabled = false;
+      final vm = GenerationPageViewmodel(
+        apiService: api,
+        accountService: accounts,
+        fileService: _RecordingFileService(),
+      );
+      addTearDown(vm.dispose);
+
+      vm.startGeneration();
+      for (var i = 0;
+          i < 500 && vm.commandStatus.isGenerationActive.value;
+          i++) {
+        await tester.pump(const Duration(milliseconds: 10));
+      }
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(api.calls, 1);
+      expect(api.requests.single.headers['authorization'], 'Bearer pst-free');
+      expect(vm.commandList, hasLength(1));
+      expect(vm.commandList.single.value.imageBytes, isNotNull);
+    });
+
+    testWidgets(
+        'startGeneration emits a single error card when all accounts disallow free quota for free generation',
+        (tester) async {
+      final api = _FakeApiService(ApiResponse(
+        status: '200',
+        data: directorResponseZip([Uint8List(0)]),
+      ));
+      final config = GetIt.I<PayloadConfig>();
+      config.paramConfig
+        ..model = 'nai-diffusion-4-5-curated'
+        ..sizes = [const GenerationSize(width: 832, height: 1216)]
+        ..steps = 28;
+      config.settings
+        ..updatePrimaryApiKey('pst-nofree-1')
+        ..subscriptionTier = 3
+        ..subscriptionActive = true
+        ..apiTokens.first.allowFree = false
+        ..apiTokens.add(ApiTokenConfig(label: 'NoFree 2', token: 'pst-nofree-2', allowFree: false))
+        ..parallelApiEnabled = true
+        ..generationCount = 1
+        ..generationIntervalSec = 0
+        ..debugApiEnabled = false;
+      final vm = GenerationPageViewmodel(
+        apiService: api,
+        fileService: _RecordingFileService(),
+      );
+      addTearDown(vm.dispose);
+
+      vm.startGeneration();
+      await waitForCurrentCommand(tester, vm);
+
+      expect(api.calls, 0);
+      expect(vm.commandList, hasLength(1));
+      expect(vm.commandList.single.value.imageBytes, isNull);
+      expect(
+        vm.commandList.single.value.info,
+        anyOf(
+          contains('This account is configured not to use free Opus quota'),
+          contains('api_token_free_blocked_error'),
+        ),
+      );
+    });
+
+    testWidgets(
+        'inpaint with composite outputs finished image size in additionalInfo',
+        (tester) async {
+      final base = img.Image(width: 256, height: 256, numChannels: 4);
+      img.fill(base, color: img.ColorRgba8(100, 100, 100, 255));
+      final baseBytes = Uint8List.fromList(img.encodePng(base));
+
+      final config = GetIt.I<PayloadConfig>();
+      config.settings.debugApiEnabled = true;
+      config.i2iEnabled = true;
+      final mask = img.Image(width: 256, height: 256, numChannels: 4);
+      img.fillRect(mask,
+          x1: 96,
+          y1: 96,
+          x2: 160,
+          y2: 160,
+          color: img.ColorRgba8(255, 255, 255, 255));
+      config.i2iConfig
+        ..setImage(baseBytes)
+        ..setMask(Uint8List.fromList(img.encodePng(mask)), [])
+        ..setManualFocusFrame(const CropRect(x: 32, y: 32, w: 128, h: 128));
+      config.noteI2iImported(replacing: false);
+
+      final prepared = await tester.runAsync(() =>
+          PrepareI2iRequestUseCase(config: config.i2iConfig)
+              .planBatch(targetWidth: 256, targetHeight: 256));
+      final plan = prepared!.plans.first;
+      final infill =
+          img.Image(width: plan.width, height: plan.height, numChannels: 4);
+      img.fill(infill, color: img.ColorRgba8(200, 200, 200, 255));
+      final infillBytes = Uint8List.fromList(img.encodePng(infill));
+
+      final api = _FakeApiService(ApiResponse(
+        status: '200',
+        data: directorResponseZip([infillBytes]),
+      ));
+      final vm = GenerationPageViewmodel(
+        apiService: api,
+        fileService: _RecordingFileService(),
+        preparationFeedbackBarrier: () async {},
+        prepareI2iBatch: (
+                {required config,
+                required targetWidth,
+                required targetHeight,
+                required transparentBackground}) async =>
+            prepared,
+      );
+
+      vm.runSingleGeneration();
+      for (var i = 0;
+          i < 500 && (vm.currentCommand?.isExecuting.value ?? true);
+          i++) {
+        await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 2)));
+        await tester.pump(const Duration(milliseconds: 10));
+      }
+
+      expect(api.calls, 1);
+      final additional = vm.currentCommand?.value.additionalInfo;
+      expect(additional, isNotNull);
+      expect(additional!['width'], 256);
+      expect(additional['height'], 256);
+      expect(additional['inpaint_request_width'], isNotNull);
+      expect(additional['inpaint_request_height'], isNotNull);
+      vm.dispose();
     });
   }
 }

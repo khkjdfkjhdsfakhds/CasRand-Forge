@@ -9,6 +9,29 @@ Uint8List encode(img.Image image) => Uint8List.fromList(img.encodePng(image));
 img.Image decode(Uint8List bytes) => img.decodePng(bytes)!;
 
 void main() {
+  test('exported border-white masks import without automatic polarity reversal',
+      () {
+    final source = img.Image(width: 7, height: 5, numChannels: 3);
+    img.fill(source, color: img.ColorRgb8(255, 255, 255));
+    source.setPixelRgb(3, 2, 0, 0, 0);
+    final bytes = exportInpaintMask(encode(source));
+    final analysis = analyzeInpaintMask(bytes);
+    expect(analysis.suggestedInvertFor(InpaintMaskChannel.automatic), isFalse);
+    final restored = renderInpaintMask(
+        sourceBytes: bytes,
+        targetWidth: 7,
+        targetHeight: 5,
+        invert: analysis.suggestedInvertFor(InpaintMaskChannel.automatic));
+    expect(decode(restored.pngBytes).getBytes(), source.getBytes());
+  });
+  test('inversion handles empty and full masks and is reversible', () {
+    final empty = encode(img.Image(width: 7, height: 5, numChannels: 3));
+    final full = invertInpaintMask(empty);
+    expect(decode(full).every((pixel) => pixel.r == 255), isTrue);
+    expect(
+        decode(invertInpaintMask(full)).getBytes(), decode(empty).getBytes());
+    expect(() => invertInpaintMask(Uint8List(0)), throwsFormatException);
+  });
   test('automatic mode prefers meaningful alpha transparency', () {
     final source = img.Image(width: 4, height: 4, numChannels: 4);
     img.fill(source, color: img.ColorRgba8(0, 0, 0, 0));

@@ -538,8 +538,7 @@ void main() {
     service.close();
   });
 
-  test(
-      'transport disconnect has an unknown outcome and retires the failed route',
+  test('transport disconnect is retryable and retires the failed route',
       () async {
     var createdClients = 0;
     final service = ApiService(
@@ -567,15 +566,15 @@ void main() {
       service.fetchData(request),
       throwsA(
         isA<NovelAiApiException>()
-            .having((error) => error.isTransient, 'isTransient', isFalse)
+            .having((error) => error.isTransient, 'isTransient', isTrue)
             .having(
-                (error) => error.isOutcomeUnknown, 'isOutcomeUnknown', isTrue)
+                (error) => error.isOutcomeUnknown, 'isOutcomeUnknown', isFalse)
             .having(
               (error) => error.toString(),
               'message',
               allOf(
                 contains('connection closed'),
-                contains('result is unknown'),
+                contains('next automatic attempt'),
               ),
             ),
       ),
@@ -600,7 +599,7 @@ void main() {
     );
   });
 
-  test('server timeout JSON becomes a readable unknown-outcome API error', () {
+  test('server timeout JSON becomes a readable retryable API error', () {
     final data = Uint8List.fromList(utf8.encode(jsonEncode({
       'statusCode': 500,
       'message': 'read tcp 10.5.237.177:3000->10.4.246.151:56276: i/o timeout',
@@ -614,9 +613,9 @@ void main() {
       throwsA(
         isA<NovelAiApiException>()
             .having((error) => error.statusCode, 'statusCode', 500)
-            .having((error) => error.isTransient, 'isTransient', isFalse)
+            .having((error) => error.isTransient, 'isTransient', isTrue)
             .having(
-                (error) => error.isOutcomeUnknown, 'unknown outcome', isTrue)
+                (error) => error.isOutcomeUnknown, 'unknown outcome', isFalse)
             .having(
               (error) => error.toString(),
               'message',

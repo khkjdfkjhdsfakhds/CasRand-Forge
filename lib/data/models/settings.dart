@@ -123,14 +123,25 @@ class Settings {
   /// Tokens that generation should use, in user-defined priority order.
   List<ApiTokenConfig> get effectiveApiTokens {
     if (!parallelApiEnabled) {
-      if (apiKey.trim().isEmpty) return const [];
-      final primary = apiTokens.where((entry) => entry.isPrimary).firstOrNull;
+      var primary = apiTokens.where((entry) => entry.isPrimary).firstOrNull;
+      primary ??= apiTokens
+          .where((entry) => entry.enabled && entry.token.isNotEmpty)
+          .firstOrNull;
+      primary ??=
+          apiTokens.where((entry) => entry.token.isNotEmpty).firstOrNull;
+
+      final effectiveToken = apiKey.trim().isNotEmpty
+          ? apiKey.trim()
+          : (primary?.token.trim() ?? '');
+      if (effectiveToken.isEmpty) return const [];
       return [
         ApiTokenConfig(
           label: primary?.label ?? 'Main API',
-          token: apiKey.trim(),
+          token: effectiveToken,
           enabled: true,
           isPrimary: true,
+          allowPoints: primary?.allowPoints ?? true,
+          allowFree: primary?.allowFree ?? true,
         ),
       ];
     }
@@ -138,6 +149,24 @@ class Settings {
         .where((entry) => entry.enabled && entry.token.isNotEmpty)
         .take(maxParallelApiTokens)
         .toList(growable: false);
+  }
+
+  /// Whether the specified token is allowed to spend Anlas points.
+  /// Defaults to true if the token is not found in [apiTokens].
+  bool allowsPointsForToken(String token) {
+    final trimmed = token.trim();
+    final entry =
+        apiTokens.where((e) => e.token.trim() == trimmed).firstOrNull;
+    return entry?.allowPoints ?? true;
+  }
+
+  /// Whether the specified token is allowed to use free Opus allowance.
+  /// Defaults to true if the token is not found in [apiTokens].
+  bool allowsFreeForToken(String token) {
+    final trimmed = token.trim();
+    final entry =
+        apiTokens.where((e) => e.token.trim() == trimmed).firstOrNull;
+    return entry?.allowFree ?? true;
   }
 
   /// Replaces the primary token in place when the main settings value changes.
@@ -158,6 +187,8 @@ class Settings {
           token: nextToken,
           enabled: previous?.enabled ?? true,
           isPrimary: true,
+          allowPoints: previous?.allowPoints ?? true,
+          allowFree: previous?.allowFree ?? true,
         ),
       );
     }
@@ -168,30 +199,38 @@ class Settings {
   /// user's order, and guarantees at most one primary entry.
   void normalizeApiTokens() {
     apiKey = apiKey.trim();
-    final oldPrimaryIndex = apiTokens.indexWhere((entry) => entry.isPrimary);
-    final oldPrimary =
-        oldPrimaryIndex == -1 ? null : apiTokens[oldPrimaryIndex];
     final normalized = <ApiTokenConfig>[];
-    final seen = <String>{};
+    ApiTokenConfig? oldPrimary;
+    var oldPrimaryIndex = -1;
+
+    for (final (index, entry) in apiTokens.indexed) {
+      if (entry.isPrimary) {
+        oldPrimary ??= entry;
+        if (oldPrimaryIndex == -1) oldPrimaryIndex = index;
+      }
+    }
+
     for (final entry in apiTokens) {
       final token = entry.token.trim();
-      if (token.isEmpty || !seen.add(token)) continue;
-      normalized.add(
-        ApiTokenConfig(
-          label: entry.label.trim().isEmpty ? 'Token' : entry.label.trim(),
-          token: token,
-          enabled: entry.enabled,
-          isPrimary: false,
-        ),
-      );
+      if (token.isEmpty) continue;
+      if (normalized.any((existing) => existing.token == token)) continue;
+      final isPrimary = entry.isPrimary ||
+          (oldPrimary == null && token == apiKey && apiKey.isNotEmpty);
+      normalized.add(ApiTokenConfig(
+        label: entry.label,
+        token: token,
+        enabled: entry.enabled,
+        isPrimary: isPrimary,
+        allowPoints: entry.allowPoints,
+        allowFree: entry.allowFree,
+      ));
     }
 
     if (apiKey.isNotEmpty) {
-      final matchingIndex = normalized.indexWhere(
-        (entry) => entry.token == apiKey,
-      );
-      if (matchingIndex != -1) {
-        normalized[matchingIndex].isPrimary = true;
+      final primaryInList =
+          normalized.where((entry) => entry.token == apiKey).firstOrNull;
+      if (primaryInList != null) {
+        primaryInList.isPrimary = true;
       } else {
         normalized.insert(
           oldPrimaryIndex == -1
@@ -202,8 +241,33 @@ class Settings {
             token: apiKey,
             enabled: oldPrimary?.enabled ?? true,
             isPrimary: true,
+            allowPoints: oldPrimary?.allowPoints ?? true,
+            allowFree: oldPrimary?.allowFree ?? true,
           ),
         );
+      }
+    } else if (normalized.isNotEmpty) {
+      final existingPrimary =
+          normalized.where((entry) => entry.isPrimary).firstOrNull;
+      if (existingPrimary != null) {
+        apiKey = existingPrimary.token;
+      } else {
+        final candidate =
+            normalized.where((entry) => entry.enabled).firstOrNull ??
+                normalized.first;
+        candidate.isPrimary = true;
+        apiKey = candidate.token;
+      }
+    }
+
+    var foundPrimary = false;
+    for (final entry in normalized) {
+      if (entry.isPrimary) {
+        if (!foundPrimary && (apiKey.isEmpty || entry.token == apiKey)) {
+          foundPrimary = true;
+        } else {
+          entry.isPrimary = false;
+        }
       }
     }
 

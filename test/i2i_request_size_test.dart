@@ -3,9 +3,20 @@ import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/use_cases/i2i_request_size.dart';
 
 void main() {
-  test('automatic mode keeps a small source near its original size', () {
+  test('automatic mode scales a small source up to the maximum normal area', () {
     expect(
       automaticI2iRequestSize(500, 300),
+      const GenerationSize(width: 1280, height: 768),
+    );
+    expect(
+      automaticI2iRequestSize(896, 896),
+      const GenerationSize(width: 1024, height: 1024),
+    );
+  });
+
+  test('original mode keeps a small source near its original size', () {
+    expect(
+      originalI2iRequestSize(500, 300),
       const GenerationSize(width: 512, height: 320),
     );
   });

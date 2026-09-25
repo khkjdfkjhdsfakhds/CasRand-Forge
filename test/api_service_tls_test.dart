@@ -123,11 +123,19 @@ void main() {
 
     await expectLater(
       service.fetchData(request(proxyRoute: '')),
-      throwsA(anything),
+      throwsA(isA<NovelAiApiException>()
+          .having(
+              (e) => e.isOutcomeUnknown, 'TLS failed before generation', false)
+          .having((e) => e.isTransient, 'certificate errors are not retried',
+              false)),
     );
     await expectLater(
       service.fetchData(request(proxyRoute: '127.0.0.1:${proxy.port}')),
-      throwsA(anything),
+      throwsA(isA<NovelAiApiException>()
+          .having(
+              (e) => e.isOutcomeUnknown, 'TLS failed before generation', false)
+          .having((e) => e.isTransient, 'certificate errors are not retried',
+              false)),
     );
     service.close();
   });

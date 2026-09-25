@@ -61,7 +61,21 @@ const Map<int, double> doubleMapping = {
 class PayloadConfig extends ChangeNotifier {
   GenerationProfile randomProfile;
   GenerationProfile fixedProfile;
-  PromptMode promptMode;
+  PromptMode _promptMode = PromptMode.random;
+
+  PromptMode get promptMode => _promptMode;
+  set promptMode(PromptMode value) {
+    if (_promptMode == value) return;
+    _promptMode = value;
+    _syncSettingsWithActiveProfile();
+    notifyListeners();
+  }
+
+  void _syncSettingsWithActiveProfile() {
+    settings.generationCount = activeProfile.generationCount;
+    settings.generationIntervalSec = activeProfile.generationIntervalSec;
+    settings.lockToAllCombinations = activeProfile.lockToAllCombinations;
+  }
 
   GenerationProfile get activeProfile =>
       promptMode == PromptMode.fixed ? fixedProfile : randomProfile;
@@ -83,6 +97,25 @@ class PayloadConfig extends ChangeNotifier {
   ParamConfig get paramConfig => activeProfile.paramConfig;
   set paramConfig(ParamConfig value) => activeProfile.paramConfig = value;
 
+  int get generationCount => activeProfile.generationCount;
+  set generationCount(int value) {
+    activeProfile.generationCount = value;
+    settings.generationCount = value;
+  }
+
+  int get generationIntervalSec => activeProfile.generationIntervalSec;
+  set generationIntervalSec(int value) {
+    activeProfile.generationIntervalSec = value;
+    settings.generationIntervalSec = value;
+  }
+
+  bool get lockToAllCombinations =>
+      activeProfile.lockToAllCombinations || settings.lockToAllCombinations;
+  set lockToAllCombinations(bool value) {
+    activeProfile.lockToAllCombinations = value;
+    settings.lockToAllCombinations = value;
+  }
+
   Settings settings;
 
   int addVibeImage(
@@ -92,9 +125,12 @@ class PayloadConfig extends ChangeNotifier {
     double informationExtracted = 0.7,
   }) {
     final capabilities = ImageImportCapabilities.forModel(paramConfig.model);
-    if (!capabilities.supports(ImageImportAction.vibeTransfer)) return 0;
     final wasEmpty = !hasVibeResources;
-    if (capabilities.isV4Family) {
+    if (capabilities.usesLegacyVibe) {
+      vibeConfigList.add(
+        VibeConfig.fromBytes(bytes, fileName, 1.0, 0.3),
+      );
+    } else {
       vibeConfigListV4.add(
         VibeConfigV4.fromImageBytes(
           fileName,
@@ -103,10 +139,6 @@ class PayloadConfig extends ChangeNotifier {
           informationExtracted: informationExtracted,
           model: paramConfig.model,
         ),
-      );
-    } else {
-      vibeConfigList.add(
-        VibeConfig.fromBytes(bytes, fileName, 1.0, 0.3),
       );
     }
     noteVibeImported(wasEmpty: wasEmpty);
@@ -117,10 +149,6 @@ class PayloadConfig extends ChangeNotifier {
     Uint8List bytes,
     String fileName,
   ) async {
-    final capabilities = ImageImportCapabilities.forModel(paramConfig.model);
-    if (!capabilities.supports(ImageImportAction.preciseReference)) {
-      return false;
-    }
     final wasEmpty = preciseReferenceConfigList.isEmpty;
     final reference = await PreciseReferenceConfig.fromBytes(bytes, fileName);
     preciseReferenceConfigList.add(reference);
@@ -144,20 +172,35 @@ class PayloadConfig extends ChangeNotifier {
         null => null,
       };
 
+  PromptMode? _modeBeforeBatchTool;
+  bool? _i2iBeforeBatchTool;
+
   void activateBatchTool(BatchToolSnapshot tool) {
+    _modeBeforeBatchTool ??= promptMode;
+    _i2iBeforeBatchTool ??= i2iEnabled;
     if (tool.kind == BatchToolKind.enhance) {
       enhanceBatchTool = tool;
     } else {
       directorBatchTool = tool;
     }
     batchToolKind = tool.kind;
+    i2iEnabled = false;
     promptMode = PromptMode.fixed;
     notifyListeners();
   }
 
-  void deactivateBatchTool() {
+  void deactivateBatchTool({PromptMode? fallbackMode}) {
     batchToolKind = null;
-    promptMode = PromptMode.random;
+    if (fallbackMode != null) {
+      promptMode = fallbackMode;
+    } else if (_modeBeforeBatchTool != null) {
+      promptMode = _modeBeforeBatchTool!;
+    }
+    _modeBeforeBatchTool = null;
+    if (_i2iBeforeBatchTool != null) {
+      i2iEnabled = _i2iBeforeBatchTool!;
+      _i2iBeforeBatchTool = null;
+    }
     notifyListeners();
   }
 
@@ -232,10 +275,15 @@ class PayloadConfig extends ChangeNotifier {
   void setI2iEnabled(bool value, {bool userAction = true}) {
     i2iEnabled = value && i2iConfig.hasImage;
     if (userAction) _i2iManuallyDisabled = !value;
+    if (i2iEnabled && batchToolKind != null) {
+      deactivateBatchTool();
+    }
   }
 
   void noteI2iImported({required bool replacing, bool explicitUse = false}) {
-    if (explicitUse || !replacing || !_i2iManuallyDisabled) i2iEnabled = true;
+    if (explicitUse || !replacing || !_i2iManuallyDisabled) {
+      setI2iEnabled(true, userAction: false);
+    }
   }
 
   void clearI2iResourceState() {
@@ -305,19 +353,24 @@ class PayloadConfig extends ChangeNotifier {
     required String overridePrompt,
     required bool useOverridePrompt,
     required bool useCharacterPromptWithOverride,
+    GenerationProfile? randomProfile,
     GenerationProfile? fixedProfile,
     PromptMode? promptMode,
     GenerationSize? i2iRequestSize,
     I2iSizeMode i2iSizeMode = I2iSizeMode.automatic,
     int i2iContextPx = defaultContextPx,
     bool i2iUseRandomSeed = false,
-  })  : randomProfile = GenerationProfile(
-          rootPromptConfig: rootPromptConfig,
-          negativePromptConfig: negativePromptConfig,
-          characterConfigList: characterConfigList,
-          savedPromptConfigList: savedPromptConfigList,
-          paramConfig: paramConfig,
-        ),
+  })  : randomProfile = randomProfile ??
+            GenerationProfile(
+              rootPromptConfig: rootPromptConfig,
+              negativePromptConfig: negativePromptConfig,
+              characterConfigList: characterConfigList,
+              savedPromptConfigList: savedPromptConfigList,
+              paramConfig: paramConfig,
+              generationCount: settings.generationCount,
+              generationIntervalSec: settings.generationIntervalSec,
+              lockToAllCombinations: settings.lockToAllCombinations,
+            ),
         fixedProfile = fixedProfile ??
             GenerationProfile(
               rootPromptConfig: fixedPromptConfig(overridePrompt),
@@ -334,9 +387,13 @@ class PayloadConfig extends ChangeNotifier {
                   : [],
               savedPromptConfigList: [],
               paramConfig: ParamConfig.fromJson(paramConfig.toJson()),
+              generationCount: 1,
+              generationIntervalSec: settings.generationIntervalSec,
+              lockToAllCombinations: false,
             ),
-        promptMode = promptMode ??
+        _promptMode = promptMode ??
             (useOverridePrompt ? PromptMode.fixed : PromptMode.random) {
+    _syncSettingsWithActiveProfile();
     i2iConfig = I2IConfig(
       requestSize: i2iRequestSize ??
           (paramConfig.sizes.isNotEmpty
@@ -415,6 +472,9 @@ class PayloadConfig extends ChangeNotifier {
       'use_character_prompt_with_override': useCharacterPromptWithOverride,
       'prompt_mode': promptMode.name,
       'fixed_profile': fixedProfile.toJson(),
+      'generation_count': randomProfile.generationCount,
+      'generation_interval': randomProfile.generationIntervalSec,
+      'lock_to_all_combinations': randomProfile.lockToAllCombinations,
       'i2i_request_size': i2iConfig.requestSize.toJson(),
       'i2i_size_mode': i2iConfig.sizeMode.name,
       'i2i_context_px': i2iConfig.contextPx,
@@ -467,7 +527,16 @@ class PayloadConfig extends ChangeNotifier {
     final negativePromptConfigJson = jsonData['negative_prompt_config'];
     final fixedJson = jsonData['fixed_profile'];
     final i2iSizeJson = jsonData['i2i_request_size'];
-    return PayloadConfig(
+    final loadedSettings = Settings.fromJson(jsonData['settings'] ?? {});
+    final randomGenerationCount = jsonData['generation_count'] as int? ??
+        loadedSettings.generationCount;
+    final randomGenerationIntervalSec =
+        jsonData['generation_interval'] as int? ??
+            loadedSettings.generationIntervalSec;
+    final randomLockToAllCombinations =
+        jsonData['lock_to_all_combinations'] as bool? ??
+            loadedSettings.lockToAllCombinations;
+    final randomProfile = GenerationProfile(
       rootPromptConfig: PromptConfig.fromJson(jsonData['prompt_config']),
       negativePromptConfig: negativePromptConfigJson is Map<String, dynamic>
           ? _negativePromptConfigFromJson(negativePromptConfigJson)
@@ -475,11 +544,22 @@ class PayloadConfig extends ChangeNotifier {
       characterConfigList: characterList,
       savedPromptConfigList: savedList,
       paramConfig: paramConfig,
-      settings: Settings.fromJson(jsonData['settings'] ?? {}),
+      generationCount: randomGenerationCount,
+      generationIntervalSec: randomGenerationIntervalSec,
+      lockToAllCombinations: randomLockToAllCombinations,
+    );
+    return PayloadConfig(
+      rootPromptConfig: randomProfile.rootPromptConfig,
+      negativePromptConfig: randomProfile.negativePromptConfig,
+      characterConfigList: characterList,
+      savedPromptConfigList: savedList,
+      paramConfig: paramConfig,
+      settings: loadedSettings,
       overridePrompt: jsonData['override_prompt'] ?? '',
       useOverridePrompt: jsonData['use_override_prompt'] ?? false,
       useCharacterPromptWithOverride:
           jsonData['use_character_prompt_with_override'] ?? false,
+      randomProfile: randomProfile,
       fixedProfile: fixedJson is Map<String, dynamic>
           ? GenerationProfile.fromJson(fixedJson)
           : null,
@@ -515,6 +595,12 @@ class PayloadConfig extends ChangeNotifier {
       jsonData['param_config'] ?? {},
     );
     final negativePromptConfigJson = jsonData['negative_prompt_config'];
+    final loadedSettings = Settings.fromJson(jsonData['settings'] ?? {});
+    final liveNavigation = settings.navigation;
+    final loadedNavigation = loadedSettings.navigation;
+    loadedSettings.navigation = liveNavigation;
+    settings = loadedSettings;
+    liveNavigation.replaceWith(loadedNavigation);
     randomProfile = GenerationProfile(
       rootPromptConfig: PromptConfig.fromJson(jsonData['prompt_config']),
       characterConfigList: characterList,
@@ -523,16 +609,21 @@ class PayloadConfig extends ChangeNotifier {
       negativePromptConfig: negativePromptConfigJson is Map<String, dynamic>
           ? _negativePromptConfigFromJson(negativePromptConfigJson)
           : _negativePromptConfigFromLegacy(randomParamConfig.negativePrompt),
+      generationCount: jsonData['generation_count'] as int? ??
+          loadedSettings.generationCount,
+      generationIntervalSec: jsonData['generation_interval'] as int? ??
+          loadedSettings.generationIntervalSec,
+      lockToAllCombinations: jsonData['lock_to_all_combinations'] as bool? ??
+          loadedSettings.lockToAllCombinations,
     );
-    final loadedSettings = Settings.fromJson(jsonData['settings'] ?? {});
-    final liveNavigation = settings.navigation;
-    final loadedNavigation = loadedSettings.navigation;
-    loadedSettings.navigation = liveNavigation;
-    settings = loadedSettings;
-    liveNavigation.replaceWith(loadedNavigation);
     final fixedJson = jsonData['fixed_profile'];
     fixedProfile = fixedJson is Map<String, dynamic>
-        ? GenerationProfile.fromJson(fixedJson)
+        ? GenerationProfile.fromJson(
+            fixedJson,
+            defaultGenerationCount: 1,
+            defaultGenerationIntervalSec: loadedSettings.generationIntervalSec,
+            defaultLockToAllCombinations: false,
+          )
         : GenerationProfile(
             rootPromptConfig: fixedPromptConfig(
               jsonData['override_prompt'] ?? '',
@@ -551,8 +642,12 @@ class PayloadConfig extends ChangeNotifier {
                     : [],
             savedPromptConfigList: [],
             paramConfig: ParamConfig.fromJson(randomParamConfig.toJson()),
+            generationCount: 1,
+            generationIntervalSec: loadedSettings.generationIntervalSec,
+            lockToAllCombinations: false,
           );
-    promptMode = _promptModeFromJson(jsonData);
+    _promptMode = _promptModeFromJson(jsonData);
+    _syncSettingsWithActiveProfile();
     final i2iSizeJson = jsonData['i2i_request_size'];
     i2iConfig.setRequestSize(
       i2iSizeJson is Map<String, dynamic>
@@ -668,7 +763,6 @@ class PayloadConfig extends ChangeNotifier {
     } else {
       fixedProfile.characterConfigList = [];
     }
-    _disableTransientGenerationInputs();
     promptMode = PromptMode.fixed;
     notifyListeners();
     return loadedCount;
@@ -831,6 +925,7 @@ class PayloadConfig extends ChangeNotifier {
     clearVibeResourceState();
     clearPreciseReferenceResourceState();
   }
+
 
   static ParamConfig _metadataDefaultsForModel(
     String model, {

@@ -630,21 +630,6 @@ DanbooruTagIndex _decodeBundledIndex(Map<String, Uint8List> assetBytes) {
   return index;
 }
 
-/// Absorbs leftover mouse-wheel events from a focused prompt editor so a
-/// nested field that is already at its scroll extent does not chain the
-/// wheel to a parent page. Unfocused fields must not register, or the
-/// outer page cannot be scrolled while the pointer is over the editor.
-void _absorbFocusedPointerScroll(PointerSignalEvent event) {
-  if (event is! PointerScrollEvent) {
-    return;
-  }
-  GestureBinding.instance.pointerSignalResolver.register(event, (resolved) {
-    if (resolved is PointerScrollEvent) {
-      resolved.respond(allowPlatformDefault: false);
-    }
-  });
-}
-
 /// A text field adapter for the shared completion seam.
 class PromptAssistedTextField extends StatefulWidget {
   const PromptAssistedTextField({
@@ -1173,9 +1158,6 @@ class PromptAssistedTextFieldState extends State<PromptAssistedTextField> {
             enabled: widget.enabled,
             minLines: widget.minLines,
             maxLines: widget.maxLines,
-            scrollPhysics: focusNode.hasFocus
-                ? null
-                : const NeverScrollableScrollPhysics(),
             keyboardType: TextInputType.multiline,
             decoration: InputDecoration(
               hintText: widget.hintText,
@@ -1197,16 +1179,12 @@ class PromptAssistedTextFieldState extends State<PromptAssistedTextField> {
           );
     return KeyedSubtree(
       key: _fieldLayoutKey,
-      child: Listener(
-        onPointerSignal:
-            focusNode.hasFocus ? _absorbFocusedPointerScroll : null,
-        child: NotificationListener<ScrollNotification>(
-          onNotification: (_) {
-            _scheduleOptionsLayout();
-            return false;
-          },
-          child: field,
-        ),
+      child: NotificationListener<ScrollNotification>(
+        onNotification: (_) {
+          _scheduleOptionsLayout();
+          return false;
+        },
+        child: field,
       ),
     );
   }

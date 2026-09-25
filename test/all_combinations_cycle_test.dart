@@ -28,6 +28,72 @@ PayloadConfig payload(PromptConfig root) =>
     PayloadConfig.fromJson({'prompt_config': root.toJson()});
 
 void main() {
+  test('single candidate artist repeat does not extend five content tasks', () {
+    final role = sequence('R', 1)..selectionMethod = 'single';
+    final config = payload(group([
+      role,
+      sequence('C', 5),
+      sequence('A', 1, repeat: 17),
+    ]));
+    final generate = GeneratePayloadUseCase(payloadConfig: config);
+    expect(config.totalCombinations, 5);
+    final expected = List.generate(5, (i) => 'R1, C${i + 1}, A1');
+    expect(List.generate(5, (_) => generate().payload['input']), expected);
+    expect(config.totalCombinations, 5);
+    expect(List.generate(5, (_) => generate().payload['input']), expected);
+  });
+
+  test('single candidate sequence retains nested repeat cycle and progress',
+      () {
+    final config = group([sequence('A', 3, repeat: 2)],
+        method: 'single_sequential', repeat: 17);
+    expect(config.getPrmpts().toPrompt(), 'A1');
+    expect(config.calculateCombinations(), 6);
+    expect(config.calculateCombinations(), 6);
+    expect(List.generate(6, (_) => config.getPrmpts().toPrompt()),
+        ['A1', 'A2', 'A2', 'A3', 'A3', 'A1']);
+  });
+
+  test('single candidate text retains referenced template cycle', () {
+    final root = sequence('unused', 1, repeat: 17)..strs = ['__A__'];
+    final config = payload(root);
+    config.savedPromptConfigList = [sequence('A', 3, repeat: 2)..comment = 'A'];
+    final generate = GeneratePayloadUseCase(payloadConfig: config);
+    expect(config.totalCombinations, 6);
+    expect(List.generate(6, (_) => generate().payload['input']),
+        ['A1', 'A1', 'A2', 'A2', 'A3', 'A3']);
+  });
+
+  test('single candidate uses existing enabled and comment filtering', () {
+    final disabled = sequence('B', 2)..enabled = false;
+    final config = group([sequence('A', 1, repeat: 17), disabled],
+        method: 'single_sequential', repeat: 17);
+    expect(config.calculateCombinations(), 1);
+    final text = sequence('A', 1, repeat: 17)..strs = ['# ignored', 'A', ' '];
+    expect(text.calculateCombinations(), 1);
+    expect(text.calculateCombinationCycle(filterEntryComments: false),
+        BigInt.from(51));
+  });
+
+  test('multiple candidates keep literal repeats even for identical text', () {
+    final artist = sequence('A', 2, repeat: 10)..strs = ['A', 'A'];
+    final config = group([sequence('C', 5), artist]);
+    expect(config.calculateCombinations(), 20);
+    expect(List.generate(10, (_) => artist.getPrmpts().toPrompt()),
+        List.filled(10, 'A'));
+    artist.strs = ['A', 'B'];
+    expect(artist.getPrmpts().toPrompt(), 'B');
+  });
+
+  test('enabled empty candidate still makes repeats meaningful', () {
+    final config = group(
+        [sequence('A', 1), PromptConfig(strs: [], prompts: [])],
+        method: 'single_sequential', repeat: 2);
+    expect(config.calculateCombinations(), 4);
+    expect(List.generate(4, (_) => config.getPrmpts().toPrompt()),
+        ['A1', 'A1', '', '']);
+  });
+
   test(
       'six entries repeated twice take twelve calls without count consuming progress',
       () {
@@ -375,11 +441,11 @@ void main() {
   });
   test('exact large cycles do not wrap or silently saturate an integer', () {
     final config = group([
-      sequence('A', 1, repeat: 4000000000),
-      sequence('B', 1, repeat: 4000000001)
+      sequence('A', 2, repeat: 4000000000),
+      sequence('B', 2, repeat: 4000000001)
     ]);
     expect(
-        config.calculateCombinationCycle().toString(), '16000000004000000000');
+        config.calculateCombinationCycle().toString(), '32000000008000000000');
     expect(config.calculateCombinations, throwsRangeError);
   });
   test('malformed legacy reference keeps its unresolved placeholder', () {

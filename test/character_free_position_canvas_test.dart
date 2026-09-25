@@ -75,14 +75,15 @@ void main() {
         (tester) async {
       final vm = _vm();
       vm.setFreeCenter(const Point<double>(0.5, 0.5));
+      final placed = CharacterConfig.fromEmpty()
+        ..freeCenter = const Point<double>(0.2, 0.3);
+      final unplaced = CharacterConfig.fromEmpty();
+      final edited = CharacterConfig.fromEmpty()
+        ..freeCenter = const Point<double>(0.5, 0.5);
       await tester.pumpWidget(_wrap(CharacterFreePositionCanvas(
         viewmodel: vm,
         characterIndex: 1,
-        referencePositions: const <Point<double>?>[
-          Point<double>(0.2, 0.3),
-          null,
-          Point<double>(0.8, 0.8),
-        ],
+        referenceCharacters: [placed, unplaced, edited],
       )));
 
       // Characters 1 and 3 show reference labels; the middle (unplaced)

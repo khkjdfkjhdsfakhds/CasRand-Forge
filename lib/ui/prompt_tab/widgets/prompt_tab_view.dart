@@ -11,6 +11,7 @@ import 'package:nai_casrand/ui/prompt_config/widgets/prompt_search_replace_bar.d
 import 'package:nai_casrand/ui/prompt_config/view_models/prompt_config_viewmodel.dart';
 import 'package:nai_casrand/ui/prompt_assistance/prompt_editing_assistance.dart';
 import 'package:nai_casrand/ui/prompt_assistance/prompt_editing_transform.dart';
+import 'package:nai_casrand/ui/prompt_assistance/prompt_selection_hint.dart';
 import 'package:nai_casrand/ui/prompt_assistance/prompt_weight_syntax.dart';
 import 'package:nai_casrand/ui/saved_config_list/view_models/saved_config_list_viewmodel.dart';
 import 'package:nai_casrand/ui/saved_config_list/widgets/saved_config_list_view.dart';
@@ -371,6 +372,8 @@ class _FixedTextFieldState extends State<_FixedTextField> {
     if (result.changed) {
       fieldState.setEditingValue(result.value);
       widget.onChanged(result.value.text);
+    } else if (result.unsafeSelection && event is KeyDownEvent) {
+      showPromptSelectionHint(context);
     }
     // Consume a Control-arrow even at a valid boundary so the platform's
     // native word/line navigation cannot move the caret as a side effect.
@@ -474,6 +477,7 @@ class _CharacterPromptSectionState extends State<_CharacterPromptSection> {
       config: widget.character,
       paramConfig: widget.viewmodel.paramConfig,
       onAutoPositionChanged: widget.viewmodel.setAutoPosition,
+      onConfigChanged: widget.viewmodel.notifyConfigChanged,
     );
   }
 
@@ -491,6 +495,7 @@ class _CharacterPromptSectionState extends State<_CharacterPromptSection> {
       ..config = widget.character
       ..paramConfig = widget.viewmodel.paramConfig
       ..onAutoPositionChanged = widget.viewmodel.setAutoPosition;
+    _details.onConfigChanged = widget.viewmodel.notifyConfigChanged;
   }
 
   @override
@@ -620,8 +625,7 @@ class _CharacterPromptSectionState extends State<_CharacterPromptSection> {
         child: CharacterConfigView(
           viewmodel: _details,
           characterIndex: index,
-          referencePositions:
-              vm.characterConfigList.map((c) => c.freeCenter).toList(),
+          allCharacters: vm.characterConfigList,
           promptAssistance: widget.promptAssistance,
           autocompleteEnabled: vm.promptAutocompleteEnabled,
         ),

@@ -253,4 +253,39 @@ void main() {
       (token: null, proxy: ''),
     ]);
   });
+
+  test('toggle allowPoints updates token config and settings query', () async {
+    final viewmodel = TokenManagerViewmodel(accountService: accountService);
+    viewmodel.addToken('Secondary', 'pst-secondary');
+    await Future<void>.delayed(Duration.zero);
+
+    final settings = GetIt.I<PayloadConfig>().settings;
+    expect(settings.allowsPointsForToken('pst-secondary'), isTrue);
+
+    viewmodel.setTokenAllowPoints(1, false);
+    expect(viewmodel.tokens[1].allowPoints, isFalse);
+    expect(settings.allowsPointsForToken('pst-secondary'), isFalse);
+    expect(configService.saveCount, 2);
+
+    viewmodel.setTokenAllowPoints(1, true);
+    expect(viewmodel.tokens[1].allowPoints, isTrue);
+    expect(settings.allowsPointsForToken('pst-secondary'), isTrue);
+  });
+
+  test('toggle allowFree updates token config and settings query', () async {
+    final viewmodel = TokenManagerViewmodel(accountService: accountService);
+    viewmodel.addToken('Secondary', 'pst-secondary');
+    await Future<void>.delayed(Duration.zero);
+
+    final settings = GetIt.I<PayloadConfig>().settings;
+    expect(settings.allowsFreeForToken('pst-secondary'), isTrue);
+
+    viewmodel.setTokenAllowFree(1, false);
+    expect(viewmodel.tokens[1].allowFree, isFalse);
+    expect(settings.allowsFreeForToken('pst-secondary'), isFalse);
+
+    viewmodel.setTokenAllowFree(1, true);
+    expect(viewmodel.tokens[1].allowFree, isTrue);
+    expect(settings.allowsFreeForToken('pst-secondary'), isTrue);
+  });
 }

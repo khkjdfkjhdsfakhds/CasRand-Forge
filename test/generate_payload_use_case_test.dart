@@ -9,6 +9,7 @@ import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
 import 'package:nai_casrand/data/models/vibe_config_v4.dart';
 import 'package:nai_casrand/data/use_cases/generate_payload_use_case.dart';
+import 'package:nai_casrand/data/use_cases/enhance_request_options.dart';
 import 'package:nai_casrand/data/use_cases/prepare_i2i_request_use_case.dart';
 
 class _UpperBoundRandom implements Random {
@@ -540,6 +541,40 @@ void main() {
     expect(config.overridePrompt, isEmpty);
   });
 
+  test('direct Enhance uses the current fixed prompt after it is edited', () {
+    final config = buildPlainConfig(model: 'nai-diffusion-5-full');
+    config.importMetadataToFixedProfile(
+      {'steps': 28},
+      prompt: 'ORIGINAL_CAT',
+      model: 'nai-diffusion-5-full',
+    );
+    config.enhanceConfig.setSourceMetadata(
+      prompt: 'ORIGINAL_CAT',
+      model: 'nai-diffusion-5-full',
+    );
+    config.fixedProfile.rootPromptConfig =
+        PayloadConfig.fixedPromptConfig('EDITED_DOG');
+
+    final result = GeneratePayloadUseCase(
+      payloadConfig: config,
+      i2iPlan: const I2iRequestPlan(
+        imageB64: 'aW1hZ2U=',
+        maskB64: null,
+        width: 1280,
+        height: 1856,
+        strength: 0.5,
+        noise: 0,
+        addOriginalImage: true,
+        composite: null,
+        summary: 'Enhance edited prompt',
+      ),
+      enhanceOptions: const EnhanceRequestOptions(),
+    )();
+
+    expect(result.payload['input'], contains('EDITED_DOG'));
+    expect(result.payload['input'], isNot(contains('ORIGINAL_CAT')));
+  });
+
   test('legacy I2I random flag cannot override a fixed global seed', () {
     final config = buildPlainConfig();
     config.i2iConfig.setUseRandomSeed(true);
@@ -711,6 +746,27 @@ void main() {
     expect(parameters.containsKey('mask'), isFalse);
     expect(parameters.containsKey('inpaintImg2ImgStrength'), isFalse);
     expect(result.comment, contains('img2img test'));
+  });
+
+  test('plain img2img normalizes a leaked inpainting transport model', () {
+    final config = buildPlainConfig(model: 'nai-diffusion-5-full-inpainting');
+    const plan = I2iRequestPlan(
+      imageB64: 'aW1hZ2U=',
+      maskB64: null,
+      width: 640,
+      height: 960,
+      strength: 0.55,
+      noise: 0.1,
+      addOriginalImage: false,
+      composite: null,
+      summary: 'img2img transport model normalization',
+    );
+
+    final result =
+        GeneratePayloadUseCase(payloadConfig: config, i2iPlan: plan)();
+
+    expect(result.payload['action'], 'img2img');
+    expect(result.payload['model'], 'nai-diffusion-5-full');
   });
 
   test('inpaint always requests raw pixels for official local compositing', () {

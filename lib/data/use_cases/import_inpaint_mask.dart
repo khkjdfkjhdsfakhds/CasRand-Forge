@@ -83,11 +83,13 @@ InpaintMaskAnalysis analyzeInpaintMask(
       channel: InpaintMaskChannel.alpha,
       threshold: threshold,
     ),
-    suggestedLuminanceInvert: _borderSuggestsInvert(
-      source,
-      channel: InpaintMaskChannel.luminance,
-      threshold: threshold,
-    ),
+    suggestedLuminanceInvert: source.textData?['CasRandMask'] == 'white=repaint'
+        ? false
+        : _borderSuggestsInvert(
+            source,
+            channel: InpaintMaskChannel.luminance,
+            threshold: threshold,
+          ),
   );
 }
 
@@ -195,6 +197,26 @@ bool inpaintMaskHasSelection(Uint8List pngBytes) {
     if (pixel.r > 127) return true;
   }
   return false;
+}
+
+Uint8List invertInpaintMask(Uint8List pngBytes) {
+  if (pngBytes.length < 8) throw const FormatException('Invalid mask PNG');
+  final mask = img.decodePng(pngBytes);
+  if (mask == null) throw const FormatException('Invalid mask PNG');
+  for (final pixel in mask) {
+    final value = pixel.r > 127 ? 0 : 255;
+    pixel.setRgba(value, value, value, 255);
+  }
+  return Uint8List.fromList(img.encodePng(mask));
+}
+
+/// Marks our clipboard PNGs so importing a mask that touches the border does
+/// not guess the opposite polarity. Other applications can ignore this text.
+Uint8List exportInpaintMask(Uint8List pngBytes) {
+  final mask = img.decodePng(pngBytes);
+  if (mask == null) throw const FormatException('Invalid mask PNG');
+  mask.textData = {'CasRandMask': 'white=repaint'};
+  return Uint8List.fromList(img.encodePng(mask));
 }
 
 bool _hasTransparency(img.Image image) {
