@@ -30,6 +30,63 @@ void main() {
     expect(ApiService.defaultRequestTimeout, const Duration(minutes: 3));
   });
 
+  test('sends an assembled multipart body with its own content type', () async {
+    late http.Request captured;
+    final service = ApiService(
+      clientFactory: (_) => MockClient((request) async {
+        captured = request;
+        return http.Response.bytes([80, 75, 3, 4], 200);
+      }),
+    );
+    final body = ApiMultipartBody(
+      boundary: 'casrandtestboundary',
+      parts: [
+        ApiMultipartPart(
+          field: 'image',
+          fileName: 'blob',
+          contentType: 'image/png',
+          bytes: Uint8List.fromList([1, 2, 3]),
+        ),
+        ApiMultipartPart(
+          field: 'request',
+          fileName: 'blob',
+          contentType: 'application/json',
+          bytes: Uint8List.fromList(utf8.encode('{"image":"image"}')),
+        ),
+      ],
+    );
+
+    final response = await service.fetchData(ApiRequest(
+      endpoint: 'https://api.takoma.app/ai/augment-image',
+      proxy: '',
+      headers: const {
+        'authorization': 'Bearer TEST_TOKEN',
+        'content-type': 'application/json',
+      },
+      multipart: body,
+    ));
+
+    expect(response.status, '200');
+    expect(
+      captured.headers['content-type'],
+      'multipart/form-data; boundary=casrandtestboundary',
+    );
+    final text = latin1.decode(captured.bodyBytes);
+    expect(text, startsWith('--casrandtestboundary\r\n'));
+    expect(
+      text,
+      contains('Content-Disposition: form-data; name="image"; filename="blob"'),
+    );
+    expect(text, contains('Content-Type: image/png'));
+    expect(
+      text,
+      contains(
+          'Content-Disposition: form-data; name="request"; filename="blob"'),
+    );
+    expect(text, contains('{"image":"image"}'));
+    expect(text, endsWith('--casrandtestboundary--\r\n'));
+  });
+
   test('emits privacy-safe request and cache diagnostics only when observed',
       () async {
     final events = <GenerationPerformanceEvent>[];

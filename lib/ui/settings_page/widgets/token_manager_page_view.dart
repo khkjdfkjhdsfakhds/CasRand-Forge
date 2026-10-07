@@ -1,5 +1,7 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:nai_casrand/data/models/api_token_config.dart';
+import 'package:nai_casrand/data/models/settings.dart';
 import 'package:nai_casrand/ui/settings_page/view_models/token_manager_viewmodel.dart';
 
 /// Management page for multiple NovelAI API tokens (concurrent generation).
@@ -178,7 +180,8 @@ class _TokenManagerPageViewState extends State<TokenManagerPageView> {
                                       ),
                                       avatar: Icon(
                                         entry.allowPoints
-                                            ? Icons.account_balance_wallet_outlined
+                                            ? Icons
+                                                .account_balance_wallet_outlined
                                             : Icons.block_outlined,
                                         size: 16,
                                       ),
@@ -188,8 +191,8 @@ class _TokenManagerPageViewState extends State<TokenManagerPageView> {
                                             : 'api_token_points_blocked'),
                                       ),
                                       selected: entry.allowPoints,
-                                      onSelected: (val) =>
-                                          viewmodel.setTokenAllowPoints(index, val),
+                                      onSelected: (val) => viewmodel
+                                          .setTokenAllowPoints(index, val),
                                     ),
                                     FilterChip(
                                       key: ValueKey(
@@ -226,8 +229,52 @@ class _TokenManagerPageViewState extends State<TokenManagerPageView> {
                                             : 'api_token_free_blocked'),
                                       ),
                                       selected: entry.allowFree,
-                                      onSelected: (val) =>
-                                          viewmodel.setTokenAllowFree(index, val),
+                                      onSelected: (val) => viewmodel
+                                          .setTokenAllowFree(index, val),
+                                    ),
+                                    _TokenDropdownChip<bool>(
+                                      selectorKey:
+                                          ValueKey('token-api-${entry.token}'),
+                                      icon: Icons.dns_outlined,
+                                      value: Uri.tryParse(entry.apiBaseUrl)
+                                              ?.host ==
+                                          Settings.takomaApiHost,
+                                      items: [
+                                        DropdownMenuItem(
+                                          value: false,
+                                          child:
+                                              Text(tr('api_provider_official')),
+                                        ),
+                                        DropdownMenuItem(
+                                          value: true,
+                                          child:
+                                              Text(tr('api_provider_takoma')),
+                                        ),
+                                      ],
+                                      onChanged: (useTakoma) =>
+                                          viewmodel.setTokenApiBaseUrl(
+                                        index,
+                                        useTakoma
+                                            ? Settings.takomaApiBaseUrl
+                                            : Settings.officialApiBaseUrl,
+                                      ),
+                                    ),
+                                    _TokenDropdownChip<int>(
+                                      selectorKey: ValueKey(
+                                        'token-concurrency-${entry.token}',
+                                      ),
+                                      icon: Icons.call_split_outlined,
+                                      label: tr('api_token_concurrency'),
+                                      value: entry.concurrency,
+                                      items: List.generate(
+                                        ApiTokenConfig.maxConcurrency,
+                                        (slot) => DropdownMenuItem(
+                                          value: slot + 1,
+                                          child: Text('${slot + 1}'),
+                                        ),
+                                      ),
+                                      onChanged: (value) => viewmodel
+                                          .setTokenConcurrency(index, value),
                                     ),
                                   ],
                                 ),
@@ -456,6 +503,79 @@ class _TokenManagerPageViewState extends State<TokenManagerPageView> {
             child: Text(tr('confirm')),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Compact outlined selector used for per-account options so every control in
+/// the account card shares the same chip-like frame.
+class _TokenDropdownChip<T> extends StatelessWidget {
+  final Key selectorKey;
+  final IconData icon;
+  final String? label;
+  final T value;
+  final List<DropdownMenuItem<T>> items;
+  final ValueChanged<T> onChanged;
+
+  const _TokenDropdownChip({
+    required this.selectorKey,
+    required this.icon,
+    this.label,
+    required this.value,
+    required this.items,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: colorScheme.outline.withValues(alpha: 0.45),
+        ),
+      ),
+      // IntrinsicWidth keeps the chip as narrow as its content while letting
+      // the selector shrink with ellipsis on very narrow cards.
+      child: IntrinsicWidth(
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 16),
+            const SizedBox(width: 6),
+            if (label != null) ...[
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 96),
+                child: Text(
+                  label!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 4),
+            ],
+            Flexible(
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<T>(
+                  key: selectorKey,
+                  value: value,
+                  isDense: true,
+                  isExpanded: true,
+                  borderRadius: BorderRadius.circular(8),
+                  items: items,
+                  onChanged: (value) {
+                    if (value == null) return;
+                    onChanged(value);
+                  },
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

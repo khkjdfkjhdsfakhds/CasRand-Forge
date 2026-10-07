@@ -531,6 +531,40 @@ void main() {
     }
   });
 
+  testWidgets('API base URL is a two-option selector applied on confirm', (
+    tester,
+  ) async {
+    await tester.pumpWidget(localizedSettingsPage());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('api-proxy-settings-tile')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('api-base-url-input')), findsNothing);
+    final selector = find.byKey(const Key('api-base-url-select'));
+    expect(selector, findsOneWidget);
+    expect(find.text('https://image.novelai.net'), findsOneWidget);
+
+    await tester.tap(selector);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Takoma').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('https://api.takoma.app'), findsOneWidget);
+    expect(
+      GetIt.I<PayloadConfig>().settings.normalizedApiBaseUrl,
+      'https://image.novelai.net',
+    );
+
+    await tester.tap(find.text('Confirm'));
+    await tester.pumpAndSettle();
+
+    expect(
+      GetIt.I<PayloadConfig>().settings.normalizedApiBaseUrl,
+      'https://api.takoma.app',
+    );
+  });
+
   testWidgets('desktop proxy detection fills the edit field before confirm', (
     tester,
   ) async {

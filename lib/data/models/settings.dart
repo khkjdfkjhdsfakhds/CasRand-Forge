@@ -38,7 +38,9 @@ class Settings {
   List<ApiTokenConfig> apiTokens;
 
   /// Whether generation may use the enabled entries in [apiTokens]. When
-  /// disabled, generation follows the legacy single-account path via [apiKey].
+  /// disabled, generation normally follows the legacy single-account path via
+  /// [apiKey], except when the main account is disabled and exactly one listed
+  /// account remains enabled.
   bool parallelApiEnabled;
 
   /// Subscription tier of the active account (3 = Opus), refreshed from the
@@ -67,6 +69,10 @@ class Settings {
   // Proxy settings
   String proxy;
 
+  /// API service base URL. NovelAI's image API remains the default; compatible
+  /// relays such as Takoma can be selected without changing token handling.
+  String apiBaseUrl;
+
   // Debug API path
   String debugApiPath;
   bool debugApiEnabled;
@@ -93,6 +99,7 @@ class Settings {
     this.jpegStorageEnabled = false,
     this.retainOriginalPng = false,
     required this.proxy,
+    this.apiBaseUrl = officialApiBaseUrl,
     required this.debugApiEnabled,
     required this.debugApiPath,
     required this.metadataEraseEnabled,
@@ -120,9 +127,55 @@ class Settings {
     normalizeApiTokens();
   }
 
+  static const String officialApiBaseUrl = 'https://image.novelai.net';
+  static const String takomaApiHost = 'api.takoma.app';
+  static const String takomaApiBaseUrl = 'https://$takomaApiHost';
+
+  String get normalizedApiBaseUrl {
+    final value = apiBaseUrl.trim();
+    if (value.isEmpty) return officialApiBaseUrl;
+    return value.endsWith('/') ? value.substring(0, value.length - 1) : value;
+  }
+
+  bool get isTakomaApi =>
+      Uri.tryParse(normalizedApiBaseUrl)?.host == takomaApiHost;
+
+  String apiBaseUrlForToken(String token) {
+    final entry = apiTokens
+        .where((item) => item.token.trim() == token.trim())
+        .firstOrNull;
+    final value = entry?.apiBaseUrl.trim() ?? normalizedApiBaseUrl;
+    if (value.isEmpty) return officialApiBaseUrl;
+    return value.endsWith('/') ? value.substring(0, value.length - 1) : value;
+  }
+
+  bool isTakomaToken(String token) =>
+      Uri.tryParse(apiBaseUrlForToken(token))?.host == takomaApiHost;
+
+  String apiEndpointForToken(String token, String path) {
+    final base = apiBaseUrlForToken(token);
+    return '$base/${path.replaceFirst('/', '')}';
+  }
+
+  String apiEndpoint(String path) =>
+      '$normalizedApiBaseUrl/${path.replaceFirst('/', '')}';
+
   /// Tokens that generation should use, in user-defined priority order.
   List<ApiTokenConfig> get effectiveApiTokens {
+    final enabledTokens = apiTokens
+        .where((entry) => entry.enabled && entry.token.isNotEmpty)
+        .take(maxParallelApiTokens)
+        .toList(growable: false);
     if (!parallelApiEnabled) {
+      final primaryEntry =
+          apiTokens.where((entry) => entry.isPrimary).firstOrNull;
+      // If the main account was disabled and one listed account remains
+      // enabled, honor that selection instead of falling back to the disabled
+      // main token configured on the parent settings page.
+      if (enabledTokens.length == 1 && primaryEntry?.enabled == false) {
+        return enabledTokens;
+      }
+
       var primary = apiTokens.where((entry) => entry.isPrimary).firstOrNull;
       primary ??= apiTokens
           .where((entry) => entry.enabled && entry.token.isNotEmpty)
@@ -142,21 +195,18 @@ class Settings {
           isPrimary: true,
           allowPoints: primary?.allowPoints ?? true,
           allowFree: primary?.allowFree ?? true,
+          apiBaseUrl: primary?.apiBaseUrl ?? normalizedApiBaseUrl,
         ),
       ];
     }
-    return apiTokens
-        .where((entry) => entry.enabled && entry.token.isNotEmpty)
-        .take(maxParallelApiTokens)
-        .toList(growable: false);
+    return enabledTokens;
   }
 
   /// Whether the specified token is allowed to spend Anlas points.
   /// Defaults to true if the token is not found in [apiTokens].
   bool allowsPointsForToken(String token) {
     final trimmed = token.trim();
-    final entry =
-        apiTokens.where((e) => e.token.trim() == trimmed).firstOrNull;
+    final entry = apiTokens.where((e) => e.token.trim() == trimmed).firstOrNull;
     return entry?.allowPoints ?? true;
   }
 
@@ -164,8 +214,7 @@ class Settings {
   /// Defaults to true if the token is not found in [apiTokens].
   bool allowsFreeForToken(String token) {
     final trimmed = token.trim();
-    final entry =
-        apiTokens.where((e) => e.token.trim() == trimmed).firstOrNull;
+    final entry = apiTokens.where((e) => e.token.trim() == trimmed).firstOrNull;
     return entry?.allowFree ?? true;
   }
 
@@ -189,6 +238,8 @@ class Settings {
           isPrimary: true,
           allowPoints: previous?.allowPoints ?? true,
           allowFree: previous?.allowFree ?? true,
+          apiBaseUrl: previous?.apiBaseUrl ?? normalizedApiBaseUrl,
+          concurrency: previous?.concurrency ?? 1,
         ),
       );
     }
@@ -223,6 +274,8 @@ class Settings {
         isPrimary: isPrimary,
         allowPoints: entry.allowPoints,
         allowFree: entry.allowFree,
+        apiBaseUrl: entry.apiBaseUrl,
+        concurrency: entry.concurrency,
       ));
     }
 
@@ -243,6 +296,7 @@ class Settings {
             isPrimary: true,
             allowPoints: oldPrimary?.allowPoints ?? true,
             allowFree: oldPrimary?.allowFree ?? true,
+            apiBaseUrl: oldPrimary?.apiBaseUrl ?? normalizedApiBaseUrl,
           ),
         );
       }
@@ -294,6 +348,13 @@ class Settings {
             .toList()
         : <ApiTokenConfig>[];
     final apiKey = (json['api_key'] ?? 'pst-abcd') as String;
+    final legacyBase = json['api_base_url'] as String?;
+    if (legacyBase != null && apiTokens.isNotEmpty) {
+      final primary = apiTokens.where((entry) => entry.isPrimary).firstOrNull;
+      if (primary != null && primary.apiBaseUrl == officialApiBaseUrl) {
+        primary.apiBaseUrl = legacyBase;
+      }
+    }
     final hasEnabledAdditionalToken = apiTokens.any(
       (entry) =>
           entry.enabled &&
@@ -318,6 +379,7 @@ class Settings {
       jpegStorageEnabled: json['jpeg_storage_enabled'] ?? false,
       retainOriginalPng: json['retain_original_png'] ?? false,
       proxy: json['proxy'] ?? '',
+      apiBaseUrl: json['api_base_url'] ?? officialApiBaseUrl,
       debugApiEnabled: false,
       debugApiPath: 'http://localhost:5000/ai/generate-image',
       metadataEraseEnabled: json['metadata_erase_enabled'] ?? false,
@@ -352,6 +414,7 @@ class Settings {
       'jpeg_storage_enabled': jpegStorageEnabled,
       'retain_original_png': retainOriginalPng,
       'proxy': proxy,
+      'api_base_url': normalizedApiBaseUrl,
       'metadata_erase_enabled': metadataEraseEnabled,
       'custom_metadata_enabled': customMetadataEnabled,
       'custom_metadata_content': customMetadataContent,

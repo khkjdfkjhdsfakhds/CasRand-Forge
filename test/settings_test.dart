@@ -214,6 +214,42 @@ void main() {
     expect(restored.resultDisplayMode, 'classic');
   });
 
+  test('token concurrency migrates and survives a JSON round trip', () {
+    final settings = Settings.fromJson({
+      'api_key': 'pst-main',
+      'api_tokens': [
+        {
+          'label': 'Takoma',
+          'token': 'pst-takoma',
+          'api_base_url': 'https://api.takoma.app',
+        },
+        {
+          'label': 'Official',
+          'token': 'pst-official',
+          'api_base_url': 'https://image.novelai.net',
+        },
+        {
+          'label': 'Stored',
+          'token': 'pst-stored',
+          'concurrency': 99,
+        },
+      ],
+    });
+
+    ApiTokenConfig token(String label) =>
+        settings.apiTokens.firstWhere((entry) => entry.label == label);
+    expect(token('Takoma').concurrency, 4);
+    expect(token('Official').concurrency, 1);
+    expect(token('Stored').concurrency, 4);
+
+    final restored = Settings.fromJson(settings.toJson());
+    ApiTokenConfig restoredToken(String label) =>
+        restored.apiTokens.firstWhere((entry) => entry.label == label);
+    expect(restoredToken('Takoma').concurrency, 4);
+    expect(restoredToken('Official').concurrency, 1);
+    expect(restoredToken('Stored').concurrency, 4);
+  });
+
   test('classic grid is the default for new and pre-migration configs', () {
     expect(Settings.fromJson({}).resultDisplayMode, 'classic');
     expect(
@@ -287,6 +323,36 @@ void main() {
     final effective = settings.effectiveApiTokens;
     expect(effective.map((entry) => entry.token), ['pst-legacy', 'pst-on']);
     expect(settings.apiKey, 'pst-legacy');
+  });
+
+  test('parallel-off uses the only enabled listed token', () {
+    final settings = Settings.fromJson({
+      'api_key': 'pst-main',
+      'parallel_api_enabled': false,
+      'api_tokens': [
+        {
+          'label': 'Main',
+          'token': 'pst-main',
+          'enabled': false,
+          'is_primary': true,
+        },
+        {
+          'label': 'Selected',
+          'token': 'pst-selected',
+          'enabled': true,
+        },
+        {
+          'label': 'Off',
+          'token': 'pst-off',
+          'enabled': false,
+        },
+      ],
+    });
+
+    expect(settings.parallelApiEnabled, isFalse);
+    expect(settings.effectiveApiTokens, hasLength(1));
+    expect(settings.effectiveApiTokens.single.token, 'pst-selected');
+    expect(settings.effectiveApiTokens.single.label, 'Selected');
   });
 
   test('old additional tokens enable parallel mode and keep the main token',
@@ -363,12 +429,23 @@ void main() {
     expect(ApiTokenConfig(label: 'short', token: 'pst').maskedToken, 'ps···');
   });
 
-  test('empty apiKey automatically elects first enabled token in apiTokens', () {
+  test('empty apiKey automatically elects first enabled token in apiTokens',
+      () {
     final settings = Settings.fromJson({
       'api_key': '',
       'api_tokens': [
-        {'label': 'TB2', 'token': 'pst-tb2', 'enabled': true, 'is_primary': false},
-        {'label': 'TB3', 'token': 'pst-tb3', 'enabled': true, 'is_primary': false},
+        {
+          'label': 'TB2',
+          'token': 'pst-tb2',
+          'enabled': true,
+          'is_primary': false
+        },
+        {
+          'label': 'TB3',
+          'token': 'pst-tb3',
+          'enabled': true,
+          'is_primary': false
+        },
       ],
       'parallel_api_enabled': false,
     });
@@ -379,12 +456,24 @@ void main() {
     expect(settings.effectiveApiTokens.single.token, 'pst-tb2');
   });
 
-  test('clearing apiKey via updatePrimaryApiKey falls back to next available token', () {
+  test(
+      'clearing apiKey via updatePrimaryApiKey falls back to next available token',
+      () {
     final settings = Settings.fromJson({
       'api_key': 'pst-main',
       'api_tokens': [
-        {'label': 'Main', 'token': 'pst-main', 'enabled': true, 'is_primary': true},
-        {'label': 'Backup', 'token': 'pst-backup', 'enabled': true, 'is_primary': false},
+        {
+          'label': 'Main',
+          'token': 'pst-main',
+          'enabled': true,
+          'is_primary': true
+        },
+        {
+          'label': 'Backup',
+          'token': 'pst-backup',
+          'enabled': true,
+          'is_primary': false
+        },
       ],
       'parallel_api_enabled': false,
     });

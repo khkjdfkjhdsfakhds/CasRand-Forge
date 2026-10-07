@@ -15,8 +15,8 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_command/flutter_command.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/data/models/api_request.dart';
+import 'package:nai_casrand/data/models/api_token_config.dart';
 import 'package:nai_casrand/data/models/command_status.dart';
-import 'package:nai_casrand/data/models/director_tool_config.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
 import 'package:nai_casrand/data/models/generation_performance_diagnostics.dart';
 import 'package:nai_casrand/data/models/i2i_config.dart';
@@ -38,6 +38,7 @@ import 'package:nai_casrand/data/use_cases/anlas_cost.dart';
 import 'package:nai_casrand/data/use_cases/encode_vibe_use_case.dart';
 import 'package:nai_casrand/data/use_cases/generate_payload_use_case.dart';
 import 'package:nai_casrand/data/use_cases/prepare_i2i_request_use_case.dart';
+import 'package:nai_casrand/data/use_cases/takoma_generation_request_use_case.dart';
 import 'package:nai_casrand/data/use_cases/prepare_director_tool_request_use_case.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_scheduler.dart';
 
@@ -122,6 +123,41 @@ class _LogicalGenerationTask {
   Command<void, InfoCardContent>? cardCommand;
   final Map<int, Uint8List> completedTiles = {};
   int savedPartialTileCount = 0;
+}
+
+/// Shared prompt/seed state for one Takoma generation batch.
+///
+/// Takoma's relay exposes the same fan-out behaviour as its web client: one
+/// prompt and parameter set is reused for concurrent requests, while each
+/// request advances the seed by one. The first worker builds the payload;
+/// the remaining workers clone that immutable result instead of rolling a new
+/// prompt combination.
+class _TakomaFanoutContext {
+  _TakomaFanoutContext({required this.baseSeed});
+
+  final int baseSeed;
+  Future<PayloadGenerationResult>? _template;
+  final Map<int, Future<PayloadGenerationResult>> _tasks = {};
+
+  Future<PayloadGenerationResult> payloadForTask(
+    int taskNumber,
+    Future<PayloadGenerationResult> Function() build,
+  ) {
+    return _tasks.putIfAbsent(taskNumber, () async {
+      final template = await (_template ??= build());
+      final clone =
+          jsonDecode(jsonEncode(template.payload)) as Map<String, dynamic>;
+      final parameters = clone['parameters'];
+      if (parameters is Map<String, dynamic>) {
+        parameters['seed'] = baseSeed + taskNumber - 1;
+      }
+      return PayloadGenerationResult(
+        payload: clone,
+        comment: template.comment,
+        suggestedFileName: template.suggestedFileName,
+      );
+    });
+  }
 }
 
 class _PartialInpaintFailure implements Exception {
@@ -402,6 +438,16 @@ class GenerationPageViewmodel extends ChangeNotifier {
     }
   }
 
+  /// True when the payload needs a relay feature Takoma does not expose:
+  /// Precise Reference images or a mask-inpainting pass.
+  bool _takomaUnsupportedFeature(PayloadGenerationResult payloadResult) {
+    final parameters = payloadResult.payload['parameters'];
+    if (parameters is! Map<String, dynamic>) return false;
+    if (parameters['mask'] is String) return true;
+    final preciseReferences = parameters['director_reference_images'];
+    return preciseReferences is List && preciseReferences.isNotEmpty;
+  }
+
   PayloadGenerationResult _buildToolPayload(BatchToolSnapshot tool) {
     if (tool.kind == BatchToolKind.enhance) {
       final seed = EnhanceRequestOptions.nextSeed();
@@ -516,6 +562,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
   final Map<int, _WorkerState> _extraWorkers = {};
   final Map<int, _LogicalGenerationTask> _logicalTasks = {};
   GenerationScheduler? _scheduler;
+  _TakomaFanoutContext? _takomaFanoutContext;
   GenerationLease? _primaryLease;
   _BatchAccounting? _activeBatch;
   BatchToolSnapshot? _runningBatchTool;
@@ -779,7 +826,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
     }
     final token = tokens.first.token;
     final proxy = settings.proxy;
-    final refreshIdentity = '$token\u0000$proxy';
+    final refreshIdentity =
+        '${settings.apiBaseUrlForToken(token)}\u0000$token\u0000$proxy';
     if (_displayedSubscriptionToken != refreshIdentity) {
       _displayedSubscriptionToken = refreshIdentity;
       settings.subscriptionStatusKnown = false;
@@ -797,9 +845,10 @@ class GenerationPageViewmodel extends ChangeNotifier {
     _subscriptionRefreshInFlight.add(refreshIdentity);
     _lastSubscriptionRefreshAttempts[refreshIdentity] = now;
     try {
-      final info = await _accountService.fetchSubscription(
+      final info = await _accountService.fetchSubscriptionForBase(
         token: token,
         proxy: proxy,
+        apiBaseUrl: settings.apiBaseUrlForToken(token),
       );
       if (_disposed || settings.proxy != proxy) return;
       if (info != null) {
@@ -1111,7 +1160,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
   }
 
   String? _tokenLabelForWorker(int workerIndex) {
-    if (_activeTokens.length <= 1) return null;
+    if (_activeTokenLabels.toSet().length <= 1) return null;
     if (workerIndex < _activeTokenLabels.length) {
       return _activeTokenLabels[workerIndex];
     }
@@ -1171,10 +1220,10 @@ class GenerationPageViewmodel extends ChangeNotifier {
       final settings = payloadConfig.settings;
       final directorBatch = toolSnapshot?.kind == BatchToolKind.director;
       final endpoint = directorBatch
-          ? augmentImageEndpoint
+          ? settings.apiEndpointForToken(token, '/ai/augment-image')
           : settings.debugApiEnabled
               ? settings.debugApiPath
-              : 'https://image.novelai.net/ai/generate-image';
+              : settings.apiEndpointForToken(token, '/ai/generate-image');
       startingBalance = _lastAnlasBalances[token];
       startingBalanceTime = _lastAnlasBalanceTimes[token];
       batchAccounting?.activeRequests++;
@@ -1229,7 +1278,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
                 shouldContinue: shouldSend,
                 endpoint: settings.debugApiEnabled
                     ? EncodeVibeUseCase.endpointForDebugGenerationPath(endpoint)
-                    : EncodeVibeUseCase.officialEndpoint,
+                    : settings.apiEndpointForToken(token, '/ai/encode-vibe'),
               );
 
         if (enhanceFingerprint != null &&
@@ -1259,6 +1308,24 @@ class GenerationPageViewmodel extends ChangeNotifier {
             enhanceOptions: enhanceOptions,
             applyPlainI2iCompatibilityFields: enhanceOptions != null,
           )();
+        } else if (_takomaFanoutContext != null && scheduledLease != null) {
+          final fanout = _takomaFanoutContext!;
+          payloadResult = await fanout.payloadForTask(
+            scheduledLease.taskNumber,
+            () async {
+              vibeExtractionAnlas += await ensureVibeEncodings(
+                token: token,
+                shouldContinue: shouldSend,
+                endpoint: settings.debugApiEnabled
+                    ? EncodeVibeUseCase.endpointForDebugGenerationPath(endpoint)
+                    : settings.apiEndpointForToken(token, '/ai/encode-vibe'),
+              );
+              return GeneratePayloadUseCase(
+                payloadConfig: payloadConfig,
+                seedOverride: fanout.baseSeed,
+              )();
+            },
+          );
         } else {
           final currentFingerprint = _generationRetryFingerprint();
           final cachedPayload = _getCachedPayload(workerIndex);
@@ -1282,7 +1349,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
                 shouldContinue: shouldSend,
                 endpoint: settings.debugApiEnabled
                     ? EncodeVibeUseCase.endpointForDebugGenerationPath(endpoint)
-                    : EncodeVibeUseCase.officialEndpoint,
+                    : settings.apiEndpointForToken(token, '/ai/encode-vibe'),
               );
               final buildFingerprint = _generationRetryFingerprint();
               i2iBatch = null;
@@ -1368,6 +1435,16 @@ class GenerationPageViewmodel extends ChangeNotifier {
         }
         if (toolSnapshot == null) _applyCurrentVibesToPayload(payloadResult);
 
+        // Takoma's relay exposes neither director reference encoding nor mask
+        // inpainting, so stop before paying for a request its upstream rejects.
+        if (settings.isTakomaToken(token) &&
+            _takomaUnsupportedFeature(payloadResult)) {
+          throw NovelAiApiException(
+            tr('takoma_unsupported_feature_error'),
+            statusCode: 400,
+          );
+        }
+
         final estimatedGenerationCost = _estimateResultAnlas(
           token: token,
           payloadResult: payloadResult,
@@ -1413,11 +1490,17 @@ class GenerationPageViewmodel extends ChangeNotifier {
             (value) => value + 1,
             ifAbsent: () => 1,
           );
+          // Takoma moves inline images into form parts; official NovelAI keeps
+          // the JSON body it already accepts.
+          final takomaRequest = settings.isTakomaToken(token)
+              ? TakomaGenerationRequestUseCase.build(payload)
+              : null;
           final request = ApiRequest(
             endpoint: endpoint,
             proxy: acceptedProxy,
             headers: headers,
-            payload: payload,
+            payload: takomaRequest?.payload ?? payload,
+            multipart: takomaRequest?.multipart,
             diagnosticContext: diagnosticContext,
             shouldSend: shouldSend,
           );
@@ -2244,9 +2327,10 @@ class GenerationPageViewmodel extends ChangeNotifier {
   }) async {
     SubscriptionInfo? info;
     try {
-      info = await _accountService.fetchSubscription(
+      info = await _accountService.fetchSubscriptionForBase(
         token: token,
         proxy: payloadConfig.settings.proxy,
+        apiBaseUrl: payloadConfig.settings.apiBaseUrlForToken(token),
         forceRefresh: true,
       );
     } catch (_) {
@@ -2341,9 +2425,10 @@ class GenerationPageViewmodel extends ChangeNotifier {
     _BatchAccounting batch,
     String token,
   ) async {
-    final info = await _accountService.fetchSubscription(
+    final info = await _accountService.fetchSubscriptionForBase(
       token: token,
       proxy: payloadConfig.settings.proxy,
+      apiBaseUrl: payloadConfig.settings.apiBaseUrlForToken(token),
       forceRefresh: true,
     );
     if (info == null) return;
@@ -2380,9 +2465,10 @@ class GenerationPageViewmodel extends ChangeNotifier {
         !shouldRetry ? const <Duration>[] : _balanceSettlementRetryDelays;
     for (var attempt = 0; attempt <= retryDelays.length; attempt++) {
       if (attempt > 0) await Future<void>.delayed(retryDelays[attempt - 1]);
-      final info = await _accountService.fetchSubscription(
+      final info = await _accountService.fetchSubscriptionForBase(
         token: token,
         proxy: payloadConfig.settings.proxy,
+        apiBaseUrl: payloadConfig.settings.apiBaseUrlForToken(token),
         forceRefresh: true,
       );
       if (info == null) continue;
@@ -2459,6 +2545,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
     String endpoint = EncodeVibeUseCase.officialEndpoint,
     bool Function()? shouldContinue,
   }) async {
+    if (payloadConfig.settings.isTakomaToken(token)) return 0;
     var extractedCount = 0;
 
     // Encoding yields to the event loop. The user may remove A and add B while
@@ -2938,6 +3025,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
     _directorPreparationError = null;
     notifyListeners();
     late final Map<String, dynamic> payload;
+    late final ApiMultipartBody? multipart;
     late final int requestWidth;
     late final int requestHeight;
     try {
@@ -2964,6 +3052,32 @@ class GenerationPageViewmodel extends ChangeNotifier {
         'height': requestHeight,
         'image': prepared.imageB64,
       };
+      // Takoma refuses the JSON body on its augment endpoint and expects the
+      // official client's form: an `image` file part plus a `request` part
+      // whose `image` field names that file part. Official NovelAI keeps the
+      // JSON body it already accepts.
+      multipart = settings.isTakomaToken(token)
+          ? ApiMultipartBody(parts: <ApiMultipartPart>[
+              ApiMultipartPart(
+                field: 'image',
+                fileName: 'blob',
+                contentType: 'image/png',
+                bytes: prepared.preparedBytes,
+              ),
+              ApiMultipartPart(
+                field: 'request',
+                fileName: 'blob',
+                contentType: 'application/json',
+                bytes:
+                    Uint8List.fromList(utf8.encode(jsonEncode(<String, dynamic>{
+                  ...requestParameters,
+                  'width': requestWidth,
+                  'height': requestHeight,
+                  'image': 'image',
+                }))),
+              ),
+            ])
+          : null;
     } catch (error) {
       _directorPreparationError = error;
       return false;
@@ -2992,10 +3106,11 @@ class GenerationPageViewmodel extends ChangeNotifier {
           );
         }
         final response = await _apiService.fetchData(ApiRequest(
-          endpoint: augmentImageEndpoint,
+          endpoint: settings.apiEndpointForToken(token, '/ai/augment-image'),
           proxy: proxy,
           headers: headers,
           payload: payload,
+          multipart: multipart,
           shouldSend: shouldSend,
         ));
         final data = ApiService.requireSuccessfulData(
@@ -3459,6 +3574,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
       _cachedDiagnosticContext = null;
     }
     _clearExtraWorkers();
+    _takomaFanoutContext = null;
     if (lockToAllCombinations) {
       payloadConfig.generationCount = cycleCount!;
     }
@@ -3489,33 +3605,74 @@ class GenerationPageViewmodel extends ChangeNotifier {
       return;
     }
     final generationCount = payloadConfig.settings.generationCount;
-    // Do not cap workers by generationCount: spare accounts are required as
-    // failover workers when the first account cannot pay for a request.
-    final workerCount = eligibleEntries.length;
-    final activeEntries =
-        eligibleEntries.take(workerCount).toList(growable: false);
+    final hasI2iSource =
+        payloadConfig.i2iEnabled && payloadConfig.i2iConfig.hasImage;
+    final singleEntry =
+        eligibleEntries.length == 1 ? eligibleEntries.single : null;
+    final takomaFanoutEnabled = !payloadConfig.settings.debugApiEnabled &&
+        activeBatchTool == null &&
+        !lockToAllCombinations &&
+        !hasI2iSource &&
+        generationCount >= 2 &&
+        generationCount <= TakomaGenerationRequestUseCase.maxFanoutCount &&
+        singleEntry != null &&
+        singleEntry.concurrency > 1 &&
+        payloadConfig.settings.isTakomaToken(singleEntry.token);
+    int workerSlotsForEntry(ApiTokenConfig entry) {
+      if (generationCount == 0) return entry.concurrency;
+      return min(generationCount, entry.concurrency);
+    }
+
+    // Every account can expose one or more worker slots according to its
+    // configured concurrency. A single-image batch still exposes every account
+    // once as failover, while multi-image batches let each account run up to
+    // its own limit. The single-account Takoma 2-4 image case retains the
+    // same-roll/consecutive-seed batch behavior; other cases keep each logical
+    // task's own prompt and parameters.
+    final activeEntries = takomaFanoutEnabled
+        ? List<ApiTokenConfig>.generate(
+            workerSlotsForEntry(singleEntry),
+            (_) => singleEntry,
+          )
+        : !payloadConfig.settings.debugApiEnabled
+            ? [
+                for (final entry in eligibleEntries)
+                  ...List<ApiTokenConfig>.generate(
+                    workerSlotsForEntry(entry),
+                    (_) => entry,
+                  ),
+              ]
+            : eligibleEntries;
+    final workerCount = activeEntries.length;
     _activeTokens =
         activeEntries.map((entry) => entry.token).toList(growable: false);
     _activeTokenLabels =
         activeEntries.map((entry) => entry.label).toList(growable: false);
     if (_activeTokens.isEmpty) return;
+    _takomaFanoutContext = takomaFanoutEnabled
+        ? _TakomaFanoutContext(
+            baseSeed: Random().nextInt(
+              (1 << 32) - TakomaGenerationRequestUseCase.maxFanoutCount,
+            ),
+          )
+        : null;
     _logicalTasks.clear();
     _scheduler = GenerationScheduler(
       taskCount: generationCount,
       workerIds: List.generate(workerCount, (index) => index.toString()),
     );
     final batch = _BatchAccounting(
-      List<String>.of(_activeTokens),
+      <String>{..._activeTokens}.toList(growable: false),
       reconcileBalances: !payloadConfig.settings.debugApiEnabled,
     );
-    for (final token in _activeTokens) {
+    for (final token in batch.tokens) {
       final knownBalance = _lastAnlasBalances[token];
       if (knownBalance != null) batch.startingBalances[token] = knownBalance;
     }
     _activeBatch = batch;
     _runningBatchTool = activeBatchTool;
     if (batch.reconcileBalances) {
-      for (final token in _activeTokens) {
+      for (final token in batch.tokens) {
         batch.baselineFutures[token] =
             _captureBatchStartingBalance(batch, token);
       }
@@ -3568,6 +3725,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
       if (batch.reconcileBalances) _tryFinalizeBatch(batch);
     }
     _scheduler = null;
+    _takomaFanoutContext = null;
     _primaryLease = null;
     _activeTokens = [];
     _activeTokenLabels = [];

@@ -180,11 +180,11 @@ class _GenerationPageViewState extends State<GenerationPageView> {
       ),
     );
     return ImageImportArea(
-      ignoreWhenTextEditing: false,
-      child: Scaffold(
-      body: content,
-      floatingActionButton: buttons,
-    ));
+        ignoreWhenTextEditing: false,
+        child: Scaffold(
+          body: content,
+          floatingActionButton: buttons,
+        ));
   }
 
   /// Completed results in the same newest-first order the grid uses.
@@ -213,6 +213,12 @@ class _GenerationPageViewState extends State<GenerationPageView> {
             return InfoDetailPage.gallery(
               contents: commands.map((command) => command.value).toList(),
               initialIndex: initialIndex < 0 ? 0 : initialIndex,
+              // Only the classic grid has fixed rows; waterfall items land
+              // in whichever column is shortest, so ↑/↓ stay unbound there.
+              rowStride: viewmodel.payloadConfig.settings.resultDisplayMode ==
+                      'classic'
+                  ? viewmodel.colNum
+                  : null,
               onIndexChanged: (index) {
                 final current = _completedCommandsInDisplayOrder();
                 if (index >= 0 && index < current.length) {
@@ -356,12 +362,15 @@ class _GenerationPageViewState extends State<GenerationPageView> {
                   const Divider(height: 24),
                   SwitchListTile(
                     title: const Text('Vibe Transfer'),
-                    subtitle: Text(config.vibeConfigList.isNotEmpty ||
-                            config.vibeConfigListV4.isNotEmpty
-                        ? tr('resource_ready')
-                        : tr('resource_missing')),
+                    subtitle: Text(config.settings.isTakomaApi
+                        ? tr('takoma_feature_unavailable')
+                        : config.vibeConfigList.isNotEmpty ||
+                                config.vibeConfigListV4.isNotEmpty
+                            ? tr('resource_ready')
+                            : tr('resource_missing')),
                     value: config.vibeEnabled,
                     onChanged: canEdit &&
+                            !config.settings.isTakomaApi &&
                             (config.vibeConfigList.isNotEmpty ||
                                 config.vibeConfigListV4.isNotEmpty)
                         ? (value) {
@@ -388,13 +397,16 @@ class _GenerationPageViewState extends State<GenerationPageView> {
                   ),
                   SwitchListTile(
                     title: const Text('Precise Reference'),
-                    subtitle: Text(!preciseSupported
-                        ? tr('precise_reference_v45_only')
-                        : config.preciseReferenceConfigList.isNotEmpty
-                            ? tr('resource_ready')
-                            : tr('resource_missing')),
+                    subtitle: Text(config.settings.isTakomaApi
+                        ? tr('takoma_feature_unavailable')
+                        : !preciseSupported
+                            ? tr('precise_reference_v45_only')
+                            : config.preciseReferenceConfigList.isNotEmpty
+                                ? tr('resource_ready')
+                                : tr('resource_missing')),
                     value: config.preciseReferenceEnabled,
                     onChanged: canEdit &&
+                            !config.settings.isTakomaApi &&
                             preciseSupported &&
                             config.preciseReferenceConfigList.isNotEmpty
                         ? (value) {

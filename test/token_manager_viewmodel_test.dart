@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get_it/get_it.dart';
+import 'package:nai_casrand/data/models/api_token_config.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/opus_usage.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
@@ -270,6 +271,26 @@ void main() {
     viewmodel.setTokenAllowPoints(1, true);
     expect(viewmodel.tokens[1].allowPoints, isTrue);
     expect(settings.allowsPointsForToken('pst-secondary'), isTrue);
+  });
+
+  test('per-account concurrency clamps, persists, and resets with provider',
+      () async {
+    final viewmodel = TokenManagerViewmodel(accountService: accountService);
+    viewmodel.addToken('Secondary', 'pst-secondary');
+    await Future<void>.delayed(Duration.zero);
+
+    viewmodel.setTokenConcurrency(1, 99);
+    expect(viewmodel.tokens[1].concurrency, ApiTokenConfig.maxConcurrency);
+    expect(configService.saveCount, 2);
+
+    viewmodel.setTokenConcurrency(1, 0);
+    expect(viewmodel.tokens[1].concurrency, 1);
+
+    viewmodel.setTokenApiBaseUrl(1, 'https://api.takoma.app');
+    expect(viewmodel.tokens[1].concurrency, ApiTokenConfig.maxConcurrency);
+
+    viewmodel.setTokenApiBaseUrl(1, 'https://image.novelai.net');
+    expect(viewmodel.tokens[1].concurrency, 1);
   });
 
   test('toggle allowFree updates token config and settings query', () async {

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/core/constants/settings.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
+import 'package:nai_casrand/data/models/settings.dart';
 import 'package:nai_casrand/data/models/user_input_validation.dart';
 import 'package:nai_casrand/ui/settings_page/widgets/navigation_directory.dart';
 import 'package:nai_casrand/ui/settings_page/view_models/settings_page_viewmodel.dart';
@@ -578,6 +579,7 @@ class _ApiProxySettingsDialog extends StatefulWidget {
 
 class _ApiProxySettingsDialogState extends State<_ApiProxySettingsDialog> {
   late final TextEditingController _apiController;
+  late bool _useTakomaApi;
   late final TextEditingController _proxyController;
   bool _obscureToken = true;
   bool _detecting = false;
@@ -596,6 +598,7 @@ class _ApiProxySettingsDialogState extends State<_ApiProxySettingsDialog> {
     super.initState();
     _apiController =
         TextEditingController(text: widget.viewmodel.settings.apiKey);
+    _useTakomaApi = widget.viewmodel.settings.isTakomaApi;
     _proxyController =
         TextEditingController(text: widget.viewmodel.settings.proxy);
   }
@@ -616,6 +619,9 @@ class _ApiProxySettingsDialogState extends State<_ApiProxySettingsDialog> {
     _proxyValidationError = null;
     _proxyController.text = proxyResult.value!;
     widget.viewmodel.setApiKey(_apiController.text);
+    widget.viewmodel.setApiBaseUrl(
+      _useTakomaApi ? Settings.takomaApiBaseUrl : Settings.officialApiBaseUrl,
+    );
     return true;
   }
 
@@ -710,6 +716,33 @@ class _ApiProxySettingsDialogState extends State<_ApiProxySettingsDialog> {
                 ),
                 onSubmitted: (_) {
                   _submit();
+                },
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<bool>(
+                key: const Key('api-base-url-select'),
+                initialValue: _useTakomaApi,
+                borderRadius: BorderRadius.circular(8),
+                decoration: InputDecoration(
+                  labelText: tr('api_base_url'),
+                  helperText: _useTakomaApi
+                      ? Settings.takomaApiBaseUrl
+                      : Settings.officialApiBaseUrl,
+                  border: const OutlineInputBorder(),
+                ),
+                items: [
+                  DropdownMenuItem(
+                    value: false,
+                    child: Text(tr('api_provider_official')),
+                  ),
+                  DropdownMenuItem(
+                    value: true,
+                    child: Text(tr('api_provider_takoma')),
+                  ),
+                ],
+                onChanged: (value) {
+                  if (value == null) return;
+                  setState(() => _useTakomaApi = value);
                 },
               ),
               const SizedBox(height: 12),

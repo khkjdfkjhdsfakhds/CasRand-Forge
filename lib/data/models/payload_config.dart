@@ -412,6 +412,7 @@ class PayloadConfig extends ChangeNotifier {
   Map<String, String> getHeadersForToken(String token) {
     return {
       "authorization": "Bearer $token",
+      "content-type": "application/json",
       "referer": "https://novelai.net",
       "user-agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
@@ -528,8 +529,8 @@ class PayloadConfig extends ChangeNotifier {
     final fixedJson = jsonData['fixed_profile'];
     final i2iSizeJson = jsonData['i2i_request_size'];
     final loadedSettings = Settings.fromJson(jsonData['settings'] ?? {});
-    final randomGenerationCount = jsonData['generation_count'] as int? ??
-        loadedSettings.generationCount;
+    final randomGenerationCount =
+        jsonData['generation_count'] as int? ?? loadedSettings.generationCount;
     final randomGenerationIntervalSec =
         jsonData['generation_interval'] as int? ??
             loadedSettings.generationIntervalSec;
@@ -925,7 +926,6 @@ class PayloadConfig extends ChangeNotifier {
     clearVibeResourceState();
     clearPreciseReferenceResourceState();
   }
-
 
   static ParamConfig _metadataDefaultsForModel(
     String model, {

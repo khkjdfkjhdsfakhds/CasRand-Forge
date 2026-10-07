@@ -169,6 +169,28 @@ class _BlockingApiService extends ApiService {
   }
 }
 
+class _WaitingFanoutApiService extends ApiService {
+  _WaitingFanoutApiService(this.expectedCalls, this.response);
+
+  final int expectedCalls;
+  final ApiResponse response;
+  final List<ApiRequest> requests = [];
+  final Completer<void> allStarted = Completer<void>();
+
+  @override
+  Future<ApiResponse> fetchData(ApiRequest request) async {
+    requests.add(request);
+    if (requests.length == expectedCalls && !allStarted.isCompleted) {
+      allStarted.complete();
+    }
+    await allStarted.future.timeout(
+      const Duration(seconds: 3),
+      onTimeout: () => throw StateError('fan-out requests did not all start'),
+    );
+    return response;
+  }
+}
+
 class _FirstSuccessThenBlockingApiService extends ApiService {
   _FirstSuccessThenBlockingApiService(this.successData);
 
@@ -787,6 +809,86 @@ void main() {
     expect(results[0].anlasCostIsEstimated, isTrue);
     expect(results[1].title, contains('generated'));
     expect(results[2].title, contains('blend'));
+  });
+
+  testWidgets('Director Tools send Takoma its multipart augment request', (
+    tester,
+  ) async {
+    final api = _FakeApiService(ApiResponse(
+      status: '500',
+      data: Uint8List.fromList(utf8.encode('{"message":"expected failure"}')),
+    ));
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      prepareDirectorToolRequest:
+          const _PassthroughPrepareDirectorToolRequestUseCase(),
+      preparationFeedbackBarrier: _skipPreparationFeedbackBarrier,
+    );
+    final payload = GetIt.I<PayloadConfig>();
+    final settings = payload.settings;
+    settings.updatePrimaryApiKey('takoma-test-token');
+    settings.apiTokens
+      ..clear()
+      ..add(ApiTokenConfig(
+        label: 'Takoma',
+        token: 'takoma-test-token',
+        isPrimary: true,
+        apiBaseUrl: 'https://api.takoma.app',
+      ));
+    final sourceBytes = Uint8List.fromList(
+      img.encodePng(img.Image(width: 32, height: 32, numChannels: 3)),
+    );
+    payload.directorToolConfig.setImage(sourceBytes);
+
+    expect(await viewmodel.runDirectorTool(), isTrue);
+    await tester.pumpAndSettle();
+
+    final request = api.requests.single;
+    expect(request.endpoint, 'https://api.takoma.app/ai/augment-image');
+    final parts = request.multipart!.parts;
+    expect(parts.map((part) => part.field), ['image', 'request']);
+    expect(parts.first.fileName, 'blob');
+    expect(parts.first.contentType, 'image/png');
+    expect(parts.first.bytes, sourceBytes);
+    expect(parts.last.fileName, 'blob');
+    expect(parts.last.contentType, 'application/json');
+    final form =
+        jsonDecode(utf8.decode(parts.last.bytes)) as Map<String, dynamic>;
+    expect(form['req_type'], 'bg-removal');
+    expect(form['image'], 'image');
+    expect(form['width'], 32);
+    expect(form['height'], 32);
+    viewmodel.dispose();
+  });
+
+  testWidgets('Director Tools keep the JSON body for official NovelAI', (
+    tester,
+  ) async {
+    final api = _FakeApiService(ApiResponse(
+      status: '500',
+      data: Uint8List.fromList(utf8.encode('{"message":"expected failure"}')),
+    ));
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      prepareDirectorToolRequest:
+          const _PassthroughPrepareDirectorToolRequestUseCase(),
+      preparationFeedbackBarrier: _skipPreparationFeedbackBarrier,
+    );
+    final payload = GetIt.I<PayloadConfig>();
+    payload.settings.updatePrimaryApiKey('official-test-token');
+    payload.directorToolConfig.setImage(Uint8List.fromList(
+      img.encodePng(img.Image(width: 32, height: 32, numChannels: 3)),
+    ));
+
+    expect(await viewmodel.runDirectorTool(), isTrue);
+    await tester.pumpAndSettle();
+
+    final request = api.requests.single;
+    expect(request.endpoint, 'https://image.novelai.net/ai/augment-image');
+    expect(request.multipart, isNull);
+    expect(request.payload['req_type'], 'bg-removal');
+    expect(base64Decode(request.payload['image'] as String), isNotEmpty);
+    viewmodel.dispose();
   });
 
   testWidgets(
@@ -3067,6 +3169,221 @@ void main() {
     viewmodel.dispose();
   });
 
+  testWidgets('one Takoma token fans out one prompt with consecutive seeds', (
+    tester,
+  ) async {
+    final outputImage = img.Image(width: 64, height: 64, numChannels: 3);
+    final api = _WaitingFanoutApiService(
+      4,
+      ApiResponse(
+        status: '200',
+        data: directorResponseZip([
+          Uint8List.fromList(img.encodePng(outputImage)),
+        ]),
+      ),
+    );
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      fileService: _RecordingFileService(),
+    );
+    final config = GetIt.I<PayloadConfig>();
+    config.paramConfig.model = 'nai-diffusion-5-full';
+    config.settings
+      ..updatePrimaryApiKey('takoma-fanout-token')
+      ..parallelApiEnabled = true
+      ..generationCount = 4
+      ..generationIntervalSec = 0
+      ..debugApiEnabled = false;
+    config.settings.apiTokens
+      ..clear()
+      ..add(ApiTokenConfig(
+        label: 'Takoma',
+        token: 'takoma-fanout-token',
+        isPrimary: true,
+        apiBaseUrl: 'https://api.takoma.app',
+        concurrency: 4,
+      ));
+
+    viewmodel.startGeneration();
+    for (var attempt = 0;
+        attempt < 500 && viewmodel.commandStatus.isGenerationActive.value;
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 10));
+    }
+    await tester.pump();
+
+    expect(api.requests, hasLength(4));
+    expect(
+      api.requests.map((request) => request.endpoint),
+      everyElement('https://api.takoma.app/ai/generate-image'),
+    );
+    expect(
+      api.requests.map((request) => request.headers['authorization']),
+      everyElement('Bearer takoma-fanout-token'),
+    );
+    final seeds = api.requests
+        .map((request) =>
+            (request.payload['parameters'] as Map<String, dynamic>)['seed'])
+        .cast<int>()
+        .toList()
+      ..sort();
+    final prompts =
+        api.requests.map((request) => request.payload['input']).toSet();
+    expect(seeds, hasLength(4));
+    expect(seeds[1] - seeds[0], 1);
+    expect(seeds[2] - seeds[1], 1);
+    expect(seeds[3] - seeds[2], 1);
+    expect(prompts, hasLength(1));
+    expect(
+      viewmodel.commandList
+          .where((command) => command.value.imageBytes != null),
+      hasLength(4),
+    );
+    viewmodel.dispose();
+  });
+
+  testWidgets('Takoma concurrency one keeps a single worker', (tester) async {
+    final viewmodel = _WorkerRecordingViewmodel();
+    final config = GetIt.I<PayloadConfig>();
+    config.paramConfig.model = 'nai-diffusion-5-full';
+    config.settings
+      ..parallelApiEnabled = true
+      ..generationCount = 4
+      ..generationIntervalSec = 0
+      ..debugApiEnabled = false;
+    config.settings.apiTokens
+      ..clear()
+      ..add(ApiTokenConfig(
+        label: 'Takoma',
+        token: 'takoma-single-token',
+        isPrimary: true,
+        apiBaseUrl: 'https://api.takoma.app',
+        concurrency: 1,
+      ));
+
+    viewmodel.startGeneration();
+
+    expect(viewmodel.createdWorkers, [0]);
+    expect(viewmodel.createdTasks, [1]);
+    viewmodel.stopGeneration();
+    viewmodel.dispose();
+  });
+
+  testWidgets(
+      'mixed official and Takoma accounts use one official plus four Takoma workers',
+      (tester) async {
+    final outputImage = img.Image(width: 64, height: 64, numChannels: 3);
+    final api = _WaitingFanoutApiService(
+      5,
+      ApiResponse(
+        status: '200',
+        data: directorResponseZip([
+          Uint8List.fromList(img.encodePng(outputImage)),
+        ]),
+      ),
+    );
+    final viewmodel = GenerationPageViewmodel(
+      apiService: api,
+      fileService: _RecordingFileService(),
+    );
+    final config = GetIt.I<PayloadConfig>()
+      ..promptMode = PromptMode.random
+      ..rootPromptConfig = PromptConfig(
+        selectionMethod: 'single_sequential',
+        strs: ['prompt-a', 'prompt-b', 'prompt-c', 'prompt-d', 'prompt-e'],
+        prompts: [],
+      );
+    config.paramConfig.model = 'nai-diffusion-5-full';
+    config.settings
+      ..parallelApiEnabled = true
+      ..generationCount = 5
+      ..generationIntervalSec = 0
+      ..debugApiEnabled = false;
+    config.settings.apiTokens
+      ..clear()
+      ..add(ApiTokenConfig(
+        label: 'Takoma',
+        token: 'takoma-mixed-token',
+        isPrimary: true,
+        apiBaseUrl: 'https://api.takoma.app',
+        concurrency: 4,
+      ))
+      ..add(ApiTokenConfig(
+        label: 'NovelAI',
+        token: 'official-mixed-token',
+        apiBaseUrl: 'https://api.novelai.net',
+        concurrency: 1,
+      ));
+
+    viewmodel.startGeneration();
+    for (var attempt = 0;
+        attempt < 500 && viewmodel.commandStatus.isGenerationActive.value;
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 10));
+    }
+    await tester.pump();
+
+    expect(api.requests, hasLength(5));
+    final takomaRequests = api.requests
+        .where((request) =>
+            request.headers['authorization'] == 'Bearer takoma-mixed-token')
+        .toList();
+    final officialRequests = api.requests
+        .where((request) =>
+            request.headers['authorization'] == 'Bearer official-mixed-token')
+        .toList();
+    expect(takomaRequests, hasLength(4));
+    expect(officialRequests, hasLength(1));
+    expect(
+      takomaRequests.map((request) => request.endpoint),
+      everyElement('https://api.takoma.app/ai/generate-image'),
+    );
+    expect(
+      officialRequests.single.endpoint,
+      'https://api.novelai.net/ai/generate-image',
+    );
+    expect(
+      api.requests.map((request) => request.payload['input']).toSet(),
+      {'prompt-a', 'prompt-b', 'prompt-c', 'prompt-d', 'prompt-e'},
+    );
+    viewmodel.dispose();
+  });
+
+  testWidgets('per-account concurrency limits the shared worker pool',
+      (tester) async {
+    final viewmodel = _WorkerRecordingViewmodel();
+    final config = GetIt.I<PayloadConfig>();
+    config.paramConfig.model = 'nai-diffusion-5-full';
+    config.settings
+      ..parallelApiEnabled = true
+      ..generationCount = 5
+      ..generationIntervalSec = 0
+      ..debugApiEnabled = false;
+    config.settings.apiTokens
+      ..clear()
+      ..add(ApiTokenConfig(
+        label: 'Takoma',
+        token: 'takoma-limited-token',
+        isPrimary: true,
+        apiBaseUrl: 'https://api.takoma.app',
+        concurrency: 2,
+      ))
+      ..add(ApiTokenConfig(
+        label: 'NovelAI',
+        token: 'official-limited-token',
+        apiBaseUrl: 'https://api.novelai.net',
+        concurrency: 1,
+      ));
+
+    viewmodel.startGeneration();
+
+    expect(viewmodel.createdWorkers, [0, 1, 2]);
+    expect(viewmodel.createdTasks, [1, 2, 3]);
+    expect(viewmodel.commandList, hasLength(3));
+    viewmodel.stopGeneration();
+    viewmodel.dispose();
+  });
+
   testWidgets('parallel second-wave cards show logical task numbers 6 to 10', (
     tester,
   ) async {
@@ -3355,6 +3672,41 @@ void main() {
     expect(vm.currentCommand?.value.imageBytes, isNotNull);
   });
 
+  testWidgets('parallel-off generation uses the only enabled listed account',
+      (tester) async {
+    final image = img.Image(width: 64, height: 64, numChannels: 3);
+    final api = _FakeApiService(ApiResponse(
+      status: '200',
+      data: directorResponseZip([
+        Uint8List.fromList(img.encodePng(image)),
+      ]),
+    ));
+    final config = GetIt.I<PayloadConfig>();
+    config.settings
+      ..updatePrimaryApiKey('pst-main')
+      ..parallelApiEnabled = false
+      ..generationCount = 1
+      ..generationIntervalSec = 0
+      ..debugApiEnabled = true;
+    config.settings.apiTokens.first.enabled = false;
+    config.settings.apiTokens.add(ApiTokenConfig(
+      label: 'Selected',
+      token: 'pst-selected',
+      enabled: true,
+    ));
+    final vm = GenerationPageViewmodel(
+      apiService: api,
+      fileService: _RecordingFileService(),
+    );
+    addTearDown(vm.dispose);
+
+    vm.runSingleGeneration();
+    await waitForCurrentCommand(tester, vm);
+
+    expect(api.calls, 1);
+    expect(api.requests.single.headers['authorization'], 'Bearer pst-selected');
+  });
+
   for (final remember in [true, false]) {
     testWidgets(
         'locked full cycle with parallel APIs starts a fresh complete batch remember=$remember',
@@ -3537,7 +3889,8 @@ void main() {
       config.settings
         ..updatePrimaryApiKey('pst-blocked')
         ..apiTokens.first.allowPoints = false
-        ..apiTokens.add(ApiTokenConfig(label: 'Allowed', token: 'pst-allowed', allowPoints: true))
+        ..apiTokens.add(ApiTokenConfig(
+            label: 'Allowed', token: 'pst-allowed', allowPoints: true))
         ..parallelApiEnabled = true
         ..generationCount = 1
         ..generationIntervalSec = 0
@@ -3558,9 +3911,70 @@ void main() {
       await tester.pump(const Duration(seconds: 1));
 
       expect(api.calls, 1);
-      expect(api.requests.single.headers['authorization'], 'Bearer pst-allowed');
+      expect(
+          api.requests.single.headers['authorization'], 'Bearer pst-allowed');
       expect(vm.commandList, hasLength(1));
       expect(vm.commandList.single.value.imageBytes, isNotNull);
+    });
+
+    testWidgets('Takoma accounts refuse mask inpainting before sending', (
+      tester,
+    ) async {
+      final api =
+          _FakeApiService(ApiResponse(status: '200', data: Uint8List(0)));
+      final config = GetIt.I<PayloadConfig>();
+      final source = img.Image(width: 64, height: 64, numChannels: 4);
+      img.fill(source, color: img.ColorRgba8(20, 100, 180, 255));
+      final mask = img.Image(width: 64, height: 64, numChannels: 3);
+      img.fill(mask, color: img.ColorRgb8(255, 255, 255));
+      config.paramConfig.model = 'nai-diffusion-5-full';
+      config.i2iConfig
+        ..setImage(Uint8List.fromList(img.encodePng(source)))
+        ..setMask(Uint8List.fromList(img.encodePng(mask)), []);
+      config.i2iEnabled = true;
+      config.settings
+        ..debugApiEnabled = false
+        ..generationCount = 1
+        ..generationIntervalSec = 0
+        ..updatePrimaryApiKey('takoma-inpaint-token');
+      config.settings.apiTokens
+        ..clear()
+        ..add(ApiTokenConfig(
+          label: 'Takoma',
+          token: 'takoma-inpaint-token',
+          isPrimary: true,
+          apiBaseUrl: 'https://api.takoma.app',
+        ));
+      final prepared = await tester.runAsync(() =>
+          PrepareI2iRequestUseCase(config: config.i2iConfig)
+              .planBatch(targetWidth: 64, targetHeight: 64));
+      final vm = GenerationPageViewmodel(
+        apiService: api,
+        fileService: _RecordingFileService(),
+        preparationFeedbackBarrier: _skipPreparationFeedbackBarrier,
+        prepareI2iBatch: (
+                {required config,
+                required targetWidth,
+                required targetHeight,
+                required transparentBackground}) async =>
+            prepared!,
+      );
+
+      vm.startGeneration();
+      await waitForCurrentCommand(tester, vm);
+
+      expect(api.calls, 0);
+      expect(vm.commandList, hasLength(1));
+      expect(vm.commandList.single.value.imageBytes, isNull);
+      expect(
+        vm.commandList.single.value.info,
+        anyOf(
+          contains('Takoma API'),
+          contains('takoma_unsupported_feature_error'),
+        ),
+      );
+      vm.dispose();
+      await tester.pump(const Duration(seconds: 1));
     });
 
     testWidgets(
@@ -3577,7 +3991,8 @@ void main() {
       config.settings
         ..updatePrimaryApiKey('pst-blocked-1')
         ..apiTokens.first.allowPoints = false
-        ..apiTokens.add(ApiTokenConfig(label: 'Blocked 2', token: 'pst-blocked-2', allowPoints: false))
+        ..apiTokens.add(ApiTokenConfig(
+            label: 'Blocked 2', token: 'pst-blocked-2', allowPoints: false))
         ..parallelApiEnabled = true
         ..generationCount = 1
         ..generationIntervalSec = 0
@@ -3627,7 +4042,8 @@ void main() {
         ..subscriptionTier = 3
         ..subscriptionActive = true
         ..apiTokens.first.allowFree = false
-        ..apiTokens.add(ApiTokenConfig(label: 'FreeAllowed', token: 'pst-free', allowFree: true))
+        ..apiTokens.add(ApiTokenConfig(
+            label: 'FreeAllowed', token: 'pst-free', allowFree: true))
         ..parallelApiEnabled = true
         ..generationCount = 1
         ..generationIntervalSec = 0
@@ -3670,7 +4086,8 @@ void main() {
         ..subscriptionTier = 3
         ..subscriptionActive = true
         ..apiTokens.first.allowFree = false
-        ..apiTokens.add(ApiTokenConfig(label: 'NoFree 2', token: 'pst-nofree-2', allowFree: false))
+        ..apiTokens.add(ApiTokenConfig(
+            label: 'NoFree 2', token: 'pst-nofree-2', allowFree: false))
         ..parallelApiEnabled = true
         ..generationCount = 1
         ..generationIntervalSec = 0

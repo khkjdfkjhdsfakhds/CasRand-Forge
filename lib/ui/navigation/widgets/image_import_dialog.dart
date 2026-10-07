@@ -359,6 +359,9 @@ class _ImageImportDialogState extends State<ImageImportDialog> {
 
   Future<void> _importMetadata() => _runAction(() async {
         final count = await _importSelectedMetadataIfAny();
+        if (count > 0 && _importPrompt) {
+          widget.viewmodel.goToGenerationConfig();
+        }
         return count > 0;
       });
 

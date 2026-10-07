@@ -440,6 +440,101 @@ void main() {
     expect(find.byKey(const Key('detail-gallery-next')), findsNothing);
   });
 
+  testWidgets('arrow up and down jump a whole grid row in classic mode', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    var reportedIndex = 5;
+    final contents = [
+      for (var i = 0; i < 10; i++)
+        InfoCardContent(
+          title: 'item-$i.png',
+          info: 'info $i',
+          additionalInfo: const {'seed': 1},
+          imageBytes: solidPng(64, 96),
+        ),
+    ];
+
+    await tester.pumpWidget(
+      localizedApp(
+        InfoDetailPage.gallery(
+          contents: contents,
+          initialIndex: 5,
+          rowStride: 4,
+          onIndexChanged: (index) => reportedIndex = index,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pumpAndSettle();
+    expect(reportedIndex, 1);
+    expect(find.text('2 / 10'), findsOneWidget);
+
+    // Already in the first row: ↑ has no row above, so nothing moves.
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pumpAndSettle();
+    expect(reportedIndex, 1);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(reportedIndex, 9);
+    expect(find.text('item-9.png'), findsOneWidget);
+
+    // Last row: ↓ has no row below, so nothing moves.
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(reportedIndex, 9);
+
+    // A partial row below also stays put instead of clamping to the end.
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pumpAndSettle();
+    expect(reportedIndex, 6);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(reportedIndex, 6);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('arrow up and down do not switch images without a row stride', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    var reportedIndex = 2;
+
+    await tester.pumpWidget(
+      localizedApp(
+        InfoDetailPage.gallery(
+          contents: [
+            for (var i = 0; i < 6; i++)
+              InfoCardContent(
+                title: 'item-$i.png',
+                info: 'info $i',
+                additionalInfo: const {'seed': 1},
+                imageBytes: solidPng(64, 96),
+              ),
+          ],
+          initialIndex: 2,
+          onIndexChanged: (index) => reportedIndex = index,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pumpAndSettle();
+    expect(reportedIndex, 2);
+    expect(find.text('3 / 6'), findsOneWidget);
+  });
+
   testWidgets('horizontal swipe switches gallery items on touch layouts', (
     tester,
   ) async {
@@ -546,6 +641,46 @@ void main() {
     expect(find.text('1 / 3'), findsOneWidget);
     expect(find.byKey(const Key('detail-gallery-previous')), findsNothing);
   });
+
+  for (final (mode, expectedStride) in [('classic', 3), ('waterfall', null)]) {
+    testWidgets(
+        '$mode results open the gallery with row stride $expectedStride',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final payloadConfig = GetIt.I<PayloadConfig>();
+      payloadConfig.settings.generationPageColumnCount = 3;
+      payloadConfig.settings.resultDisplayMode = mode;
+      final commandStatus = GetIt.I<CommandStatus>();
+      for (var index = 0; index < 4; index++) {
+        final content = InfoCardContent(
+          title: 'item$index.png',
+          info: 'prompt $index',
+          additionalInfo: {'seed': index},
+          imageBytes: solidPng(64, 96),
+        );
+        commandStatus.commandList.add(
+          Command.createAsyncNoParam(
+            () async => content,
+            initialValue: content,
+          ),
+        );
+      }
+      final viewmodel = GenerationPageViewmodel();
+      addTearDown(viewmodel.dispose);
+
+      await tester.pumpWidget(
+        localizedApp(GenerationPageView(viewmodel: viewmodel)),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('item3.png'));
+      await tester.pumpAndSettle();
+
+      expect(
+          tester.widget<InfoDetailPage>(find.byType(InfoDetailPage)).rowStride,
+          expectedStride);
+    });
+  }
 
   testWidgets('leaving the gallery reveals the last viewed result card', (
     tester,

@@ -14,11 +14,20 @@ class PreparedDirectorToolImage {
   final int width;
   final int height;
 
+  /// Prepared PNG bytes. Multipart relays upload the file itself instead of
+  /// the base64 copy they expect inside a JSON body.
+  final Uint8List? imageBytes;
+
   const PreparedDirectorToolImage({
     required this.imageB64,
     required this.width,
     required this.height,
+    this.imageBytes,
   });
+
+  /// Prepared bytes, decoding the base64 copy only when a caller did not
+  /// provide them.
+  Uint8List get preparedBytes => imageBytes ?? base64Decode(imageB64);
 }
 
 GenerationSize directorToolRequestSize(int width, int height) {
@@ -58,6 +67,7 @@ Map<String, Object> _prepareDirectorToolImage(Map<String, Object> input) {
       'imageB64': base64Encode(bytes),
       'width': width,
       'height': height,
+      'imageBytes': bytes,
     };
   }
 
@@ -71,10 +81,12 @@ Map<String, Object> _prepareDirectorToolImage(Map<String, Object> input) {
     height: target.height,
     interpolation: img.Interpolation.linear,
   );
+  final prepared = img.encodePng(resized, level: 1);
   return <String, Object>{
-    'imageB64': base64Encode(img.encodePng(resized, level: 1)),
+    'imageB64': base64Encode(prepared),
     'width': target.width,
     'height': target.height,
+    'imageBytes': Uint8List.fromList(prepared),
   };
 }
 
@@ -95,6 +107,7 @@ class PrepareDirectorToolRequestUseCase {
       imageB64: result['imageB64']! as String,
       width: result['width']! as int,
       height: result['height']! as int,
+      imageBytes: result['imageBytes'] as Uint8List?,
     );
   }
 }

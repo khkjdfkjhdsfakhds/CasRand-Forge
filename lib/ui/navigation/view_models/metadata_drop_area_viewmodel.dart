@@ -124,6 +124,19 @@ class MetadataDropAreaViewmodel extends ChangeNotifier {
     return loadedCount;
   }
 
+  /// Opens the generation configuration page after a standalone prompt import.
+  ///
+  /// Image actions that also import metadata navigate to their own destination
+  /// through [ImageHandoffCoordinator], so callers should invoke this only for
+  /// the standalone metadata-import action.
+  void goToGenerationConfig() {
+    final navigation = _navigation ??
+        (GetIt.I.isRegistered<NavigationRequest>()
+            ? GetIt.I<NavigationRequest>()
+            : null);
+    navigation?.goTo(AppDestination.config);
+  }
+
   void loadAllMetadata(
     BuildContext context,
     Map<String, dynamic> commentData,

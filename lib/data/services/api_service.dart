@@ -82,7 +82,10 @@ class ApiService {
     final url = Uri.parse(request.endpoint);
     final routeKey = _routeKey(request.proxy, request.headers);
     final sessionKey = '${url.origin}\u0000$routeKey';
-    final usesImageCache = NovelAiImageCache.supports(url);
+    final multipart = request.multipart;
+    // An assembled multipart body cannot be rewritten by the inline-image
+    // cache, so those requests bypass it and keep their prepared bytes.
+    final usesImageCache = multipart == null && NovelAiImageCache.supports(url);
     final diagnosticContext = request.diagnosticContext;
     var prepared = usesImageCache
         ? await _imageCache.prepare(request.payload, sessionKey)
@@ -100,6 +103,7 @@ class ApiService {
         attempt,
         diagnosticContext,
         request.shouldSend,
+        multipart: multipart,
       );
       try {
         return await responseFuture.timeout(requestTimeout);
@@ -165,17 +169,29 @@ class ApiService {
     Map<String, String> headers,
     PreparedImageRequest prepared,
     GenerationDiagnosticContext? diagnosticContext,
-    bool Function()? shouldSend,
-  ) async {
-    final body = json.encode(prepared.payload);
+    bool Function()? shouldSend, {
+    ApiMultipartBody? multipart,
+  }) async {
+    final Uint8List bodyBytes;
+    final String contentType;
+    final bool cacheHit;
+    if (multipart != null) {
+      bodyBytes = multipart.encode();
+      contentType = multipart.contentType;
+      cacheHit = false;
+    } else {
+      bodyBytes = Uint8List.fromList(utf8.encode(json.encode(prepared.payload)));
+      contentType = 'application/json';
+      cacheHit =
+          prepared.imageSourceCount > 0 && prepared.uploadedKeys.isEmpty;
+    }
     final stopwatch = Stopwatch()..start();
     if (diagnosticContext != null) {
       _emit(GenerationPerformanceEvent(
         correlationId: diagnosticContext.correlationId,
         stage: GenerationPerformanceStage.cacheReady,
-        requestBodyBytes: utf8.encode(body).length,
-        cacheHit:
-            prepared.imageSourceCount > 0 && prepared.uploadedKeys.isEmpty,
+        requestBodyBytes: bodyBytes.length,
+        cacheHit: cacheHit,
       ));
       _emit(GenerationPerformanceEvent(
         correlationId: diagnosticContext.correlationId,
@@ -187,7 +203,8 @@ class ApiService {
     final request = GenerationHttpRequest('POST', url,
         shouldSend: shouldSend, onPhase: (phase) => transportPhase = phase)
       ..headers.addAll(headers)
-      ..body = body;
+      ..headers['content-type'] = contentType
+      ..bodyBytes = bodyBytes;
     _retainClient(client);
     try {
       final response = await (() async {

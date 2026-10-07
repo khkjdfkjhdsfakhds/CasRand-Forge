@@ -31,6 +31,7 @@ class AccountService {
   /// host serves the same subscription payload.
   static const String subscriptionEndpoint =
       'https://image.novelai.net/user/subscription';
+  static const String officialApiBaseUrl = 'https://image.novelai.net';
 
   final ApiService _apiService;
   final Duration cacheTtl;
@@ -50,23 +51,62 @@ class AccountService {
     required String token,
     required String proxy,
     bool forceRefresh = false,
+    String apiBaseUrl = officialApiBaseUrl,
   }) async {
-    return (await fetchSubscription(
+    return (await fetchSubscriptionForBase(
       token: token,
       proxy: proxy,
       forceRefresh: forceRefresh,
+      apiBaseUrl: apiBaseUrl,
     ))
         ?.anlas;
   }
 
-  /// Returns the balance and tier, or null when the query fails.
+  /// Returns the balance and tier from the official NovelAI API.
   Future<SubscriptionInfo?> fetchSubscription({
     required String token,
     required String proxy,
     bool forceRefresh = false,
+  }) =>
+      _fetchSubscriptionCached(
+        token: token,
+        proxy: proxy,
+        forceRefresh: forceRefresh,
+        apiBaseUrl: officialApiBaseUrl,
+      );
+
+  /// Returns the balance and tier from a NovelAI-compatible service.
+  Future<SubscriptionInfo?> fetchSubscriptionForBase({
+    required String token,
+    required String proxy,
+    bool forceRefresh = false,
+    String apiBaseUrl = officialApiBaseUrl,
+  }) async {
+    if (apiBaseUrl.trim().replaceFirst(RegExp(r'/+$'), '') ==
+        officialApiBaseUrl) {
+      // Preserve the overridable legacy seam used by callers and tests.
+      return fetchSubscription(
+        token: token,
+        proxy: proxy,
+        forceRefresh: forceRefresh,
+      );
+    }
+    return _fetchSubscriptionCached(
+      token: token,
+      proxy: proxy,
+      forceRefresh: forceRefresh,
+      apiBaseUrl: apiBaseUrl,
+    );
+  }
+
+  Future<SubscriptionInfo?> _fetchSubscriptionCached({
+    required String token,
+    required String proxy,
+    required bool forceRefresh,
+    required String apiBaseUrl,
   }) async {
     if (token.isEmpty) return null;
-    final key = '$proxy\u0000$token';
+    final key = '$apiBaseUrl\u0000$proxy\u0000$token';
     final cached = _cache[key];
     if (!forceRefresh &&
         cached != null &&
@@ -76,7 +116,11 @@ class AccountService {
     final pending = _inFlight[key];
     if (pending != null) return pending;
 
-    final future = _fetchSubscription(token: token, proxy: proxy);
+    final future = _fetchSubscription(
+      token: token,
+      proxy: proxy,
+      apiBaseUrl: apiBaseUrl,
+    );
     _inFlight[key] = future;
     try {
       final info = await future;
@@ -92,9 +136,11 @@ class AccountService {
   Future<SubscriptionInfo?> _fetchSubscription({
     required String token,
     required String proxy,
+    required String apiBaseUrl,
   }) async {
     try {
-      final url = Uri.parse(subscriptionEndpoint);
+      final base = apiBaseUrl.trim().replaceFirst(RegExp(r'/+$'), '');
+      final url = Uri.parse('$base/user/subscription');
       final response = await _apiService.get(
         url,
         proxy: proxy,
@@ -153,16 +199,16 @@ class AccountService {
 
   void invalidate({String? token, String? proxy}) {
     _cache.removeWhere((key, _) {
-      final separator = key.indexOf('\u0000');
-      final cachedProxy = separator < 0 ? '' : key.substring(0, separator);
-      final cachedToken = separator < 0 ? key : key.substring(separator + 1);
+      final parts = key.split('\u0000');
+      final cachedProxy = parts.length > 1 ? parts[1] : '';
+      final cachedToken = parts.length > 2 ? parts[2] : parts.last;
       return (token == null || token == cachedToken) &&
           (proxy == null || proxy == cachedProxy);
     });
     _inFlight.removeWhere((key, _) {
-      final separator = key.indexOf('\u0000');
-      final cachedProxy = separator < 0 ? '' : key.substring(0, separator);
-      final cachedToken = separator < 0 ? key : key.substring(separator + 1);
+      final parts = key.split('\u0000');
+      final cachedProxy = parts.length > 1 ? parts[1] : '';
+      final cachedToken = parts.length > 2 ? parts[2] : parts.last;
       return (token == null || token == cachedToken) &&
           (proxy == null || proxy == cachedProxy);
     });

@@ -87,6 +87,32 @@ class TokenManagerViewmodel extends ChangeNotifier {
     _persist();
   }
 
+  void setTokenConcurrency(int index, int concurrency) {
+    if (index < 0 || index >= tokens.length) return;
+    tokens[index].concurrency =
+        concurrency.clamp(1, ApiTokenConfig.maxConcurrency).toInt();
+    _persist();
+  }
+
+  void setTokenApiBaseUrl(int index, String value) {
+    if (index < 0 || index >= tokens.length) return;
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return;
+    final normalized = trimmed.endsWith('/')
+        ? trimmed.substring(0, trimmed.length - 1)
+        : trimmed;
+    tokens[index].apiBaseUrl = normalized;
+    // Selecting a provider gives the account a sensible concurrency default;
+    // the per-account selector remains available for an explicit override.
+    tokens[index].concurrency =
+        Uri.tryParse(normalized)?.host == 'api.takoma.app'
+            ? ApiTokenConfig.maxConcurrency
+            : 1;
+    _accountService.invalidate(token: tokens[index].token);
+    _persist();
+    refreshBalance(tokens[index].token);
+  }
+
   void setParallelApiEnabled(bool enabled) {
     payloadConfig.settings.parallelApiEnabled =
         enabled && tokens.any((entry) => entry.enabled);
@@ -116,9 +142,10 @@ class TokenManagerViewmodel extends ChangeNotifier {
     notifyListeners();
     SubscriptionInfo? info;
     try {
-      info = await _accountService.fetchSubscription(
+      info = await _accountService.fetchSubscriptionForBase(
         token: token,
         proxy: payloadConfig.settings.proxy,
+        apiBaseUrl: payloadConfig.settings.apiBaseUrlForToken(token),
         // A user-initiated refresh must bypass AccountService's short cache.
         forceRefresh: true,
       );

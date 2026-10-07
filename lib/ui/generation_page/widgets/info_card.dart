@@ -400,11 +400,17 @@ class InfoDetailPage extends StatefulWidget {
   final int initialIndex;
   final ValueChanged<int>? onIndexChanged;
 
+  /// Number of results per row in the grid the gallery was opened from.
+  /// When set, ↑/↓ jump a whole row; null leaves ↑/↓ unbound (for example
+  /// the waterfall layout, whose items do not sit in fixed rows).
+  final int? rowStride;
+
   InfoDetailPage(
       {super.key, required InfoCardContent content, this.tokenCounter})
       : contents = [content],
         initialIndex = 0,
-        onIndexChanged = null;
+        onIndexChanged = null,
+        rowStride = null;
 
   const InfoDetailPage.gallery({
     super.key,
@@ -412,6 +418,7 @@ class InfoDetailPage extends StatefulWidget {
     this.tokenCounter,
     required this.initialIndex,
     this.onIndexChanged,
+    this.rowStride,
   });
 
   @override
@@ -477,8 +484,7 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
 
   KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
-    if (event.logicalKey == LogicalKeyboardKey.space &&
-        content.hasImage) {
+    if (event.logicalKey == LogicalKeyboardKey.space && content.hasImage) {
       openFullscreenImage(context, content);
       return KeyEventResult.handled;
     }
@@ -489,6 +495,17 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
     if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
       _changeIndex(_currentIndex + 1);
       return KeyEventResult.handled;
+    }
+    final rowStride = widget.rowStride;
+    if (rowStride != null && rowStride > 0) {
+      if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+        _changeIndex(_currentIndex - rowStride);
+        return KeyEventResult.handled;
+      }
+      if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+        _changeIndex(_currentIndex + rowStride);
+        return KeyEventResult.handled;
+      }
     }
     if (event.logicalKey == LogicalKeyboardKey.escape) {
       Navigator.of(context).pop();
@@ -539,7 +556,9 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
                   child: Padding(
                     padding: const EdgeInsets.only(left: 12),
                     child: Text(
-                      tr('detail_shortcut_hint'),
+                      tr(widget.rowStride != null
+                          ? 'detail_shortcut_hint_grid'
+                          : 'detail_shortcut_hint'),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       textAlign: TextAlign.end,

@@ -103,6 +103,24 @@ class SettingsPageViewmodel extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setApiBaseUrl(String value) {
+    final trimmed = value.trim();
+    final normalized = trimmed.isEmpty
+        ? Settings.officialApiBaseUrl
+        : (trimmed.endsWith('/')
+            ? trimmed.substring(0, trimmed.length - 1)
+            : trimmed);
+    payloadConfig.settings.apiBaseUrl = normalized;
+    if (payloadConfig.settings.isTakomaApi) {
+      // Takoma exposes neither encode-vibe nor director reference encoding, so
+      // both reference features are unavailable for its accounts.
+      payloadConfig.setVibeEnabled(false, userAction: false);
+      payloadConfig.setPreciseReferenceEnabled(false, userAction: false);
+    }
+    _persistSettings();
+    notifyListeners();
+  }
+
   void setRememberSequentialProgress(bool? value) {
     if (value == null) return;
     payloadConfig.settings.rememberSequentialProgress = value;

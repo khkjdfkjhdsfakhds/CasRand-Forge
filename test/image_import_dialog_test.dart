@@ -606,7 +606,11 @@ void main() {
       ..steps = 12
       ..randomSeed = false
       ..seed = 111;
-    final viewmodel = MetadataDropAreaViewmodel(payloadConfig: payload);
+    final navigation = NavigationRequest();
+    final viewmodel = MetadataDropAreaViewmodel(
+      payloadConfig: payload,
+      navigation: navigation,
+    );
     final bytes = _testPng();
 
     await tester.pumpWidget(
@@ -692,6 +696,7 @@ void main() {
     expect(payload.fixedProfile.paramConfig.steps, 30);
     expect(payload.fixedProfile.paramConfig.model, 'nai-diffusion-4-5-full');
     expect(payload.fixedProfile.paramConfig.seed, 111);
+    expect(navigation.requestedDestination.value, AppDestination.config);
   });
 
   testWidgets(

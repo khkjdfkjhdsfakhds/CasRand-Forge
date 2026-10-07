@@ -321,6 +321,9 @@ class _I2iPageViewState extends State<I2iPageView> {
           )
         : dropChild;
 
+    // Takoma's relay cannot run mask inpainting upstream; keep the entry point
+    // visibly unavailable instead of failing after a paid request.
+    final takomaApi = viewmodel.payloadConfig.settings.isTakomaApi;
     final imageWorkspace = Stack(
       children: [
         dropArea,
@@ -349,10 +352,12 @@ class _I2iPageViewState extends State<I2iPageView> {
                 const SizedBox(width: 8),
               ],
               Tooltip(
-                message: tr('inpaint_edit_mask'),
+                message: takomaApi
+                    ? tr('takoma_feature_unavailable')
+                    : tr('inpaint_edit_mask'),
                 child: FilledButton.tonalIcon(
                   key: const Key('inpaint-edit-mask'),
-                  onPressed: () => _startInpainting(context),
+                  onPressed: takomaApi ? null : () => _startInpainting(context),
                   icon: const Icon(Icons.brush_outlined),
                   label: Text(tr('inpaint_section')),
                 ),
