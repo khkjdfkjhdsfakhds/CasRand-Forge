@@ -1,5 +1,7 @@
 import 'dart:math';
 
+import '../../core/constants/parameters.dart';
+
 /// Anlas cost model, mirroring NovelAI's own calculation.
 ///
 /// Opus (tier 3+) covers one generated sample per request for free while the
@@ -14,6 +16,9 @@ const double _stepPerStepCoefficient = 5753298233447344e-22;
 const double _smMultiplier = 1.2;
 const double _smDynMultiplier = 1.4;
 const double _nai5Multiplier = 1.5;
+
+/// Official per-step discount for the distilled V5 Full Medium model.
+const double _mediumEffortStepMultiplier = 1 / 1.06521739;
 
 /// Anlas per Precise Reference, per image.
 const int preciseReferenceAnlas = 5;
@@ -70,16 +75,22 @@ AnlasCost estimateAnlasCost({
   int preciseReferenceCount = 0,
   int vibeCount = 0,
 }) {
+  final mediumEffort = isMediumEffortModel(model);
+  // Medium effort always runs at its fixed step count, whatever is stored.
+  final effectiveSteps = mediumEffort ? mediumEffortSteps : steps;
   final area = width * height;
   final smMultiplier = smDyn
       ? _smDynMultiplier
       : sm
           ? _smMultiplier
           : 1.0;
-  final baseSteps =
-      (_stepCoefficient * area + _stepPerStepCoefficient * area * steps)
-              .ceil() *
-          smMultiplier;
+  final baseSteps = (_stepCoefficient * area +
+              _stepPerStepCoefficient *
+                  area *
+                  effectiveSteps *
+                  (mediumEffort ? _mediumEffortStepMultiplier : 1))
+          .ceil() *
+      smMultiplier;
   final strengthMultiplier =
       (action == 'infill' || action == 'img2img') ? strength : 1.0;
   final modelMultiplier = model.contains('diffusion-5') ? _nai5Multiplier : 1;
@@ -89,7 +100,7 @@ AnlasCost estimateAnlasCost({
   final free = subscriptionActive &&
       (tier ?? 0) >= opusTier &&
       (!model.contains('diffusion-5') || opusUsageAvailable != false) &&
-      fitsOpusFreeWindow(width: width, height: height, steps: steps);
+      fitsOpusFreeWindow(width: width, height: height, steps: effectiveSteps);
   final freeImages = free ? 1 : 0;
   final int imageCost = perImage * max(nSamples - freeImages, 0);
   final int preciseCost =

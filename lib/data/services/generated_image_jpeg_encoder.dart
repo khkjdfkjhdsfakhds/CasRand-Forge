@@ -75,7 +75,11 @@ class GeneratedImageJpegEncodingResult {
 
 /// Public seam for injecting JPEG encoding into generated-image storage.
 abstract interface class GeneratedImageJpegEncoder {
-  Future<GeneratedImageJpegEncodingResult> encode(Uint8List pngBytes);
+  /// Without [includeMetadata] the JPEG carries no EXIF, XMP or IPTC data.
+  Future<GeneratedImageJpegEncodingResult> encode(
+    Uint8List pngBytes, {
+    bool includeMetadata = true,
+  });
 }
 
 /// JPEG encoder that keeps decoding, metadata extraction, and encoding off the
@@ -85,9 +89,12 @@ class IsolateGeneratedImageJpegEncoder implements GeneratedImageJpegEncoder {
   const IsolateGeneratedImageJpegEncoder();
 
   @override
-  Future<GeneratedImageJpegEncodingResult> encode(Uint8List pngBytes) async {
+  Future<GeneratedImageJpegEncodingResult> encode(
+    Uint8List pngBytes, {
+    bool includeMetadata = true,
+  }) async {
     final raw = await Isolate.run<Map<String, Object?>>(
-      () => _encodePngInBackground(pngBytes),
+      () => _encodePngInBackground(pngBytes, includeMetadata: includeMetadata),
     );
     return _resultFromRaw(raw);
   }
@@ -113,7 +120,10 @@ GeneratedImageJpegEncodingResult _resultFromRaw(Map<String, Object?> raw) {
   );
 }
 
-Future<Map<String, Object?>> _encodePngInBackground(Uint8List pngBytes) async {
+Future<Map<String, Object?>> _encodePngInBackground(
+  Uint8List pngBytes, {
+  required bool includeMetadata,
+}) async {
   final workerDebugName = Isolate.current.debugName;
   try {
     final image = img.decodePng(pngBytes);
@@ -128,7 +138,8 @@ Future<Map<String, Object?>> _encodePngInBackground(Uint8List pngBytes) async {
       );
     }
 
-    final metadataJson = await _extractCompactMetadata(image, pngBytes);
+    final metadataJson =
+        includeMetadata ? await _extractCompactMetadata(image, pngBytes) : null;
     final hasTransparency = _hasVisibleTransparency(image);
     if (hasTransparency) {
       return _rawResult(

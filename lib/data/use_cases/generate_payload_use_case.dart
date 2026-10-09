@@ -124,6 +124,7 @@ class GeneratePayloadUseCase {
         ? selectedParameters
         : (ParamConfig.fromJson(selectedParameters.toJson())..model = model);
     final usesV5 = model.contains('diffusion-5');
+    final mediumEffort = isMediumEffortModel(model);
     // Get prompt
     final filterEntryComments = payloadConfig.promptMode != PromptMode.fixed;
     final basePromptResult = rootPromptConfig.getPrmpts(
@@ -187,10 +188,14 @@ class GeneratePayloadUseCase {
         prompt: result.prompt.toPrompt(),
         comment: result.prompt.toComment(),
       );
-      final characterNegativePair = PromptCommentPair(
-        prompt: result.uc.toPrompt(),
-        comment: result.uc.toComment(),
-      );
+      // Medium effort does not accept custom negative prompts (official
+      // frontend clears every character UC).
+      final characterNegativePair = mediumEffort
+          ? PromptCommentPair(prompt: '', comment: '')
+          : PromptCommentPair(
+              prompt: result.uc.toPrompt(),
+              comment: result.uc.toComment(),
+            );
       textCharacters.add(TextRenderingCharacter(
         prompt: characterPair.prompt,
         center: center,
@@ -215,10 +220,17 @@ class GeneratePayloadUseCase {
     final negativePromptResult = negativePromptConfig.getPrmpts(
         filterEntryComments: filterEntryComments,
         savedConfigs: savedConfigList);
-    final negativePair = PromptCommentPair(
-      prompt: negativePromptResult.toPrompt(),
-      comment: negativePromptResult.toComment(),
-    );
+    final mediumNegativePrompt =
+        mediumEffort ? mediumEffortNegativePrompt(effectiveBasePrompt) : null;
+    final negativePair = mediumNegativePrompt != null
+        ? PromptCommentPair(
+            prompt: mediumNegativePrompt,
+            comment: mediumNegativePrompt,
+          )
+        : PromptCommentPair(
+            prompt: negativePromptResult.toPrompt(),
+            comment: negativePromptResult.toComment(),
+          );
     payloadComment += '\n\n${tr('uc')}:\n${negativePair.comment}';
     paramPayload['negative_prompt'] = negativePair.prompt;
     final baseWithoutAutomaticText = effectiveBasePrompt;

@@ -123,7 +123,14 @@ class GeneratedImageTransferService {
   }
 
   SimpleFileFormat _imageFormat(GeneratedImageFile imageFile) {
-    return imageFile.mediaType == 'image/jpeg' ? Formats.jpeg : Formats.png;
+    switch (imageFile.mediaType) {
+      case 'image/jpeg':
+        return Formats.jpeg;
+      case 'image/webp':
+        return Formats.webp;
+      default:
+        return Formats.png;
+    }
   }
 }
 

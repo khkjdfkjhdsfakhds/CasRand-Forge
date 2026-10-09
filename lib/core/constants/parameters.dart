@@ -1,5 +1,6 @@
 const models = [
   'nai-diffusion-5-full',
+  v5FullMediumModel,
   'nai-diffusion-5-curated',
   'nai-diffusion-4-5-full',
   'nai-diffusion-4-5-curated',
@@ -8,6 +9,36 @@ const models = [
   'nai-diffusion-3',
   'nai-diffusion-furry-3'
 ];
+const v5FullModel = 'nai-diffusion-5-full';
+
+/// V5 Full "Medium effort": a distilled V5 Full. The official frontend
+/// offers it through an Effort toggle; CasRand lists it as its own model.
+const v5FullMediumModel = 'nai-diffusion-5-full-medium';
+
+/// Settings the official frontend pins for Medium effort
+/// (`fixedSettings`). Custom negative prompts are dropped in favor of the
+/// Heavy preset, and CFG Rescale is not sent.
+const int mediumEffortSteps = 14;
+const String mediumEffortSampler = 'k_euler_ancestral';
+const int mediumEffortTagHintUcPreset = 2; // heavy
+const String v5HeavyUcPreset =
+    'lowres, artistic error, film grain, scan artifacts, worst quality, '
+    'bad quality, jpeg artifacts, very displeasing, chromatic aberration, '
+    'dithering, halftone, screentone, multiple views, logo, '
+    'too many watermarks, negative space, blank page';
+
+/// True for the Medium effort model and its inpainting transport.
+bool isMediumEffortModel(String model) =>
+    model == v5FullMediumModel ||
+    model == 'nai-diffusion-5-full-medium-inpainting';
+
+/// The negative prompt the official frontend sends for Medium effort: the
+/// Heavy preset, prefixed with `nsfw` unless the prompt already asks for it.
+String mediumEffortNegativePrompt(String prompt) =>
+    prompt.toLowerCase().contains('nsfw')
+        ? v5HeavyUcPreset
+        : 'nsfw, $v5HeavyUcPreset';
+
 const samplers = [
   'k_euler',
   'k_euler_ancestral',
@@ -68,6 +99,7 @@ const List<String> commentKeys = [
 /// Inpainting model variants, matching the official web frontend.
 const Map<String, String> inpaintModelMapping = {
   'nai-diffusion-5-full': 'nai-diffusion-5-full-inpainting',
+  v5FullMediumModel: 'nai-diffusion-5-full-medium-inpainting',
   // Curated V5 temporarily uses the V4.5 Curated inpainting endpoint.
   'nai-diffusion-5-curated': 'nai-diffusion-4-5-curated-inpainting',
   'nai-diffusion-4-5-full': 'nai-diffusion-4-5-full-inpainting',
@@ -111,6 +143,8 @@ const Map<String, String> sourceToModel = {
   'NovelAI Diffusion V5 0ADF9AB7': 'nai-diffusion-5-full',
   'NovelAI Diffusion V5 657484A5': 'nai-diffusion-5-full',
   'NovelAI Diffusion V5 DB276663': 'nai-diffusion-5-curated',
+  'NovelAI Diffusion V5 93F4BD30': v5FullMediumModel,
+  'NovelAI Diffusion V5 70AB5786': v5FullMediumModel,
   'Stable Diffusion XL C1E1DE52': 'nai-diffusion-3',
   'Stable Diffusion XL 7BCCAA2C': 'nai-diffusion-3',
   'Stable Diffusion XL B0BDF6C1': 'nai-diffusion-3',

@@ -16,6 +16,7 @@ import 'package:nai_casrand/ui/prompt_assistance/prompt_weight_syntax.dart';
 import 'package:nai_casrand/ui/saved_config_list/view_models/saved_config_list_viewmodel.dart';
 import 'package:nai_casrand/ui/saved_config_list/widgets/saved_config_list_view.dart';
 import 'package:provider/provider.dart';
+import 'package:nai_casrand/ui/core/widgets/medium_effort_notice.dart';
 
 /// Line bounds for the fixed-mode positive prompt editor.
 ///
@@ -87,18 +88,25 @@ class PromptTabView extends StatelessWidget {
                     title: context.tr('negative_prompts'),
                     icon: Icons.block,
                     accentColor: Theme.of(context).colorScheme.tertiary,
-                    child: Padding(
-                      key: const Key('negative-prompt-config'),
-                      padding: const EdgeInsets.only(left: 4),
-                      child: PromptConfigView(
-                        viewModel: PromptConfigViewModel(
-                          config: viewmodel.negativePromptConfig,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (viewmodel.isMediumEffort)
+                          const MediumEffortNotice(),
+                        Padding(
+                          key: const Key('negative-prompt-config'),
+                          padding: const EdgeInsets.only(left: 4),
+                          child: PromptConfigView(
+                            viewModel: PromptConfigViewModel(
+                              config: viewmodel.negativePromptConfig,
+                            ),
+                            promptAssistance: promptAssistance ??
+                                PromptEditingAssistance.shared,
+                            autocompleteEnabled:
+                                viewmodel.promptAutocompleteEnabled,
+                          ),
                         ),
-                        promptAssistance:
-                            promptAssistance ?? PromptEditingAssistance.shared,
-                        autocompleteEnabled:
-                            viewmodel.promptAutocompleteEnabled,
-                      ),
+                      ],
                     ),
                   ),
                 ],
@@ -240,15 +248,21 @@ class _FixedPromptEditor extends StatelessWidget {
           title: context.tr('fixed_negative_prompt'),
           icon: Icons.block,
           accentColor: Theme.of(context).colorScheme.tertiary,
-          child: _FixedTextField(
-            fieldKey: const Key('fixed-negative-prompt'),
-            initialValue: viewmodel.fixedNegativePromptText,
-            hintText: context.tr('fixed_negative_prompt_hint'),
-            autocompleteEnabled: viewmodel.promptAutocompleteEnabled,
-            assistance: promptAssistance,
-            onChanged: viewmodel.setFixedNegativePrompt,
-            minLines: kFixedNegativePromptMinLines,
-            maxLines: kFixedNegativePromptMaxLines,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (viewmodel.isMediumEffort) const MediumEffortNotice(),
+              _FixedTextField(
+                fieldKey: const Key('fixed-negative-prompt'),
+                initialValue: viewmodel.fixedNegativePromptText,
+                hintText: context.tr('fixed_negative_prompt_hint'),
+                autocompleteEnabled: viewmodel.promptAutocompleteEnabled,
+                assistance: promptAssistance,
+                onChanged: viewmodel.setFixedNegativePrompt,
+                minLines: kFixedNegativePromptMinLines,
+                maxLines: kFixedNegativePromptMaxLines,
+              ),
+            ],
           ),
         ),
       ],

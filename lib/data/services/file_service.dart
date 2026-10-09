@@ -86,6 +86,31 @@ class PlatformAndroidGalleryWriter implements AndroidGalleryWriter {
     Uint8List bytes,
     String name,
   ) async {
+    if (name.toLowerCase().endsWith('.webp')) {
+      // saveImage decodes and re-compresses to PNG/JPEG; the official WebP
+      // and its metadata must be copied byte for byte from a file instead.
+      final temporary = File(
+        '${(await getTemporaryDirectory()).path}${Platform.pathSeparator}'
+        'gallery-${DateTime.now().microsecondsSinceEpoch}.webp',
+      );
+      await temporary.writeAsBytes(bytes, flush: true);
+      try {
+        final result = await SaverGallery.saveFile(
+          file: temporary.path,
+          name: name,
+          androidRelativePath: 'Pictures/nai-generated',
+          androidExistNotSave: false,
+        );
+        return AndroidGalleryWriteResult(
+          isSuccess: result.isSuccess,
+          errorMessage: result.errorMessage,
+        );
+      } finally {
+        try {
+          await temporary.delete();
+        } catch (_) {}
+      }
+    }
     final result = await SaverGallery.saveImage(
       bytes,
       name: name,

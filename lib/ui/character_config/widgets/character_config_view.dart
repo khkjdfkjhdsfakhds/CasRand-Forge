@@ -9,6 +9,8 @@ import 'package:nai_casrand/ui/character_config/widgets/character_free_position_
 import 'package:nai_casrand/ui/prompt_config/widgets/prompt_config_view.dart';
 import 'package:nai_casrand/ui/prompt_config/view_models/prompt_config_viewmodel.dart';
 import 'package:provider/provider.dart';
+import 'package:nai_casrand/core/constants/parameters.dart';
+import 'package:nai_casrand/ui/core/widgets/medium_effort_notice.dart';
 
 class CharacterConfigView extends StatelessWidget {
   final CharacterConfigViewmodel viewmodel;
@@ -78,6 +80,10 @@ class CharacterConfigView extends StatelessWidget {
               ),
             ),
             const Divider(height: 25, indent: 12, endIndent: 12),
+            if (isMediumEffortModel(viewmodel.paramConfig.model))
+              const MediumEffortNotice(
+                messageKey: 'medium_effort_character_negative_notice',
+              ),
             Padding(
               key: const Key('character-negative-prompt'),
               padding: const EdgeInsets.fromLTRB(4, 0, 4, 10),

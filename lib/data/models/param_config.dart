@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import '../../core/constants/defaults.dart';
+import '../../core/constants/parameters.dart';
 import 'generation_size.dart';
 
 class ParamConfig {
@@ -130,12 +131,16 @@ class ParamConfig {
     GenerationSize? overrideSize,
     Random? random,
   }) {
+    // Medium effort pins steps and sampler; the stored High values stay
+    // untouched so switching back restores them, as on the official site.
+    final mediumEffort = isMediumEffortModel(model);
+    final effectiveSampler = mediumEffort ? mediumEffortSampler : sampler;
     bool? effectiveDeliberateEulerAncestralBug = deliberateEulerAncestralBug;
     bool? effectivePreferBrownian = preferBrownian;
     final hasImportedSamplerOverrides =
         deliberateEulerAncestralBug != null || preferBrownian != null;
     if (!hasImportedSamplerOverrides &&
-        sampler == 'k_euler_ancestral' &&
+        effectiveSampler == 'k_euler_ancestral' &&
         noiseSchedule != 'native') {
       effectiveDeliberateEulerAncestralBug = false;
       effectivePreferBrownian = true;
@@ -155,8 +160,8 @@ class ParamConfig {
       "width": width,
       "height": height,
       "scale": scale,
-      "sampler": sampler,
-      "steps": steps,
+      "sampler": effectiveSampler,
+      "steps": mediumEffort ? mediumEffortSteps : steps,
       "n_samples": nSamples,
       "ucPreset": ucPreset,
       "qualityToggle": qualityToggle,
@@ -198,7 +203,9 @@ class ParamConfig {
       payload.remove('ucPreset');
       payload.remove('qualityToggle');
       payload['tag_hint_qt'] = tagHintQt ?? 0;
-      payload['tag_hint_uc_preset'] = tagHintUcPreset ?? 0;
+      payload['tag_hint_uc_preset'] =
+          mediumEffort ? mediumEffortTagHintUcPreset : tagHintUcPreset ?? 0;
+      if (mediumEffort) payload.remove('cfg_rescale');
       payload['straight_alpha'] = straightAlpha ?? true;
       if (transparentBackground) {
         payload['tag_hint_transparent_background'] = true;

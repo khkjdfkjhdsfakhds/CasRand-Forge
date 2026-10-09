@@ -32,7 +32,8 @@ class FlakyEncoder implements GeneratedImageJpegEncoder {
   final bool failOnce;
   FlakyEncoder(this.jpeg, {this.failOnce = true});
   @override
-  Future<GeneratedImageJpegEncodingResult> encode(Uint8List bytes) async {
+  Future<GeneratedImageJpegEncodingResult> encode(Uint8List bytes,
+      {bool includeMetadata = true}) async {
     calls++;
     if (failOnce && calls == 1) {
       throw StateError('simulated transient JPEG worker failure');
@@ -53,10 +54,6 @@ Uint8List fixturePng() {
   return Uint8List.fromList(img.encodePng(image));
 }
 
-const metadata = GeneratedImageMetadataPolicy(
-    eraseMetadata: false,
-    customMetadataEnabled: false,
-    customMetadataContent: '');
 GeneratedImageStorageRequest request(Uint8List bytes, String output,
         {bool jpeg = false, bool retain = false, String? pngOutput}) =>
     GeneratedImageStorageRequest(
@@ -69,8 +66,7 @@ GeneratedImageStorageRequest request(Uint8List bytes, String output,
                 retainOriginalPng: retain,
                 pngOutputDirectory: pngOutput ?? output,
                 jpegOutputDirectory: output)
-            : GeneratedImageStoragePolicy.pngOnly(outputDirectory: output),
-        metadataPolicy: metadata);
+            : GeneratedImageStoragePolicy.pngOnly(outputDirectory: output));
 void main() {
   storageRecoveryGuards();
   test(

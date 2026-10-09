@@ -15,8 +15,6 @@ import 'package:nai_casrand/ui/settings_page/widgets/config_selection_page_view.
 import 'package:nai_casrand/ui/settings_page/widgets/token_manager_page_view.dart';
 import 'package:provider/provider.dart';
 
-import '../../../core/constants/defaults.dart';
-
 enum _RestoreInitialSettingsAction {
   backupAndRestore,
   restoreDirectly,
@@ -119,11 +117,12 @@ class _SettingsPageViewState extends State<SettingsPageView> {
             _sectionHeading(context, 'settings_group_account'),
             _buildApiProxySettingsTile(context),
             _sectionHeading(context, 'settings_group_storage'),
-            _buildEraseMetadataTile(context),
+            _buildImageSaveFormatTile(context),
             if (viewmodel.supportsDesktopJpegStorage())
               _buildOutputSelectionTile(),
-            if (viewmodel.supportsDesktopJpegStorage())
-              _buildJpegStorageTiles(),
+            if (viewmodel.supportsDesktopJpegStorage() &&
+                viewmodel.effectiveImageSaveFormat.isJpeg)
+              _buildRetainOriginalPngTile(),
             _buildPrefixKeyTile(),
             _sectionHeading(context, 'settings_group_prompt'),
             _buildRememberSequentialProgressTile(),
@@ -285,43 +284,42 @@ class _SettingsPageViewState extends State<SettingsPageView> {
     );
   }
 
-  Widget _buildEraseMetadataTile(BuildContext context) {
-    List<Widget> tiles = [
-      SwitchListTile(
-          key: const Key('metadata-erase-enabled'),
-          secondary: const Icon(Icons.delete_sweep),
-          title: Text(tr('metadata_erase_enabled')),
-          subtitle: Text(tr('metadata_erase_enabled_hint')),
-          value: viewmodel.settings.metadataEraseEnabled,
-          onChanged: (value) => viewmodel.setEraseMetadataEnabled(value))
-    ];
-    if (viewmodel.settings.metadataEraseEnabled) {
-      tiles.add(Padding(
-          padding: const EdgeInsets.only(left: 20),
-          child: SwitchListTile(
-              key: const Key('custom-metadata-enabled'),
-              secondary: const Icon(Icons.edit_note),
-              title: Text(tr('custom_metadata_enabled')),
-              value: viewmodel.settings.customMetadataEnabled,
-              onChanged: (value) =>
-                  viewmodel.setCustomMetadataEnabled(value))));
-    }
-    if (viewmodel.settings.metadataEraseEnabled &&
-        viewmodel.settings.customMetadataEnabled) {
-      tiles.add(Padding(
-          padding: const EdgeInsets.only(left: 30),
-          child: ListTile(
-            title: Text(tr('custom_metadata_content')),
-            subtitle: Text(
-              viewmodel.settings.customMetadataContent,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            onTap: () => _showEditCustomMetadataDialog(context),
-          )));
-    }
-    return Column(
-      children: tiles,
+  Widget _buildImageSaveFormatTile(BuildContext context) {
+    final current = viewmodel.effectiveImageSaveFormat;
+    return ListTile(
+      key: const Key('image-save-format'),
+      leading: const Icon(Icons.photo_library_outlined),
+      title: Text(tr('image_save_format')),
+      subtitle: Text(
+        '${tr('image_save_format_${current.jsonValue}')}\n'
+        '${tr('image_save_format_${current.jsonValue}_hint')}',
+      ),
+      isThreeLine: true,
+      onTap: () => showDialog<void>(
+        context: context,
+        builder: (dialogContext) => SimpleDialog(
+          title: Text(tr('image_save_format')),
+          children: [
+            for (final format in viewmodel.availableImageSaveFormats())
+              SimpleDialogOption(
+                key: Key('image-save-format-${format.jsonValue}'),
+                onPressed: () {
+                  Navigator.of(dialogContext).pop();
+                  viewmodel.setImageSaveFormat(format);
+                },
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(format == current
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked),
+                  title: Text(tr('image_save_format_${format.jsonValue}')),
+                  subtitle:
+                      Text(tr('image_save_format_${format.jsonValue}_hint')),
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -340,79 +338,15 @@ class _SettingsPageViewState extends State<SettingsPageView> {
     );
   }
 
-  Widget _buildJpegStorageTiles() {
-    return Column(
-      children: [
-        SwitchListTile(
-          key: const Key('jpeg-storage-enabled'),
-          secondary: const Icon(Icons.photo_library_outlined),
-          title: Text(tr('jpeg_storage_enabled')),
-          subtitle: Text(tr('jpeg_storage_enabled_hint')),
-          value: viewmodel.settings.jpegStorageEnabled,
-          onChanged: (value) {
-            viewmodel.setJpegStorageEnabled(value);
-          },
-        ),
-        if (viewmodel.settings.jpegStorageEnabled)
-          SwitchListTile(
-            key: const Key('retain-original-png'),
-            secondary: const Icon(Icons.archive_outlined),
-            title: Text(tr('retain_original_png')),
-            subtitle: Text(tr('retain_original_png_hint')),
-            value: viewmodel.settings.retainOriginalPng,
-            onChanged: viewmodel.setRetainOriginalPng,
-          ),
-      ],
+  Widget _buildRetainOriginalPngTile() {
+    return SwitchListTile(
+      key: const Key('retain-original-png'),
+      secondary: const Icon(Icons.archive_outlined),
+      title: Text(tr('retain_original_png')),
+      subtitle: Text(tr('retain_original_png_hint')),
+      value: viewmodel.settings.retainOriginalPng,
+      onChanged: viewmodel.setRetainOriginalPng,
     );
-  }
-
-  void _showEditCustomMetadataDialog(context) {
-    final controller =
-        TextEditingController(text: viewmodel.settings.customMetadataContent);
-    submit() {
-      viewmodel.setCustomMetadataContent(controller.text);
-      Navigator.of(context).pop();
-    }
-
-    showDialog(
-        context: context,
-        builder: (context) => StatefulBuilder(
-              builder: (context, setState) => AlertDialog(
-                title: Text(
-                    tr('edit') + tr('colon') + tr('custom_metadata_content')),
-                content: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(tr('edit_custom_metadata_content_hint')),
-                      TextField(
-                        maxLines: null,
-                        autofocus: true,
-                        controller: controller,
-                        onSubmitted: (_) => submit(),
-                      )
-                    ]),
-                actions: [
-                  Row(
-                    children: [
-                      TextButton(
-                          onPressed: () => setState(
-                              () => controller.text = defaultWatermarkContent),
-                          child: const Text('👻')),
-                      const Spacer(),
-                      TextButton(
-                        onPressed: () => Navigator.of(context).pop(),
-                        child: Text(tr('cancel')),
-                      ),
-                      TextButton(
-                        onPressed: () => submit(),
-                        child: Text(tr('confirm')),
-                      )
-                    ],
-                  ),
-                ],
-              ),
-            ));
   }
 
   Widget _buildPrefixKeyTile() {

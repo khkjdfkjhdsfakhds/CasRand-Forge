@@ -85,16 +85,33 @@ bool _usesTransparentI2iBackground(ParamConfig config, I2IConfig i2i) {
       .contains('diffusion-5');
 }
 
+/// Mirrors the official website's `preferredImageFormat: webp`.
+Map<String, dynamic> _withOfficialWebpImageFormat(
+  Map<String, dynamic> payload,
+) {
+  final parameters = payload['parameters'];
+  if (parameters is! Map) return payload;
+  return {
+    ...payload,
+    'parameters': <String, dynamic>{
+      ...parameters.cast<String, dynamic>(),
+      'image_format': 'webp',
+    },
+  };
+}
+
 GeneratedImageStoragePolicy _storagePolicySnapshot(Settings settings) {
   final supportsDesktopJpeg = !kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.macOS ||
           defaultTargetPlatform == TargetPlatform.windows);
+  final format = settings.imageSaveFormat;
   final outputDirectory = settings.outputFolderPath;
   if (!supportsDesktopJpeg ||
-      !settings.jpegStorageEnabled ||
+      !format.isJpeg ||
       outputDirectory.trim().isEmpty) {
     return GeneratedImageStoragePolicy.pngOnly(
       outputDirectory: outputDirectory,
+      requestOfficialWebp: format == GeneratedImageSaveFormat.webp,
     );
   }
   return GeneratedImageStoragePolicy(
@@ -102,6 +119,7 @@ GeneratedImageStoragePolicy _storagePolicySnapshot(Settings settings) {
     retainOriginalPng: settings.retainOriginalPng,
     pngOutputDirectory: outputDirectory,
     jpegOutputDirectory: outputDirectory,
+    jpegIncludesMetadata: format == GeneratedImageSaveFormat.jpegWithMetadata,
   );
 }
 
@@ -1205,11 +1223,6 @@ class GenerationPageViewmodel extends ChangeNotifier {
     final tokenLabel = _tokenLabelForWorker(workerIndex);
     final acceptedSettings = payloadConfig.settings;
     final storagePolicy = _storagePolicySnapshot(acceptedSettings);
-    final metadataPolicy = GeneratedImageMetadataPolicy(
-      eraseMetadata: acceptedSettings.metadataEraseEnabled,
-      customMetadataEnabled: acceptedSettings.customMetadataEnabled,
-      customMetadataContent: acceptedSettings.customMetadataContent,
-    );
     final acceptedProxy = acceptedSettings.proxy;
     int? startingBalance;
     DateTime? startingBalanceTime;
@@ -1477,10 +1490,23 @@ class GenerationPageViewmodel extends ChangeNotifier {
 
         final headers = payloadConfig.getHeadersForToken(token);
         String? incompleteResponseWarning;
+        // Inpaint results are blended locally as PNG and Director Tools use a
+        // separate endpoint, so only plain generation/I2I/Enhance responses
+        // arrive as WebP. Takoma forwards `image_format` like NovelAI.
+        final firstI2iPlan = i2iBatch?.plans.firstOrNull;
+        final requestsOfficialWebp = storagePolicy.requestOfficialWebp &&
+            !directorBatch &&
+            !(i2iBatch?.isSplit ?? false) &&
+            i2iBatch?.compositeBaseImageB64 == null &&
+            firstI2iPlan?.composite == null &&
+            firstI2iPlan?.isInpaint != true;
         Future<ProcessedResponseImages> sendPlanImages(
-          Map<String, dynamic> payload,
+          Map<String, dynamic> planPayload,
         ) async {
           if (!shouldSend()) throw const RequestNotSentException();
+          final payload = requestsOfficialWebp
+              ? _withOfficialWebpImageFormat(planPayload)
+              : planPayload;
           if (!directorBatch) {
             PromptTokenSnapshots.instance
                 .record(payloadConfig, promptTokenTicket, payload);
@@ -1655,7 +1681,6 @@ class GenerationPageViewmodel extends ChangeNotifier {
             pngBytes: imageBytes,
             fileName: fileName,
             storagePolicy: storagePolicy,
-            metadataPolicy: metadataPolicy,
           );
           final submission = _generatedImageStorage.submit(storageRequest);
           submissions.add(submission);
@@ -1791,7 +1816,6 @@ class GenerationPageViewmodel extends ChangeNotifier {
             pngBytes: error.bytes,
             fileName: fileName,
             storagePolicy: storagePolicy,
-            metadataPolicy: metadataPolicy,
           );
           final submission = _generatedImageStorage.submit(request);
           late final Command<void, InfoCardContent> partialCard;
@@ -3013,9 +3037,6 @@ class GenerationPageViewmodel extends ChangeNotifier {
     final proxy = settings.proxy;
     final headers = payloadConfig.getHeadersForToken(token);
     final storagePolicy = _storagePolicySnapshot(settings);
-    final metadataEraseEnabled = settings.metadataEraseEnabled;
-    final customMetadataEnabled = settings.customMetadataEnabled;
-    final customMetadataContent = settings.customMetadataContent;
     final debugApiEnabled = settings.debugApiEnabled;
     final requestTimestamp = DateTime.now();
     final requestNumber = commandStatus.currentGenerationCount;
@@ -3148,11 +3169,6 @@ class GenerationPageViewmodel extends ChangeNotifier {
             pngBytes: imageBytes,
             fileName: fileName,
             storagePolicy: storagePolicy,
-            metadataPolicy: GeneratedImageMetadataPolicy(
-              eraseMetadata: metadataEraseEnabled,
-              customMetadataEnabled: customMetadataEnabled,
-              customMetadataContent: customMetadataContent,
-            ),
           );
           final storageSubmission = _generatedImageStorage.submit(
             storageRequest,
@@ -3408,9 +3424,7 @@ class GenerationPageViewmodel extends ChangeNotifier {
       'debug_api_enabled': settings.debugApiEnabled,
       'debug_api_path': settings.debugApiPath,
       'output_folder_path': settings.outputFolderPath,
-      'metadata_erase_enabled': settings.metadataEraseEnabled,
-      'custom_metadata_enabled': settings.customMetadataEnabled,
-      'custom_metadata_content': settings.customMetadataContent,
+      'image_save_format': settings.imageSaveFormat.jsonValue,
     });
   }
 

@@ -3,6 +3,7 @@ import 'package:nai_casrand/data/models/character_config.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
+import 'package:nai_casrand/core/constants/parameters.dart';
 
 class PromptTabViewmodel extends ChangeNotifier {
   final PayloadConfig? payloadConfig;
@@ -22,6 +23,7 @@ class PromptTabViewmodel extends ChangeNotifier {
       payloadConfig?.savedPromptConfigList ?? _savedConfigList!;
   ParamConfig get paramConfig => payloadConfig?.paramConfig ?? _paramConfig!;
   bool get isFixedMode => payloadConfig?.promptMode == PromptMode.fixed;
+  bool get isMediumEffort => isMediumEffortModel(paramConfig.model);
   bool get promptAutocompleteEnabled =>
       payloadConfig?.settings.promptAutocompleteEnabled ?? true;
   String get fixedPromptText =>

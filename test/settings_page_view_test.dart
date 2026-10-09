@@ -193,13 +193,12 @@ void main() {
       await tester.pumpAndSettle();
 
       final setup = find.byKey(const Key('api-proxy-settings-tile'));
-      final metadata = find.byKey(const Key('metadata-erase-enabled'));
+      final metadata = find.byKey(const Key('image-save-format'));
       final output = find.byKey(const Key('output-folder'));
       final prefix = find.byKey(const Key('output-file-name-prefix'));
       final remember = find.byKey(const Key('remember-sequential-progress'));
       final confirmation = find.byKey(const Key('confirm-prompt-mode-switch'));
       final autocomplete = find.byKey(const Key('prompt-autocomplete-enabled'));
-      final jpegStorage = find.byKey(const Key('jpeg-storage-enabled'));
 
       expect(setup, findsOneWidget);
       expect(find.text('API & Proxy Settings'), findsOneWidget);
@@ -209,7 +208,7 @@ void main() {
       expect(tester.getTopLeft(setup).dy,
           lessThan(tester.getTopLeft(metadata).dy));
       expect(output, findsOneWidget);
-      expect(jpegStorage, findsOneWidget);
+      expect(find.byKey(const Key('retain-original-png')), findsNothing);
       expect(
         tester.getTopLeft(metadata).dy,
         lessThan(tester.getTopLeft(output).dy),
@@ -250,8 +249,10 @@ void main() {
     }
   });
 
-  test('enabling JPEG storage validates and persists the output directory',
+  test('choosing a JPEG format validates and persists the output directory',
       () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     var picked = 0;
     final viewmodel = SettingsPageViewmodel(
       pickDirectory: () async {
@@ -261,44 +262,43 @@ void main() {
       validateDirectory: (path) async => path == '/tmp/casrand-output',
     );
 
-    await viewmodel.setJpegStorageEnabled(true);
+    await viewmodel
+        .setImageSaveFormat(GeneratedImageSaveFormat.jpegWithoutMetadata);
 
     expect(picked, 1);
-    expect(viewmodel.settings.jpegStorageEnabled, isTrue);
+    expect(viewmodel.settings.imageSaveFormat,
+        GeneratedImageSaveFormat.jpegWithoutMetadata);
     expect(viewmodel.settings.outputFolderPath, '/tmp/casrand-output');
     final savedSettings = configService.savedConfigs[configService.currentUuid]
         ?['settings'] as Map<String, dynamic>?;
-    expect(savedSettings?['jpeg_storage_enabled'], isTrue);
+    expect(savedSettings?['image_save_format'], 'jpeg_no_metadata');
     expect(savedSettings?['output_folder'], '/tmp/casrand-output');
   });
 
-  test('metadata settings persist immediately after changing them', () async {
-    final viewmodel = SettingsPageViewmodel();
-
-    viewmodel.setEraseMetadataEnabled(true);
-    viewmodel.setCustomMetadataEnabled(true);
-    viewmodel.setCustomMetadataContent('{"Description":"custom"}');
-    await Future<void>.delayed(Duration.zero);
-
-    final savedSettings = configService.savedConfigs[configService.currentUuid]
-        ?['settings'] as Map<String, dynamic>?;
-    expect(savedSettings?['metadata_erase_enabled'], isTrue);
-    expect(savedSettings?['custom_metadata_enabled'], isTrue);
-    expect(
-      savedSettings?['custom_metadata_content'],
-      '{"Description":"custom"}',
+  test('PNG and WebP formats persist without probing a directory', () async {
+    var picked = 0;
+    final viewmodel = SettingsPageViewmodel(
+      pickDirectory: () async {
+        picked++;
+        return null;
+      },
+      validateDirectory: (_) async => false,
     );
 
-    viewmodel.setEraseMetadataEnabled(false);
-    await Future<void>.delayed(Duration.zero);
+    await viewmodel.setImageSaveFormat(GeneratedImageSaveFormat.webp);
+    expect(viewmodel.settings.imageSaveFormat, GeneratedImageSaveFormat.webp);
     expect(
       configService.savedConfigs[configService.currentUuid]?['settings']
-          ['metadata_erase_enabled'],
-      isFalse,
+          ?['image_save_format'],
+      'webp',
     );
+
+    await viewmodel.setImageSaveFormat(GeneratedImageSaveFormat.png);
+    expect(viewmodel.settings.imageSaveFormat, GeneratedImageSaveFormat.png);
+    expect(picked, 0);
   });
 
-  test('metadata settings retry a failed persistence write', () async {
+  test('immediately persisted settings retry a failed write', () async {
     await GetIt.instance.unregister<ConfigService>();
     final flakyConfigService = _FlakyConfigService(
       defaultConfigJson(),
@@ -307,15 +307,15 @@ void main() {
     GetIt.instance.registerSingleton<ConfigService>(flakyConfigService);
     final viewmodel = SettingsPageViewmodel();
 
-    viewmodel.setEraseMetadataEnabled(false);
+    viewmodel.setFileNamePrefixKey('retried');
     await Future<void>.delayed(Duration.zero);
     await Future<void>.delayed(Duration.zero);
 
     expect(flakyConfigService.saveAttempts, 2);
     expect(
       flakyConfigService.savedConfigs[flakyConfigService.currentUuid]
-          ?['settings']?['metadata_erase_enabled'],
-      isFalse,
+          ?['settings']?['file_name_prefix_key'],
+      'retried',
     );
   });
 
@@ -411,21 +411,25 @@ void main() {
 
   test('cancelled or unwritable output directory keeps storage disabled',
       () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     final viewmodel = SettingsPageViewmodel(
       pickDirectory: () async => null,
       validateDirectory: (_) async => false,
     );
 
-    await viewmodel.setJpegStorageEnabled(true);
-    expect(viewmodel.settings.jpegStorageEnabled, isFalse);
+    await viewmodel
+        .setImageSaveFormat(GeneratedImageSaveFormat.jpegWithMetadata);
+    expect(viewmodel.settings.imageSaveFormat, GeneratedImageSaveFormat.png);
     expect(viewmodel.settings.outputFolderPath, isEmpty);
 
     final unwritable = SettingsPageViewmodel(
       pickDirectory: () async => '/tmp/not-writable',
       validateDirectory: (_) async => false,
     );
-    await unwritable.setJpegStorageEnabled(true);
-    expect(unwritable.settings.jpegStorageEnabled, isFalse);
+    await unwritable
+        .setImageSaveFormat(GeneratedImageSaveFormat.jpegWithMetadata);
+    expect(unwritable.settings.imageSaveFormat, GeneratedImageSaveFormat.png);
     expect(unwritable.settings.outputFolderPath, isEmpty);
   });
 
@@ -435,7 +439,8 @@ void main() {
       pickDirectory: () async => '/tmp/casrand-output',
       validateDirectory: (path) async => path == '/tmp/casrand-output',
     );
-    viewmodel.settings.jpegStorageEnabled = true;
+    viewmodel.settings.imageSaveFormat =
+        GeneratedImageSaveFormat.jpegWithMetadata;
 
     await viewmodel.setRetainOriginalPng(true);
 
@@ -451,7 +456,7 @@ void main() {
       validateDirectory: (_) async => false,
     );
     cancelled.settings
-      ..jpegStorageEnabled = true
+      ..imageSaveFormat = GeneratedImageSaveFormat.jpegWithMetadata
       ..outputFolderPath = ''
       ..retainOriginalPng = false;
     await cancelled.setRetainOriginalPng(true);
@@ -466,7 +471,7 @@ void main() {
       validateDirectory: (_) async => true,
     );
     viewmodel.settings
-      ..jpegStorageEnabled = true
+      ..imageSaveFormat = GeneratedImageSaveFormat.jpegWithMetadata
       ..outputFolderPath = ''
       ..retainOriginalPng = false;
 
@@ -484,16 +489,55 @@ void main() {
     );
   });
 
-  testWidgets('JPEG storage controls are hidden on Android', (tester) async {
+  testWidgets('Android offers only the PNG and official WebP formats',
+      (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      GetIt.I<PayloadConfig>().settings.imageSaveFormat =
+          GeneratedImageSaveFormat.jpegWithMetadata;
+      await tester.pumpWidget(localizedSettingsPage());
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('retain-original-png')), findsNothing);
+      // A desktop-only JPEG choice synced here is saved, and shown, as PNG.
+      expect(find.textContaining('NovelAI original'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('image-save-format')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('image-save-format-png')), findsOneWidget);
+      expect(find.byKey(const Key('image-save-format-webp')), findsOneWidget);
+      expect(find.byKey(const Key('image-save-format-jpeg')), findsNothing);
+      expect(find.byKey(const Key('image-save-format-jpeg_no_metadata')),
+          findsNothing);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('desktop format selector offers four formats and switches',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    await tester.binding.setSurfaceSize(const Size(1200, 1400));
     try {
       await tester.pumpWidget(localizedSettingsPage());
       await tester.pumpAndSettle();
 
-      expect(find.byKey(const Key('jpeg-storage-enabled')), findsNothing);
+      await tester.tap(find.byKey(const Key('image-save-format')));
+      await tester.pumpAndSettle();
+      for (final format in GeneratedImageSaveFormat.values) {
+        expect(find.byKey(Key('image-save-format-${format.jsonValue}')),
+            findsOneWidget);
+      }
+      await tester.tap(find.byKey(const Key('image-save-format-webp')));
+      await tester.pumpAndSettle();
+
+      expect(GetIt.I<PayloadConfig>().settings.imageSaveFormat,
+          GeneratedImageSaveFormat.webp);
+      expect(find.textContaining('WebP (official)'), findsOneWidget);
       expect(find.byKey(const Key('retain-original-png')), findsNothing);
     } finally {
       debugDefaultTargetPlatformOverride = null;
+      await tester.binding.setSurfaceSize(null);
     }
   });
 

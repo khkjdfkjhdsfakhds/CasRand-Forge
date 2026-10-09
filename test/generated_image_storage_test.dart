@@ -43,14 +43,44 @@ class _NoLocalFileService extends FileService {
 
 class _ControlledJpegEncoder implements GeneratedImageJpegEncoder {
   final List<Completer<GeneratedImageJpegEncodingResult>> calls = [];
+  final List<bool> includeMetadata = [];
 
   @override
-  Future<GeneratedImageJpegEncodingResult> encode(Uint8List pngBytes) {
+  Future<GeneratedImageJpegEncodingResult> encode(
+    Uint8List pngBytes, {
+    bool includeMetadata = true,
+  }) {
     final call = Completer<GeneratedImageJpegEncodingResult>();
     calls.add(call);
+    this.includeMetadata.add(includeMetadata);
     return call.future;
   }
 }
+
+Uint8List _pngWithNovelAiText() {
+  final image = img.Image(width: 8, height: 8, numChannels: 4);
+  img.fill(image, color: img.ColorRgba8(10, 20, 30, 128));
+  image.textData = {
+    'Description': 'portrait',
+    'Software': 'NovelAI',
+    'Comment': '{"prompt":"portrait","steps":28}',
+  };
+  return img.encodePng(image);
+}
+
+/// Minimal RIFF/WEBP container; storage only checks the signature.
+Uint8List _officialWebp() => Uint8List.fromList([
+      ...ascii.encode('RIFF'),
+      12,
+      0,
+      0,
+      0,
+      ...ascii.encode('WEBPVP8L'),
+      0,
+      0,
+      0,
+      0,
+    ]);
 
 String _pathIn(Directory directory, String name) =>
     '${directory.path}${Platform.pathSeparator}$name';
@@ -188,11 +218,6 @@ GeneratedImageStorageRequest _jpegRequest(
       pngOutputDirectory: retainOriginalPng ? outputDirectory : '',
       jpegOutputDirectory: outputDirectory,
     ),
-    metadataPolicy: const GeneratedImageMetadataPolicy(
-      eraseMetadata: false,
-      customMetadataEnabled: false,
-      customMetadataContent: '',
-    ),
   );
 }
 
@@ -205,11 +230,6 @@ void main() {
       fileName: 'immutable.png',
       storagePolicy: const GeneratedImageStoragePolicy.pngOnly(
         outputDirectory: '/test',
-      ),
-      metadataPolicy: const GeneratedImageMetadataPolicy(
-        eraseMetadata: false,
-        customMetadataEnabled: false,
-        customMetadataContent: '',
       ),
     );
 
@@ -235,11 +255,6 @@ void main() {
       storagePolicy: GeneratedImageStoragePolicy.pngOnly(
         outputDirectory: outputDirectory.path,
       ),
-      metadataPolicy: const GeneratedImageMetadataPolicy(
-        eraseMetadata: false,
-        customMetadataEnabled: false,
-        customMetadataContent: '',
-      ),
     );
     final submission = storage.submit(request);
 
@@ -261,76 +276,140 @@ void main() {
     expect(await outputFile.readAsBytes(), pngBytes);
   });
 
-  test('metadata capacity fallback is visible and remains recoverable',
-      () async {
-    final outputDirectory = await Directory.systemTemp.createTemp(
-      'casrand-generated-image-metadata-fallback-',
+  test('JPEG without metadata strips metadata from its PNG fallback', () async {
+    final session = await Directory.systemTemp.createTemp('casrand-session-');
+    final output = await Directory.systemTemp.createTemp('casrand-no-meta-');
+    addTearDown(() async {
+      if (await session.exists()) await session.delete(recursive: true);
+      if (await output.exists()) await output.delete(recursive: true);
+    });
+    final encoder = _ControlledJpegEncoder();
+    final source = _pngWithNovelAiText();
+    expect(await ImageService().extractMetadataFromBytes(source), isNotNull);
+    final storage = GeneratedImageStorageService(
+      desktopJpegSupported: true,
+      jpegEncoder: encoder,
+      sessionDirectoryProvider: () async => session,
     );
-    addTearDown(() => outputDirectory.delete(recursive: true));
-    final source = Uint8List.fromList(img.encodePng(
-      img.Image(width: 8, height: 8, numChannels: 4),
-    ));
-    const metadata =
-        '{"Description":"超长提示词 portrait portrait portrait portrait",'
-        '"Software":"NovelAI",'
-        '"Comment":"{\\"prompt\\":\\"超长提示词\\",\\"steps\\":28}"}';
-    final submission = PngGeneratedImageStorage(
-      fileService: _LocalFileService(),
-    ).submit(GeneratedImageStorageRequest(
-      logicalTaskId: 'metadata:fallback',
+    final submission = storage.submit(GeneratedImageStorageRequest(
+      logicalTaskId: 'no-metadata:fallback',
       pngBytes: source,
-      fileName: 'fallback.png',
-      storagePolicy: GeneratedImageStoragePolicy.pngOnly(
-        outputDirectory: outputDirectory.path,
+      fileName: 'no-metadata.png',
+      storagePolicy: GeneratedImageStoragePolicy(
+        jpegEnabled: true,
+        retainOriginalPng: false,
+        pngOutputDirectory: '',
+        jpegOutputDirectory: output.path,
+        jpegIncludesMetadata: false,
       ),
-      metadataPolicy: const GeneratedImageMetadataPolicy(
-        eraseMetadata: true,
-        customMetadataEnabled: true,
-        customMetadataContent: metadata,
-      ),
+    ));
+    while (encoder.calls.isEmpty) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(encoder.includeMetadata, [false]);
+    encoder.calls.single.complete(const GeneratedImageJpegEncodingResult(
+      status: GeneratedImageJpegEncodingStatus.transparencyUnsupported,
+      jpegBytes: null,
+      width: 8,
+      height: 8,
+      hasTransparency: true,
+      metadataJson: null,
     ));
 
     final artifact = await submission.completed;
     final published = await File(artifact.currentFile!.path).readAsBytes();
-
-    expect(artifact.status, GeneratedImageStorageStatus.saved);
-    expect(
-      artifact.metadataEmbeddingMode,
-      ImageMetadataEmbeddingMode.pngInternationalText,
-    );
-    expect(await ImageService().extractMetadataFromBytes(published), metadata);
+    expect(artifact.status, GeneratedImageStorageStatus.pngFallbackSaved);
+    expect(await ImageService().extractMetadataFromBytes(published), isNull);
   });
 
-  test('metadata failure reports a warning but still publishes the paid image',
+  test('a metadata strip failure still publishes the paid PNG fallback',
       () async {
-    final outputDirectory = await Directory.systemTemp.createTemp(
-      'casrand-generated-image-metadata-error-',
-    );
-    addTearDown(() => outputDirectory.delete(recursive: true));
-    final source = _opaquePng(width: 16, height: 16);
+    final session = await Directory.systemTemp.createTemp('casrand-session-');
+    final output = await Directory.systemTemp.createTemp('casrand-no-meta-');
+    addTearDown(() async {
+      if (await session.exists()) await session.delete(recursive: true);
+      if (await output.exists()) await output.delete(recursive: true);
+    });
+    final encoder = _ControlledJpegEncoder();
+    final source = _pngWithNovelAiText();
     final metadataFailure = StateError('metadata fixture failure');
-    final submission = PngGeneratedImageStorage(
-      fileService: _LocalFileService(),
+    final storage = GeneratedImageStorageService(
+      desktopJpegSupported: true,
+      jpegEncoder: encoder,
+      sessionDirectoryProvider: () async => session,
       metadataProcessor: (_, __) => Future.error(metadataFailure),
-    ).submit(GeneratedImageStorageRequest(
-      logicalTaskId: 'metadata:error',
+    );
+    final submission = storage.submit(GeneratedImageStorageRequest(
+      logicalTaskId: 'no-metadata:error',
       pngBytes: source,
-      fileName: 'metadata-error.png',
-      storagePolicy: GeneratedImageStoragePolicy.pngOnly(
-        outputDirectory: outputDirectory.path,
+      fileName: 'no-metadata-error.png',
+      storagePolicy: GeneratedImageStoragePolicy(
+        jpegEnabled: true,
+        retainOriginalPng: false,
+        pngOutputDirectory: '',
+        jpegOutputDirectory: output.path,
+        jpegIncludesMetadata: false,
       ),
-      metadataPolicy: const GeneratedImageMetadataPolicy(
-        eraseMetadata: true,
-        customMetadataEnabled: false,
-        customMetadataContent: '',
-      ),
+    ));
+    while (encoder.calls.isEmpty) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    encoder.calls.single.complete(const GeneratedImageJpegEncodingResult(
+      status: GeneratedImageJpegEncodingStatus.transparencyUnsupported,
+      jpegBytes: null,
+      width: 8,
+      height: 8,
+      hasTransparency: true,
+      metadataJson: null,
     ));
 
     final artifact = await submission.completed;
-
-    expect(artifact.status, GeneratedImageStorageStatus.saved);
+    expect(artifact.status, GeneratedImageStorageStatus.pngFallbackSaved);
     expect(artifact.metadataFailure, same(metadataFailure));
     expect(await File(artifact.currentFile!.path).readAsBytes(), source);
+  });
+
+  test('official WebP responses are published unchanged as .webp', () async {
+    final output = await Directory.systemTemp.createTemp('casrand-webp-');
+    addTearDown(() => output.delete(recursive: true));
+    final webp = _officialWebp();
+    final encoder = _ControlledJpegEncoder();
+    final storage = GeneratedImageStorageService(
+      desktopJpegSupported: true,
+      jpegEncoder: encoder,
+      fileService: _LocalFileService(),
+    );
+    for (final policy in [
+      GeneratedImageStoragePolicy.pngOnly(
+        outputDirectory: output.path,
+        requestOfficialWebp: true,
+      ),
+      // A JPEG policy never receives WebP in practice; keep the paid bytes.
+      GeneratedImageStoragePolicy(
+        jpegEnabled: true,
+        retainOriginalPng: false,
+        pngOutputDirectory: output.path,
+        jpegOutputDirectory: output.path,
+      ),
+    ]) {
+      final name = 'official-${policy.jpegEnabled}';
+      final artifact = await storage
+          .submit(GeneratedImageStorageRequest(
+            logicalTaskId: 'webp:$name',
+            pngBytes: webp,
+            fileName: '$name.png',
+            storagePolicy: policy,
+          ))
+          .completed;
+      final file = File(_pathIn(output, '$name.webp'));
+      expect(artifact.status, GeneratedImageStorageStatus.saved);
+      expect(artifact.currentFile?.path, file.absolute.path);
+      expect(artifact.currentFile?.mediaType, 'image/webp');
+      expect(artifact.originalPngFile, isNull);
+      expect(await file.readAsBytes(), webp);
+      expect(await File(_pathIn(output, '$name.png')).exists(), isFalse);
+    }
+    expect(encoder.calls, isEmpty);
   });
 
   test('result content follows its artifact without copying preview bytes',
@@ -346,11 +425,6 @@ void main() {
       fileName: 'result.png',
       storagePolicy: GeneratedImageStoragePolicy.pngOnly(
         outputDirectory: outputDirectory.path,
-      ),
-      metadataPolicy: const GeneratedImageMetadataPolicy(
-        eraseMetadata: false,
-        customMetadataEnabled: false,
-        customMetadataContent: '',
       ),
     );
     final submission = PngGeneratedImageStorage().submit(
@@ -381,11 +455,6 @@ void main() {
       fileName: 'gallery.png',
       storagePolicy: const GeneratedImageStoragePolicy.pngOnly(
         outputDirectory: '',
-      ),
-      metadataPolicy: const GeneratedImageMetadataPolicy(
-        eraseMetadata: false,
-        customMetadataEnabled: false,
-        customMetadataContent: '',
       ),
     ));
 
@@ -449,11 +518,6 @@ void main() {
         pngOutputDirectory: '',
         jpegOutputDirectory: output.path,
       ),
-      metadataPolicy: const GeneratedImageMetadataPolicy(
-        eraseMetadata: false,
-        customMetadataEnabled: false,
-        customMetadataContent: '',
-      ),
     );
     final submission = storage.submit(request);
 
@@ -513,11 +577,6 @@ void main() {
         pngOutputDirectory: '',
         jpegOutputDirectory: output.path,
       ),
-      metadataPolicy: const GeneratedImageMetadataPolicy(
-        eraseMetadata: false,
-        customMetadataEnabled: false,
-        customMetadataContent: '',
-      ),
     ));
     while (encoder.calls.isEmpty) {
       await Future<void>.delayed(const Duration(milliseconds: 10));
@@ -562,11 +621,6 @@ void main() {
         pngOutputDirectory: '',
         jpegOutputDirectory: output.path,
       ),
-      metadataPolicy: const GeneratedImageMetadataPolicy(
-        eraseMetadata: false,
-        customMetadataEnabled: false,
-        customMetadataContent: '',
-      ),
     ));
     while (encoder.calls.isEmpty) {
       await Future<void>.delayed(const Duration(milliseconds: 10));
@@ -608,11 +662,6 @@ void main() {
           storagePolicy: GeneratedImageStoragePolicy.pngOnly(
             outputDirectory: output.path,
           ),
-          metadataPolicy: const GeneratedImageMetadataPolicy(
-            eraseMetadata: false,
-            customMetadataEnabled: false,
-            customMetadataContent: '',
-          ),
         ))
         .completed;
 
@@ -646,11 +695,6 @@ void main() {
             retainOriginalPng: false,
             pngOutputDirectory: '',
             jpegOutputDirectory: output.path,
-          ),
-          metadataPolicy: const GeneratedImageMetadataPolicy(
-            eraseMetadata: false,
-            customMetadataEnabled: false,
-            customMetadataContent: '',
           ),
         ))
         .completed;
@@ -688,11 +732,6 @@ void main() {
             pngOutputDirectory: '',
             jpegOutputDirectory: output.path,
           ),
-          metadataPolicy: const GeneratedImageMetadataPolicy(
-            eraseMetadata: false,
-            customMetadataEnabled: false,
-            customMetadataContent: '',
-          ),
         ))
         .completed;
 
@@ -727,11 +766,6 @@ void main() {
             retainOriginalPng: false,
             pngOutputDirectory: '',
             jpegOutputDirectory: output.path,
-          ),
-          metadataPolicy: const GeneratedImageMetadataPolicy(
-            eraseMetadata: false,
-            customMetadataEnabled: false,
-            customMetadataContent: '',
           ),
         ))
         .completed;
@@ -771,11 +805,6 @@ void main() {
             pngOutputDirectory: '',
             jpegOutputDirectory: output.path,
           ),
-          metadataPolicy: const GeneratedImageMetadataPolicy(
-            eraseMetadata: false,
-            customMetadataEnabled: false,
-            customMetadataContent: '',
-          ),
         ))
         .completed;
 
@@ -809,11 +838,6 @@ void main() {
           retainOriginalPng: false,
           pngOutputDirectory: '',
           jpegOutputDirectory: output.path,
-        ),
-        metadataPolicy: const GeneratedImageMetadataPolicy(
-          eraseMetadata: false,
-          customMetadataEnabled: false,
-          customMetadataContent: '',
         ),
       ));
     }
@@ -862,11 +886,6 @@ void main() {
         retainOriginalPng: true,
         pngOutputDirectory: output.path,
         jpegOutputDirectory: output.path,
-      ),
-      metadataPolicy: const GeneratedImageMetadataPolicy(
-        eraseMetadata: false,
-        customMetadataEnabled: false,
-        customMetadataContent: '',
       ),
     ));
     while (encoder.calls.isEmpty) {
@@ -920,11 +939,6 @@ void main() {
         pngOutputDirectory: '',
         jpegOutputDirectory: output.path,
       ),
-      metadataPolicy: const GeneratedImageMetadataPolicy(
-        eraseMetadata: false,
-        customMetadataEnabled: false,
-        customMetadataContent: '',
-      ),
     ));
     while (encoder.calls.isEmpty) {
       await Future<void>.delayed(const Duration(milliseconds: 10));
@@ -974,11 +988,6 @@ void main() {
           retainOriginalPng: false,
           pngOutputDirectory: '',
           jpegOutputDirectory: output.path,
-        ),
-        metadataPolicy: const GeneratedImageMetadataPolicy(
-          eraseMetadata: false,
-          customMetadataEnabled: false,
-          customMetadataContent: '',
         ),
       ));
     }

@@ -195,17 +195,18 @@ class GeneratedImageArtifact extends ChangeNotifier {
 
 class GeneratedImageStorageRequest {
   final String logicalTaskId;
+
+  /// The paid response image: PNG, or NovelAI's official WebP when the WebP
+  /// save format requested it. WebP is published as-is.
   final Uint8List pngBytes;
   final String fileName;
   final GeneratedImageStoragePolicy storagePolicy;
-  final GeneratedImageMetadataPolicy metadataPolicy;
 
   GeneratedImageStorageRequest({
     required this.logicalTaskId,
     required Uint8List pngBytes,
     required this.fileName,
     required this.storagePolicy,
-    required this.metadataPolicy,
   }) : pngBytes = Uint8List.fromList(pngBytes).asUnmodifiableView();
 }
 
@@ -215,31 +216,30 @@ class GeneratedImageStoragePolicy {
   final String pngOutputDirectory;
   final String jpegOutputDirectory;
 
+  /// Whether JPEG output carries the NovelAI metadata. Without it, a PNG
+  /// published in place of the JPEG (transparent or not smaller) is stripped
+  /// too; a deliberately retained original PNG is left untouched.
+  final bool jpegIncludesMetadata;
+
+  /// Whether generation requests ask NovelAI for its official WebP output.
+  final bool requestOfficialWebp;
+
   const GeneratedImageStoragePolicy({
     required this.jpegEnabled,
     required this.retainOriginalPng,
     required this.pngOutputDirectory,
     required this.jpegOutputDirectory,
-  });
+    this.jpegIncludesMetadata = true,
+  }) : requestOfficialWebp = false;
 
   const GeneratedImageStoragePolicy.pngOnly({
     required String outputDirectory,
+    this.requestOfficialWebp = false,
   })  : jpegEnabled = false,
         retainOriginalPng = true,
         pngOutputDirectory = outputDirectory,
-        jpegOutputDirectory = '';
-}
-
-class GeneratedImageMetadataPolicy {
-  final bool eraseMetadata;
-  final bool customMetadataEnabled;
-  final String customMetadataContent;
-
-  const GeneratedImageMetadataPolicy({
-    required this.eraseMetadata,
-    required this.customMetadataEnabled,
-    required this.customMetadataContent,
-  });
+        jpegOutputDirectory = '',
+        jpegIncludesMetadata = true;
 }
 
 class GeneratedImageStorageCancellationToken {
@@ -378,43 +378,33 @@ Future<ImageMetadataEmbeddingResult> _defaultGeneratedImageMetadataProcessor(
   return compute(_embedGeneratedImageMetadata, (imageBytes, metadata));
 }
 
-Future<Uint8List> _prepareGeneratedImageBytes(
-  GeneratedImageStorageRequest request,
+/// Removes NovelAI metadata from a PNG published without metadata. Preserving
+/// the paid image is the primary invariant, so a failure is surfaced as a
+/// warning on the artifact while the unmodified PNG is still published.
+Future<Uint8List> _stripPngMetadata(
+  Uint8List pngBytes,
   GeneratedImageMetadataProcessor metadataProcessor,
   GeneratedImageArtifact artifact,
 ) async {
-  if (!request.metadataPolicy.eraseMetadata) {
-    return request.pngBytes;
-  }
-  final metadata = request.metadataPolicy.customMetadataEnabled
-      ? request.metadataPolicy.customMetadataContent
-      : '';
   try {
-    final result = await metadataProcessor(request.pngBytes, metadata);
+    final result = await metadataProcessor(pngBytes, '');
     artifact._setMetadataEmbeddingMode(result.mode);
     return result.bytes;
   } catch (error) {
-    // Preserving the paid image is the primary invariant. A metadata failure
-    // is retained as a visible warning while the unmodified response is still
-    // published durably.
     artifact._setMetadataFailure(error);
-    return request.pngBytes;
+    return pngBytes;
   }
 }
 
-/// Current PNG-only behavior behind the shared generated-image storage seam.
+/// Publishes response bytes unchanged: PNG, or NovelAI's official WebP.
 class PngGeneratedImageStorage implements GeneratedImageStorage {
   final FileService _fileService;
-  final GeneratedImageMetadataProcessor _metadataProcessor;
   final Expando<({GeneratedImageSaveResult result, Future<String> digest})>
       _publications = Expando();
 
   PngGeneratedImageStorage({
     FileService? fileService,
-    GeneratedImageMetadataProcessor? metadataProcessor,
-  })  : _fileService = fileService ?? FileService(),
-        _metadataProcessor =
-            metadataProcessor ?? _defaultGeneratedImageMetadataProcessor;
+  }) : _fileService = fileService ?? FileService();
 
   @override
   GeneratedImageStorageSubmission submit(
@@ -426,11 +416,8 @@ class PngGeneratedImageStorage implements GeneratedImageStorage {
       cancellationToken: cancellationToken,
       initialStatus: GeneratedImageStorageStatus.saving,
       store: (artifact) async {
-        final storageBytes = await _prepareGeneratedImageBytes(
-          request,
-          _metadataProcessor,
-          artifact,
-        );
+        final storageBytes = request.pngBytes;
+        final isWebp = isWebpImageBytes(storageBytes);
         if (cancellationToken?.isAbandoned ?? false) {
           throw cancellationToken!.error ??
               const GeneratedImageStorageAbandonedException();
@@ -464,7 +451,9 @@ class PngGeneratedImageStorage implements GeneratedImageStorage {
         }
         result ??= await _fileService.saveGeneratedImage(
           storageBytes,
-          request.fileName,
+          isWebp
+              ? _replaceFileExtension(request.fileName, '.webp')
+              : request.fileName,
           request.storagePolicy.pngOutputDirectory,
         );
         final path = result.path;
@@ -483,7 +472,7 @@ class PngGeneratedImageStorage implements GeneratedImageStorage {
         }
         artifact._completeWithFile(GeneratedImageFile(
           path: path,
-          mediaType: 'image/png',
+          mediaType: isWebp ? 'image/webp' : 'image/png',
           isPermanent: true,
         ));
       },
@@ -493,6 +482,12 @@ class PngGeneratedImageStorage implements GeneratedImageStorage {
 
 String _generatedImageDigest(Uint8List bytes) =>
     sha256.convert(bytes).toString();
+
+String _replaceFileExtension(String fileName, String extension) {
+  final dot = fileName.lastIndexOf('.');
+  final stem = dot <= 0 ? fileName : fileName.substring(0, dot);
+  return '$stem$extension';
+}
 
 typedef GeneratedImageSessionDirectoryProvider = Future<Directory> Function();
 typedef GeneratedImageSessionRootDirectoryProvider = Future<Directory>
@@ -524,10 +519,7 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
         _sessionRootDirectoryProvider = sessionRootDirectoryProvider,
         _metadataProcessor =
             metadataProcessor ?? _defaultGeneratedImageMetadataProcessor,
-        _pngStorage = PngGeneratedImageStorage(
-          fileService: fileService,
-          metadataProcessor: metadataProcessor,
-        ),
+        _pngStorage = PngGeneratedImageStorage(fileService: fileService),
         _queue = _GeneratedImageJpegQueue(
           maxConcurrent: maxConcurrentJpegJobs,
           maxPending: maxPendingJpegJobs,
@@ -576,7 +568,9 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
       );
     }
     final job = _GeneratedImageStorageJob();
-    if (!_desktopJpegSupported || !request.storagePolicy.jpegEnabled) {
+    if (!_desktopJpegSupported ||
+        !request.storagePolicy.jpegEnabled ||
+        isWebpImageBytes(request.pngBytes)) {
       return _trackSubmission(
         job,
         _pngStorage.submit(request, cancellationToken: job.cancellationToken),
@@ -749,12 +743,7 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
     final ownedDigests = _publishedDigests[request] ??= <String, String>{};
     try {
       job.throwIfAbandoned();
-      final storagePngBytes = await _prepareGeneratedImageBytes(
-        request,
-        _metadataProcessor,
-        artifact,
-      );
-      job.throwIfAbandoned();
+      final storagePngBytes = request.pngBytes;
       if (request.storagePolicy.jpegOutputDirectory.trim().isEmpty) {
         throw ArgumentError.value(
           request.storagePolicy.jpegOutputDirectory,
@@ -803,6 +792,9 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
         mediaType: 'image/png',
         isPermanent: sourceIsPermanent,
       );
+      Future<Uint8List> fallbackPngBytes() => policy.jpegIncludesMetadata
+          ? Future.value(storagePngBytes)
+          : _stripPngMetadata(storagePngBytes, _metadataProcessor, artifact);
       artifact._setCurrentFile(
         sourceArtifact,
         status: GeneratedImageStorageStatus.queued,
@@ -819,7 +811,10 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
         scheduled = _queue.schedule(() async {
           job.throwIfAbandoned();
           artifact._setStatus(GeneratedImageStorageStatus.encoding);
-          final result = await _jpegEncoder.encode(storagePngBytes);
+          final result = await _jpegEncoder.encode(
+            storagePngBytes,
+            includeMetadata: policy.jpegIncludesMetadata,
+          );
           job.throwIfAbandoned();
           if (result.status ==
               GeneratedImageJpegEncodingStatus.transparencyUnsupported) {
@@ -833,7 +828,7 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
             );
             await _writeNewFileAtomically(
               fallbackPng,
-              storagePngBytes,
+              await fallbackPngBytes(),
               cancellationToken: job.cancellationToken,
               ownedDigests: ownedDigests,
             );
@@ -864,7 +859,7 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
             );
             await _writeNewFileAtomically(
               fallbackPng,
-              storagePngBytes,
+              await fallbackPngBytes(),
               cancellationToken: job.cancellationToken,
               ownedDigests: ownedDigests,
             );
@@ -878,7 +873,7 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
           }
 
           artifact._setStatus(GeneratedImageStorageStatus.publishing);
-          final jpegName = _replaceExtension(request.fileName, '.jpg');
+          final jpegName = _replaceFileExtension(request.fileName, '.jpg');
           final jpegFile = File(
             '${request.storagePolicy.jpegOutputDirectory}'
             '${Platform.pathSeparator}$jpegName',
@@ -1070,12 +1065,6 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
       normalized = normalized.substring(0, normalized.length - 1);
     }
     return normalized;
-  }
-
-  static String _replaceExtension(String fileName, String extension) {
-    final dot = fileName.lastIndexOf('.');
-    final stem = dot <= 0 ? fileName : fileName.substring(0, dot);
-    return '$stem$extension';
   }
 
   Future<void> _writeNewFileAtomically(

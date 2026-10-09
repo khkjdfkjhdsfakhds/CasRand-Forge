@@ -360,6 +360,36 @@ void main() {
       expect(exif?.imageIfd.software, isNull);
     });
 
+    test('JPEG without metadata writes no EXIF, XMP or IPTC segments',
+        () async {
+      const metadata = <String, Object?>{
+        'Title': 'fixture title',
+        'Description': 'private prompt',
+        'Software': 'NovelAI',
+        'Source': 'NovelAI Diffusion V5 fixture',
+        'Comment': '{"prompt":"private prompt","steps":28}',
+      };
+      final png = await ImageService().embedMetadata(
+        _opaquePng(width: 64, height: 48),
+        jsonEncode(metadata),
+      );
+      expect(await ImageService().extractMetadataFromBytes(png), isNotNull);
+
+      final result = await const IsolateGeneratedImageJpegEncoder()
+          .encode(png, includeMetadata: false);
+
+      expect(result.status, GeneratedImageJpegEncodingStatus.encoded,
+          reason: result.errorMessage);
+      expect(result.metadataJson, isNull);
+      final jpeg = result.jpegBytes!;
+      expect(img.decodeJpg(jpeg)?.width, 64);
+      expect(await ImageService().extractMetadataFromBytes(jpeg), isNull);
+      // APP1 carries EXIF/XMP and APP13 carries IPTC.
+      expect(_jpegMarkers(jpeg), isNot(contains(0xE1)));
+      expect(_jpegMarkers(jpeg), isNot(contains(0xED)));
+      expect(latin1.decode(jpeg).contains('private prompt'), isFalse);
+    });
+
     test('returns an explicit unsupported result for transparent PNGs',
         () async {
       final image = img.Image(width: 9, height: 7, numChannels: 4);
@@ -810,3 +840,16 @@ Matcher _hasQuality92LumaQuantization() => predicate<Uint8List?>((bytes) {
       }
       return false;
     });
+
+/// Marker bytes of the JPEG segments before the image data.
+List<int> _jpegMarkers(Uint8List jpeg) {
+  final markers = <int>[];
+  var offset = 2;
+  while (offset + 4 <= jpeg.length && jpeg[offset] == 0xFF) {
+    final marker = jpeg[offset + 1];
+    markers.add(marker);
+    if (marker == 0xDA) break;
+    offset += 2 + ((jpeg[offset + 2] << 8) | jpeg[offset + 3]);
+  }
+  return markers;
+}

@@ -33,7 +33,6 @@ import 'package:nai_casrand/data/services/account_service.dart';
 import 'package:nai_casrand/data/services/api_service.dart';
 import 'package:nai_casrand/data/services/file_service.dart';
 import 'package:nai_casrand/data/services/generated_image_storage.dart';
-import 'package:nai_casrand/data/services/image_service.dart';
 import 'package:nai_casrand/data/use_cases/anlas_cost.dart';
 import 'package:nai_casrand/data/use_cases/encode_vibe_use_case.dart';
 import 'package:nai_casrand/data/use_cases/generate_payload_use_case.dart';
@@ -361,16 +360,6 @@ class _FailOnceFileService extends _RecordingFileService {
       throw StateError('simulated storage failure');
     }
     return '/test/$fileName';
-  }
-}
-
-class _FailingMetadataImageService extends ImageService {
-  @override
-  Future<Uint8List> embedMetadata(
-    Uint8List imageBytes,
-    String metadataString,
-  ) async {
-    throw StateError('simulated metadata persistence failure');
   }
 }
 
@@ -1261,10 +1250,7 @@ void main() {
     ));
     final files = _RecordingFileService();
     final storage = _RecordingGeneratedImageStorage(
-      PngGeneratedImageStorage(
-        fileService: files,
-        metadataProcessor: ImageService().embedMetadataWithOutcome,
-      ),
+      PngGeneratedImageStorage(fileService: files),
     );
     final viewmodel = GenerationPageViewmodel(
       apiService: api,
@@ -1276,10 +1262,7 @@ void main() {
       ..debugApiEnabled = true
       ..generationCount = 1
       ..generationIntervalSec = 0
-      ..outputFolderPath = '/chosen-output'
-      ..metadataEraseEnabled = false
-      ..customMetadataEnabled = true
-      ..customMetadataContent = 'custom metadata';
+      ..outputFolderPath = '/chosen-output';
 
     viewmodel.startGeneration();
     await waitForCurrentCommand(tester, viewmodel);
@@ -1294,12 +1277,11 @@ void main() {
     );
     expect(storage.requests.single.storagePolicy.jpegEnabled, isFalse);
     expect(storage.requests.single.storagePolicy.retainOriginalPng, isTrue);
-    expect(storage.requests.single.metadataPolicy.eraseMetadata, isFalse);
+    expect(storage.requests.single.storagePolicy.requestOfficialWebp, isFalse);
     expect(
-        storage.requests.single.metadataPolicy.customMetadataEnabled, isTrue);
-    expect(
-      storage.requests.single.metadataPolicy.customMetadataContent,
-      'custom metadata',
+      (api.requests.single.payload['parameters'] as Map)
+          .containsKey('image_format'),
+      isFalse,
     );
     final content = viewmodel.currentCommand!.value;
     expect(content.imageArtifact, same(storage.submissions.single.artifact));
@@ -1313,17 +1295,14 @@ void main() {
     viewmodel.dispose();
   });
 
-  testWidgets('storage metadata and folder policy are immutable per request',
+  testWidgets('storage format and folder policy are immutable per request',
       (tester) async {
     final outputImage = img.Image(width: 64, height: 64, numChannels: 4);
     img.fill(outputImage, color: img.ColorRgba8(20, 40, 60, 255));
     final api = _BlockingApiService();
     final files = _RecordingFileService();
     final storage = _RecordingGeneratedImageStorage(
-      PngGeneratedImageStorage(
-        fileService: files,
-        metadataProcessor: ImageService().embedMetadataWithOutcome,
-      ),
+      PngGeneratedImageStorage(fileService: files),
     );
     final viewmodel = GenerationPageViewmodel(
       apiService: api,
@@ -1336,9 +1315,7 @@ void main() {
       ..generationCount = 1
       ..generationIntervalSec = 0
       ..outputFolderPath = '/accepted-output'
-      ..metadataEraseEnabled = true
-      ..customMetadataEnabled = true
-      ..customMetadataContent = 'accepted metadata';
+      ..imageSaveFormat = GeneratedImageSaveFormat.webp;
 
     viewmodel.startGeneration();
     await tester.pump(const Duration(milliseconds: 1));
@@ -1346,9 +1323,7 @@ void main() {
 
     settings
       ..outputFolderPath = '/later-output'
-      ..metadataEraseEnabled = false
-      ..customMetadataEnabled = false
-      ..customMetadataContent = 'later metadata';
+      ..imageSaveFormat = GeneratedImageSaveFormat.png;
     api.response.complete(ApiResponse(
       status: '200',
       data: directorResponseZip([
@@ -1359,16 +1334,7 @@ void main() {
 
     final request = storage.requests.single;
     expect(request.storagePolicy.pngOutputDirectory, '/accepted-output');
-    expect(request.metadataPolicy.eraseMetadata, isTrue);
-    expect(request.metadataPolicy.customMetadataEnabled, isTrue);
-    expect(request.metadataPolicy.customMetadataContent, 'accepted metadata');
-    await tester.runAsync(() => storage.submissions.single.completed);
-    await tester.pump();
-    expect(
-      await ImageService()
-          .extractMetadata(img.decodePng(files.savedBytes.single)!),
-      'accepted metadata',
-    );
+    expect(request.storagePolicy.requestOfficialWebp, isTrue);
     viewmodel.dispose();
   });
 
@@ -1398,7 +1364,7 @@ void main() {
         ..generationCount = 1
         ..generationIntervalSec = 0
         ..outputFolderPath = '/shared-output'
-        ..jpegStorageEnabled = true
+        ..imageSaveFormat = GeneratedImageSaveFormat.jpegWithoutMetadata
         ..retainOriginalPng = false;
 
       viewmodel.startGeneration();
@@ -1406,6 +1372,8 @@ void main() {
 
       final policy = storage.requests.single.storagePolicy;
       expect(policy.jpegEnabled, isTrue);
+      expect(policy.jpegIncludesMetadata, isFalse);
+      expect(policy.requestOfficialWebp, isFalse);
       expect(policy.jpegOutputDirectory, '/shared-output');
       expect(policy.pngOutputDirectory, '/shared-output');
       expect(policy.retainOriginalPng, isFalse);
@@ -1441,7 +1409,7 @@ void main() {
         ..generationCount = 1
         ..generationIntervalSec = 0
         ..outputFolderPath = '/png-output'
-        ..jpegStorageEnabled = true;
+        ..imageSaveFormat = GeneratedImageSaveFormat.jpegWithMetadata;
 
       viewmodel.startGeneration();
       await waitForCurrentCommand(tester, viewmodel);
@@ -1662,53 +1630,44 @@ void main() {
     viewmodel.dispose();
   });
 
-  testWidgets(
-      'metadata failure still saves the paid response without retrying the API',
+  testWidgets('WebP format requests and saves the official WebP unchanged',
       (tester) async {
-    final outputImage = img.Image(width: 64, height: 64, numChannels: 3);
-    final response = ApiResponse(
+    final webp =
+        base64Decode('UklGRh4AAABXRUJQVlA4TBEAAAAvAUAAAAdQiirUo/+BiOh/AAA=');
+    final archive = Archive()
+      ..addFile(ArchiveFile('image_0.webp', webp.length, webp));
+    final api = _FakeApiService(ApiResponse(
       status: '200',
-      data: directorResponseZip([
-        Uint8List.fromList(img.encodePng(outputImage)),
-      ]),
-    );
-    final api = _SequenceApiService([response, response]);
+      data: Uint8List.fromList(ZipEncoder().encode(archive)!),
+    ));
     final files = _RecordingFileService();
+    final storage = _RecordingGeneratedImageStorage(
+      PngGeneratedImageStorage(fileService: files),
+    );
     final viewmodel = GenerationPageViewmodel(
       apiService: api,
       fileService: files,
-      imageService: _FailingMetadataImageService(),
+      generatedImageStorage: storage,
     );
-    final settings = GetIt.I<PayloadConfig>().settings;
-    settings
+    GetIt.I<PayloadConfig>().settings
       ..debugApiEnabled = true
       ..generationCount = 1
       ..generationIntervalSec = 0
-      ..metadataEraseEnabled = true;
+      ..imageSaveFormat = GeneratedImageSaveFormat.webp;
 
     viewmodel.startGeneration();
-    for (var attempt = 0;
-        attempt < 100 &&
-            (viewmodel.commandList.isEmpty ||
-                viewmodel.commandList.single.value.imageArtifact?.status !=
-                    GeneratedImageStorageStatus.saved);
-        attempt++) {
-      await tester.pump(const Duration(milliseconds: 1));
-    }
+    await waitForCurrentCommand(tester, viewmodel);
 
-    expect(api.requests, hasLength(1));
-    expect(viewmodel.commandStatus.currentGenerationCount, 1);
-    expect(viewmodel.commandList, hasLength(1));
-    expect(viewmodel.commandList.single.value.imageBytes, isNotNull);
     expect(
-      viewmodel.commandList.single.value.imageArtifact?.status,
-      GeneratedImageStorageStatus.saved,
+      (api.requests.single.payload['parameters'] as Map)['image_format'],
+      'webp',
     );
-    expect(
-      viewmodel.commandList.single.value.imageArtifact?.metadataFailure,
-      isA<StateError>(),
-    );
-    expect(files.savedNames, hasLength(1));
+    expect(storage.requests.single.pngBytes, webp);
+    expect(files.savedNames.single, endsWith('.webp'));
+    expect(files.savedBytes.single, webp);
+    final content = viewmodel.currentCommand!.value;
+    expect(content.currentImageFile?.mediaType, 'image/webp');
+    expect(content.imageBytes, webp);
     viewmodel.dispose();
   });
 
@@ -3193,7 +3152,9 @@ void main() {
       ..parallelApiEnabled = true
       ..generationCount = 4
       ..generationIntervalSec = 0
-      ..debugApiEnabled = false;
+      ..debugApiEnabled = false
+      // Takoma forwards image_format and returns the official WebP.
+      ..imageSaveFormat = GeneratedImageSaveFormat.webp;
     config.settings.apiTokens
       ..clear()
       ..add(ApiTokenConfig(
@@ -3234,6 +3195,11 @@ void main() {
     expect(seeds[2] - seeds[1], 1);
     expect(seeds[3] - seeds[2], 1);
     expect(prompts, hasLength(1));
+    expect(
+      api.requests.map(
+          (request) => (request.payload['parameters'] as Map)['image_format']),
+      everyElement('webp'),
+    );
     expect(
       viewmodel.commandList
           .where((command) => command.value.imageBytes != null),

@@ -1,6 +1,7 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
+import 'package:nai_casrand/core/constants/parameters.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/image_import_capabilities.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
@@ -90,6 +91,10 @@ class ParametersConfigViewmodel extends ChangeNotifier {
       ),
     );
   }
+
+  /// V5 Full Medium effort pins steps, sampler and CFG Rescale. Their stored
+  /// values stay untouched, so switching back to V5 Full restores them.
+  bool get isMediumEffort => isMediumEffortModel(config.model);
 
   ImageImportCapabilities get capabilities =>
       ImageImportCapabilities.forModel(config.model);

@@ -13,39 +13,43 @@ void main() {
     expect(Settings.fromJson({}).rememberSequentialProgress, isFalse);
   });
 
-  test('desktop JPEG storage settings default to safe PNG-only values', () {
+  test('image save format defaults to PNG without a retained original', () {
     final settings = Settings.fromJson({});
 
-    expect(settings.jpegStorageEnabled, isFalse);
+    expect(settings.imageSaveFormat, GeneratedImageSaveFormat.png);
     expect(settings.retainOriginalPng, isFalse);
   });
 
-  test('desktop JPEG storage settings survive a JSON round trip', () {
-    final settings = Settings.fromJson({
-      'jpeg_storage_enabled': true,
-      'retain_original_png': true,
-    });
+  test('every image save format survives a JSON round trip', () {
+    for (final format in GeneratedImageSaveFormat.values) {
+      final settings = Settings.fromJson({'retain_original_png': true})
+        ..imageSaveFormat = format;
 
-    final restored = Settings.fromJson(settings.toJson());
-    expect(restored.jpegStorageEnabled, isTrue);
-    expect(restored.retainOriginalPng, isTrue);
+      final restored = Settings.fromJson(settings.toJson());
+      expect(restored.imageSaveFormat, format);
+      expect(restored.retainOriginalPng, isTrue);
+    }
   });
 
-  test('metadata retention is the default and metadata settings round-trip',
-      () {
-    final settings = Settings.fromJson({});
-    expect(settings.metadataEraseEnabled, isFalse);
-    expect(settings.customMetadataEnabled, isFalse);
+  test('legacy JPEG and metadata-erase switches map onto a save format', () {
+    GeneratedImageSaveFormat migrate(Map<String, dynamic> json) =>
+        Settings.fromJson(json).imageSaveFormat;
 
-    settings
-      ..metadataEraseEnabled = true
-      ..customMetadataEnabled = true
-      ..customMetadataContent = '{"Description":"custom"}';
-    final restored = Settings.fromJson(settings.toJson());
-
-    expect(restored.metadataEraseEnabled, isTrue);
-    expect(restored.customMetadataEnabled, isTrue);
-    expect(restored.customMetadataContent, '{"Description":"custom"}');
+    expect(
+        migrate({'jpeg_storage_enabled': false}), GeneratedImageSaveFormat.png);
+    expect(
+        migrate(
+            {'jpeg_storage_enabled': false, 'metadata_erase_enabled': true}),
+        GeneratedImageSaveFormat.png);
+    expect(migrate({'jpeg_storage_enabled': true}),
+        GeneratedImageSaveFormat.jpegWithMetadata);
+    expect(
+        migrate({'jpeg_storage_enabled': true, 'metadata_erase_enabled': true}),
+        GeneratedImageSaveFormat.jpegWithoutMetadata);
+    expect(migrate({'image_save_format': 'webp', 'jpeg_storage_enabled': true}),
+        GeneratedImageSaveFormat.webp);
+    expect(Settings.fromJson({}).toJson().containsKey('metadata_erase_enabled'),
+        isFalse);
   });
 
   test('prompt autocomplete defaults to enabled and persists its switch', () {
@@ -119,19 +123,21 @@ void main() {
     );
   });
 
-  test('metadata settings labels describe erasure rather than watermarking',
-      () async {
-    final chinese = jsonDecode(
-      await rootBundle.loadString('assets/l10n/zh-CN.json'),
-    ) as Map<String, dynamic>;
-    final english = jsonDecode(
-      await rootBundle.loadString('assets/l10n/en.json'),
-    ) as Map<String, dynamic>;
-
-    expect(chinese['metadata_erase_enabled'], '清除生成图片中的元数据');
-    expect(chinese['metadata_erase_enabled_hint'], contains('PNG'));
-    expect(chinese['custom_metadata_enabled'], '添加伪造元数据信息');
-    expect(english['metadata_erase_enabled_hint'], contains('omit'));
+  test('every image save format has a localized label and hint', () async {
+    for (final locale in ['zh-CN', 'en']) {
+      final strings = jsonDecode(
+        await rootBundle.loadString('assets/l10n/$locale.json'),
+      ) as Map<String, dynamic>;
+      expect(strings['image_save_format'], isA<String>());
+      for (final format in GeneratedImageSaveFormat.values) {
+        expect(strings['image_save_format_${format.jsonValue}'], isA<String>(),
+            reason: '$locale ${format.name}');
+        expect(strings['image_save_format_${format.jsonValue}_hint'],
+            isA<String>(),
+            reason: '$locale ${format.name} hint');
+      }
+      expect(strings.containsKey('metadata_erase_enabled'), isFalse);
+    }
   });
 
   test('legacy batch settings migrate to per-image generation settings', () {

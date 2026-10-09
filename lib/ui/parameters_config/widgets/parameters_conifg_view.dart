@@ -10,6 +10,7 @@ import 'package:nai_casrand/ui/core/utils/flushbar.dart';
 import 'package:nai_casrand/ui/parameters_config/view_models/parameters_config_viewmodel.dart';
 import 'package:nai_casrand/ui/core/widgets/editable_list_tile.dart';
 import 'package:nai_casrand/ui/core/widgets/slider_list_tile.dart';
+import 'package:nai_casrand/ui/core/widgets/medium_effort_notice.dart';
 
 class ParametersConfigView extends StatelessWidget {
   final ParametersConfigViewmodel viewmodel;
@@ -26,21 +27,25 @@ class ParametersConfigView extends StatelessWidget {
       builder: (context, _) => Column(
         children: [
           _buildModelSelector(context),
+          if (viewmodel.isMediumEffort)
+            const MediumEffortNotice(messageKey: 'medium_effort_model_notice'),
           if (viewmodel.isV4) _buildLegacyUcTile(context),
-          // Steps
-          SliderListTile(
-              key: const Key('sampling-steps-control'),
-              title: context.tr('sampling_steps') +
-                  context.tr('colon') +
-                  viewmodel.config.steps.toString(),
-              sliderValue: viewmodel.config.steps.toDouble(),
-              leading: const Icon(Icons.repeat),
-              trailing: const Icon(Icons.edit_outlined),
-              min: 0,
-              max: 50,
-              divisions: 50,
-              onTitleTap: () => _showStepsInputDialog(context),
-              onChanged: (value) => viewmodel.setSteps(value)),
+          // Steps, sampler and CFG Rescale are fixed on Medium effort and
+          // hidden like on the official site.
+          if (!viewmodel.isMediumEffort)
+            SliderListTile(
+                key: const Key('sampling-steps-control'),
+                title: context.tr('sampling_steps') +
+                    context.tr('colon') +
+                    viewmodel.config.steps.toString(),
+                sliderValue: viewmodel.config.steps.toDouble(),
+                leading: const Icon(Icons.repeat),
+                trailing: const Icon(Icons.edit_outlined),
+                min: 0,
+                max: 50,
+                divisions: 50,
+                onTitleTap: () => _showStepsInputDialog(context),
+                onChanged: (value) => viewmodel.setSteps(value)),
           // CFG
           SliderListTile(
             title: context.tr('scale') +
@@ -53,24 +58,26 @@ class ParametersConfigView extends StatelessWidget {
             divisions: 100,
             onChanged: (value) => viewmodel.setScale(value),
           ),
-          SliderListTile(
-            leading: const Icon(Icons.numbers),
-            title: context.tr('cfg_rescale') +
-                context.tr('colon') +
-                viewmodel.config.cfgRescale.toStringAsFixed(2),
-            min: 0,
-            max: 1,
-            divisions: 20,
-            sliderValue: viewmodel.config.cfgRescale,
-            onChanged: (value) => viewmodel.setCfgRescale(value),
-          ),
+          if (!viewmodel.isMediumEffort)
+            SliderListTile(
+              leading: const Icon(Icons.numbers),
+              title: context.tr('cfg_rescale') +
+                  context.tr('colon') +
+                  viewmodel.config.cfgRescale.toStringAsFixed(2),
+              min: 0,
+              max: 1,
+              divisions: 20,
+              sliderValue: viewmodel.config.cfgRescale,
+              onChanged: (value) => viewmodel.setCfgRescale(value),
+            ),
           // Sampler
-          SelectableListTile(
-              leading: const Icon(Icons.search),
-              title: context.tr('sampler'),
-              currentValue: viewmodel.config.sampler,
-              options: viewmodel.isModern ? samplersV4 : samplers,
-              onSelectComplete: (value) => viewmodel.setSampler(value)),
+          if (!viewmodel.isMediumEffort)
+            SelectableListTile(
+                leading: const Icon(Icons.search),
+                title: context.tr('sampler'),
+                currentValue: viewmodel.config.sampler,
+                options: viewmodel.isModern ? samplersV4 : samplers,
+                onSelectComplete: (value) => viewmodel.setSampler(value)),
           SelectableListTile(
               leading: const Icon(Icons.search),
               title: context.tr('noise_scheduler'),

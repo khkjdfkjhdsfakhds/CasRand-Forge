@@ -12,6 +12,18 @@ enum ImageMetadataEmbeddingMode {
   pngInternationalText,
 }
 
+/// RIFF/WEBP container signature, as returned for `image_format: webp`.
+bool isWebpImageBytes(List<int> bytes) =>
+    bytes.length >= 12 &&
+    bytes[0] == 0x52 &&
+    bytes[1] == 0x49 &&
+    bytes[2] == 0x46 &&
+    bytes[3] == 0x46 &&
+    bytes[8] == 0x57 &&
+    bytes[9] == 0x45 &&
+    bytes[10] == 0x42 &&
+    bytes[11] == 0x50;
+
 class ImageMetadataEmbeddingResult {
   final Uint8List bytes;
   final ImageMetadataEmbeddingMode mode;
@@ -106,7 +118,7 @@ class ImageService {
     try {
       final archive = ZipDecoder().decodeBytes(zippedResponseBytes);
       final indexedImages = <(int, Uint8List)>[];
-      final imageName = RegExp(r'^image_(\d+)\.png$');
+      final imageName = RegExp(r'^image_(\d+)\.(png|webp)$');
       for (final file in archive) {
         final match = imageName.firstMatch(file.name);
         if (match == null || !file.isFile) continue;
@@ -114,12 +126,15 @@ class ImageService {
         if (content is! List<int>) continue;
         final bytes =
             content is Uint8List ? content : Uint8List.fromList(content);
-        if (!_looksLikePng(bytes)) continue;
+        final isWebp = match.group(2) == 'webp';
+        if (isWebp ? !isWebpImageBytes(bytes) : !_looksLikePng(bytes)) {
+          continue;
+        }
         indexedImages.add((int.parse(match.group(1)!), bytes));
       }
       indexedImages.sort((a, b) => a.$1.compareTo(b.$1));
       if (indexedImages.isEmpty) {
-        throw Exception('No valid numbered PNG image found in archive.');
+        throw Exception('No valid numbered image found in archive.');
       }
       return ProcessedResponseImages(
         indexedImages,

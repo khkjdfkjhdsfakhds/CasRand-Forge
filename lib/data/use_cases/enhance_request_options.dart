@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:nai_casrand/core/constants/parameters.dart';
 import 'package:nai_casrand/data/models/generation_size.dart';
 
 /// Transient Enhance policy. Ordinary generation never applies these overrides.
@@ -15,7 +16,9 @@ class EnhanceRequestOptions {
       (0x100000000 * (random ?? Random()).nextDouble() - 1).floor();
 
   static bool supportsMax(String model) =>
-      model == 'nai-diffusion-5-full' || model == 'nai-diffusion-5-curated';
+      model == 'nai-diffusion-5-full' ||
+      model == 'nai-diffusion-5-curated' ||
+      model == v5FullMediumModel;
 
   /// The website normalizes conditioning pixels first, then snaps the final
   /// API dimensions to the nearest 64 pixels (ties round upward).

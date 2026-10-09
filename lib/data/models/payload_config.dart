@@ -4,6 +4,7 @@ import 'package:nai_casrand/data/models/batch_tool_snapshot.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:nai_casrand/core/constants/defaults.dart';
+import 'package:nai_casrand/core/constants/parameters.dart';
 import 'package:nai_casrand/data/models/api_token_config.dart';
 import 'package:nai_casrand/data/models/character_config.dart';
 import 'package:nai_casrand/data/models/director_tool_config.dart';
@@ -730,6 +731,7 @@ class PayloadConfig extends ChangeNotifier {
     );
     final seedJson = _metadataSeedJson(metadata);
     loadedCount += fixedProfile.paramConfig.loadJson(seedJson);
+    _keepHighEffortDefaults(fixedProfile.paramConfig);
     final negative = _metadataNegativePrompt(metadata);
     if (negative != null) {
       fixedProfile.negativePromptConfig = fixedPromptConfig(
@@ -884,6 +886,7 @@ class PayloadConfig extends ChangeNotifier {
       loadedCount += working.paramConfig.loadJson(
         _metadataSettingsJson(metadata, model: model),
       );
+      _keepHighEffortDefaults(working.paramConfig);
     }
 
     if (options.seed) {
@@ -927,6 +930,18 @@ class PayloadConfig extends ChangeNotifier {
     clearPreciseReferenceResourceState();
   }
 
+  /// Medium effort images always record its pinned steps/sampler/CFG
+  /// Rescale. Keep the High defaults underneath instead, so switching the
+  /// effort back to High behaves like the official site.
+  static void _keepHighEffortDefaults(ParamConfig config) {
+    if (!isMediumEffortModel(config.model)) return;
+    final high = _metadataDefaultsForModel(v5FullModel);
+    config
+      ..steps = high.steps
+      ..sampler = high.sampler
+      ..cfgRescale = high.cfgRescale;
+  }
+
   static ParamConfig _metadataDefaultsForModel(
     String model, {
     bool randomSeed = true,
@@ -934,7 +949,9 @@ class PayloadConfig extends ChangeNotifier {
     String? negativePrompt,
   }) {
     var scale = 5.0;
-    if (model == 'nai-diffusion-5-full' || model == 'nai-diffusion-5-curated') {
+    if (model == 'nai-diffusion-5-full' ||
+        model == 'nai-diffusion-5-curated' ||
+        model == v5FullMediumModel) {
       scale = 7.0;
     } else if (model == 'nai-diffusion-4-full' ||
         model == 'nai-diffusion-4-curated-preview') {

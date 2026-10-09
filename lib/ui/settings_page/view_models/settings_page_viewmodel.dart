@@ -30,7 +30,7 @@ class SettingsPageViewmodel extends ChangeNotifier {
   final Future<bool> Function(String path) _validateDirectory;
   final Future<SelectedSettingsFile?> Function() _pickSettingsFile;
   final AccountService _accountService;
-  int _jpegToggleRevision = 0;
+  int _saveFormatRevision = 0;
   int _retainOriginalPngToggleRevision = 0;
   Future<void> _metadataSettingsSave = Future<void>.value();
   Object? settingsPersistenceError;
@@ -161,24 +161,22 @@ class SettingsPageViewmodel extends ChangeNotifier {
     GetIt.I<NavigationRequest>().goToFromSettingsDirectory(destination);
   }
 
-  void setEraseMetadataEnabled(bool? value) {
-    if (value == null) return;
-    payloadConfig.settings.metadataEraseEnabled = value;
-    _persistSettings();
-    notifyListeners();
-  }
+  /// JPEG is encoded locally and is desktop-only; PNG and the official WebP
+  /// come straight from NovelAI on every platform.
+  List<GeneratedImageSaveFormat> availableImageSaveFormats({
+    TargetPlatform? platform,
+  }) =>
+      supportsDesktopJpegStorage(platform: platform)
+          ? GeneratedImageSaveFormat.values
+          : const [GeneratedImageSaveFormat.png, GeneratedImageSaveFormat.webp];
 
-  void setCustomMetadataEnabled(bool? value) {
-    if (value == null) return;
-    payloadConfig.settings.customMetadataEnabled = value;
-    _persistSettings();
-    notifyListeners();
-  }
-
-  void setCustomMetadataContent(String value) {
-    payloadConfig.settings.customMetadataContent = value;
-    _persistSettings();
-    notifyListeners();
+  /// The format shown in the selector; a desktop-only JPEG choice synced to
+  /// another platform is saved as PNG there, so present it that way.
+  GeneratedImageSaveFormat get effectiveImageSaveFormat {
+    final format = settings.imageSaveFormat;
+    return availableImageSaveFormats().contains(format)
+        ? format
+        : GeneratedImageSaveFormat.png;
   }
 
   void _persistSettings() {
@@ -214,14 +212,17 @@ class SettingsPageViewmodel extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Enables JPEG publication only after the output folder has passed a
-  /// write probe. JPEG is always published to the shared output folder; a
-  /// cancelled or invalid picker result leaves PNG-only mode untouched.
-  Future<void> setJpegStorageEnabled(bool? value) async {
-    if (value == null) return;
-    final revision = ++_jpegToggleRevision;
-    if (!value) {
-      payloadConfig.settings.jpegStorageEnabled = false;
+  /// Selects the generated-image save format. JPEG choices are accepted only
+  /// after the output folder has passed a write probe, because JPEG is always
+  /// published to the shared output folder; a cancelled or invalid picker
+  /// result leaves the previous format untouched.
+  Future<void> setImageSaveFormat(GeneratedImageSaveFormat? format) async {
+    if (format == null || !availableImageSaveFormats().contains(format)) {
+      return;
+    }
+    final revision = ++_saveFormatRevision;
+    if (!format.isJpeg) {
+      payloadConfig.settings.imageSaveFormat = format;
       await configService.saveConfig(payloadConfig.toJson());
       notifyListeners();
       return;
@@ -229,17 +230,17 @@ class SettingsPageViewmodel extends ChangeNotifier {
 
     var directory = payloadConfig.settings.outputFolderPath.trim();
     var valid = directory.isNotEmpty && await _validateDirectory(directory);
-    if (revision != _jpegToggleRevision) return;
+    if (revision != _saveFormatRevision) return;
     if (!valid) {
       directory = (await _pickDirectory())?.trim() ?? '';
-      if (revision != _jpegToggleRevision || directory.isEmpty) return;
+      if (revision != _saveFormatRevision || directory.isEmpty) return;
       valid = await _validateDirectory(directory);
-      if (!valid || revision != _jpegToggleRevision) return;
+      if (!valid || revision != _saveFormatRevision) return;
     }
 
     payloadConfig.settings
       ..outputFolderPath = directory
-      ..jpegStorageEnabled = true;
+      ..imageSaveFormat = format;
     await configService.saveConfig(payloadConfig.toJson());
     notifyListeners();
   }

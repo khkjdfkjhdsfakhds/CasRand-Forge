@@ -3,9 +3,42 @@ import 'package:nai_casrand/core/constants/settings.dart';
 import 'package:nai_casrand/data/models/api_token_config.dart';
 import 'package:nai_casrand/data/models/navigation_configuration.dart';
 
-import '../../core/constants/defaults.dart';
-
 const int maxParallelApiTokens = 6;
+
+/// How generated images are written to the output folder.
+///
+/// [webp] asks NovelAI itself for its official lossless WebP (the same file the
+/// website saves); the JPEG choices are encoded locally on desktop.
+enum GeneratedImageSaveFormat {
+  png('png'),
+  webp('webp'),
+  jpegWithMetadata('jpeg'),
+  jpegWithoutMetadata('jpeg_no_metadata');
+
+  const GeneratedImageSaveFormat(this.jsonValue);
+
+  final String jsonValue;
+
+  bool get isJpeg => this == jpegWithMetadata || this == jpegWithoutMetadata;
+
+  static GeneratedImageSaveFormat? fromJsonValue(Object? value) {
+    for (final format in values) {
+      if (format.jsonValue == value) return format;
+    }
+    return null;
+  }
+
+  /// Configurations saved before the format selector stored a JPEG switch
+  /// and a separate metadata-erase switch; map them onto the closest choice.
+  static GeneratedImageSaveFormat fromJson(Map<String, dynamic> json) {
+    final stored = fromJsonValue(json['image_save_format']);
+    if (stored != null) return stored;
+    if (json['jpeg_storage_enabled'] != true) return png;
+    return json['metadata_erase_enabled'] == true
+        ? jpegWithoutMetadata
+        : jpegWithMetadata;
+  }
+}
 
 class Settings {
   // Don't show again
@@ -59,11 +92,11 @@ class Settings {
   // Output dir, for windows only
   String outputFolderPath;
 
-  /// Whether desktop generations should publish a JPEG candidate in addition
-  /// to the normal PNG/session artifact. This remains opt-in for safety.
-  bool jpegStorageEnabled;
+  /// Output format for generated images. JPEG choices are desktop-only and
+  /// fall back to PNG elsewhere.
+  GeneratedImageSaveFormat imageSaveFormat;
 
-  /// Keep a permanent PNG next to the JPEG when desktop JPEG storage is on.
+  /// Keep a permanent PNG next to the JPEG when a JPEG format is selected.
   bool retainOriginalPng;
 
   // Proxy settings
@@ -76,11 +109,6 @@ class Settings {
   // Debug API path
   String debugApiPath;
   bool debugApiEnabled;
-
-  // Image metadata erase
-  bool metadataEraseEnabled;
-  bool customMetadataEnabled;
-  String customMetadataContent;
 
   // Generation scheduling
   int generationCount;
@@ -96,15 +124,12 @@ class Settings {
     required this.welcomeMessageVersion,
     required this.apiKey,
     required this.outputFolderPath,
-    this.jpegStorageEnabled = false,
+    this.imageSaveFormat = GeneratedImageSaveFormat.png,
     this.retainOriginalPng = false,
     required this.proxy,
     this.apiBaseUrl = officialApiBaseUrl,
     required this.debugApiEnabled,
     required this.debugApiPath,
-    required this.metadataEraseEnabled,
-    required this.customMetadataEnabled,
-    required this.customMetadataContent,
     required this.generationCount,
     required this.generationIntervalSec,
     required this.rememberSequentialProgress,
@@ -376,16 +401,12 @@ class Settings {
       confirmPromptModeSwitch: json['confirm_prompt_mode_switch'] ?? true,
       subscriptionTier: json['subscription_tier'] ?? 0,
       outputFolderPath: json['output_folder'] ?? '',
-      jpegStorageEnabled: json['jpeg_storage_enabled'] ?? false,
+      imageSaveFormat: GeneratedImageSaveFormat.fromJson(json),
       retainOriginalPng: json['retain_original_png'] ?? false,
       proxy: json['proxy'] ?? '',
       apiBaseUrl: json['api_base_url'] ?? officialApiBaseUrl,
       debugApiEnabled: false,
       debugApiPath: 'http://localhost:5000/ai/generate-image',
-      metadataEraseEnabled: json['metadata_erase_enabled'] ?? false,
-      customMetadataEnabled: json['custom_metadata_enabled'] ?? false,
-      customMetadataContent:
-          json['custom_metadata_content'] ?? defaultWatermarkContent,
       generationCount:
           json['generation_count'] ?? json['number_of_requests'] ?? 0,
       generationIntervalSec:
@@ -411,13 +432,10 @@ class Settings {
       'confirm_prompt_mode_switch': confirmPromptModeSwitch,
       'subscription_tier': subscriptionTier,
       'output_folder': outputFolderPath,
-      'jpeg_storage_enabled': jpegStorageEnabled,
+      'image_save_format': imageSaveFormat.jsonValue,
       'retain_original_png': retainOriginalPng,
       'proxy': proxy,
       'api_base_url': normalizedApiBaseUrl,
-      'metadata_erase_enabled': metadataEraseEnabled,
-      'custom_metadata_enabled': customMetadataEnabled,
-      'custom_metadata_content': customMetadataContent,
       'file_name_prefix_key': fileNamePrefixKey,
       'generation_count': generationCount,
       'generation_interval': generationIntervalSec,
