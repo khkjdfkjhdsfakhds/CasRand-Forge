@@ -18,8 +18,8 @@ void main() {
     try {
       try {
         await storage
-            .submit(fixture.request(fixture.fixturePng(), root.path,
-                jpeg: true, retain: true))
+            .submit(
+                fixture.request(fixture.fixturePng(), root.path, jpeg: true))
             .completed;
       } catch (_) {}
       expect(await FileSystemEntity.type(link.path, followLinks: false),

@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/core/constants/settings.dart';
+import 'package:nai_casrand/ui/app_update/app_update_controller.dart';
+import 'package:nai_casrand/ui/app_update/app_update_settings_tiles.dart';
 import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/data/models/settings.dart';
 import 'package:nai_casrand/data/models/user_input_validation.dart';
@@ -120,9 +122,6 @@ class _SettingsPageViewState extends State<SettingsPageView> {
             _buildImageSaveFormatTile(context),
             if (viewmodel.supportsDesktopJpegStorage())
               _buildOutputSelectionTile(),
-            if (viewmodel.supportsDesktopJpegStorage() &&
-                viewmodel.effectiveImageSaveFormat.isJpeg)
-              _buildRetainOriginalPngTile(),
             _buildPrefixKeyTile(),
             _sectionHeading(context, 'settings_group_prompt'),
             _buildRememberSequentialProgressTile(),
@@ -170,6 +169,12 @@ class _SettingsPageViewState extends State<SettingsPageView> {
             _sectionHeading(context, 'settings_group_appearance'),
             _buildThemeModeTile(context),
             _buildLanguageTile(context),
+            if (!kIsWeb && GetIt.I.isRegistered<AppUpdateController>()) ...[
+              _sectionHeading(context, 'settings_group_update'),
+              AppUpdateSettingsTiles(
+                controller: GetIt.I<AppUpdateController>(),
+              ),
+            ],
           ],
         ),
       ),
@@ -200,7 +205,9 @@ class _SettingsPageViewState extends State<SettingsPageView> {
       body: SingleChildScrollView(
         key: const Key('settings-scroll-view'),
         controller: _scrollController,
-        padding: const EdgeInsets.only(bottom: 100),
+        // Clears both floating action buttons so the last row's switch
+        // stays reachable when scrolled to the end.
+        padding: const EdgeInsets.only(bottom: 168),
         child: content,
       ),
       floatingActionButton: buttons,
@@ -335,17 +342,6 @@ class _SettingsPageViewState extends State<SettingsPageView> {
       title: Text(tr('output_folder')),
       subtitle: Text(outputDirPath),
       onTap: () => viewmodel.pickOutputFolderPath(),
-    );
-  }
-
-  Widget _buildRetainOriginalPngTile() {
-    return SwitchListTile(
-      key: const Key('retain-original-png'),
-      secondary: const Icon(Icons.archive_outlined),
-      title: Text(tr('retain_original_png')),
-      subtitle: Text(tr('retain_original_png_hint')),
-      value: viewmodel.settings.retainOriginalPng,
-      onChanged: viewmodel.setRetainOriginalPng,
     );
   }
 

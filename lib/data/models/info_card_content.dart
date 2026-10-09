@@ -32,7 +32,6 @@ class InfoCardContent {
 
   Uint8List? get imageBytes => imageArtifact?.previewBytes ?? _imageBytes;
   GeneratedImageFile? get currentImageFile => imageArtifact?.currentFile;
-  GeneratedImageFile? get originalImageFile => imageArtifact?.originalPngFile;
 
   /// Anlas consumed by this generation, exact or locally estimated.
   final int? anlasCost;
@@ -112,6 +111,5 @@ class InfoCardContent {
 
   bool get hasImage =>
       (imageBytes != null && imageBytes!.isNotEmpty) ||
-      currentImageFile != null ||
-      originalImageFile != null;
+      currentImageFile != null;
 }

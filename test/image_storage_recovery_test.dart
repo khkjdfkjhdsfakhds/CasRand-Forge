@@ -55,7 +55,7 @@ Uint8List fixturePng() {
 }
 
 GeneratedImageStorageRequest request(Uint8List bytes, String output,
-        {bool jpeg = false, bool retain = false, String? pngOutput}) =>
+        {bool jpeg = false, String? pngOutput}) =>
     GeneratedImageStorageRequest(
         logicalTaskId: 'PAID_TASK_FIXTURE',
         pngBytes: bytes,
@@ -63,7 +63,6 @@ GeneratedImageStorageRequest request(Uint8List bytes, String output,
         storagePolicy: jpeg
             ? GeneratedImageStoragePolicy(
                 jpegEnabled: true,
-                retainOriginalPng: retain,
                 pngOutputDirectory: pngOutput ?? output,
                 jpegOutputDirectory: output)
             : GeneratedImageStoragePolicy.pngOnly(outputDirectory: output));
@@ -94,43 +93,39 @@ void main() {
     expect(closedBeforeWrite, isFalse,
         reason: 'Orderly close must wait for accepted PNG publication.');
   });
-  for (final retain in [false, true]) {
-    test(
-        'IMG-02 JPEG storage retry must recover after encoder failure retain=$retain',
-        () async {
-      final root = await Directory.systemTemp.createTemp('casrand-jpeg-retry-');
-      final output = await Directory('${root.path}/output').create();
-      final png = fixturePng();
-      final jpeg =
-          Uint8List.fromList(img.encodeJpg(img.decodePng(png)!, quality: 92));
-      final encoder = FlakyEncoder(jpeg);
-      final storage = GeneratedImageStorageService(
-          desktopJpegSupported: true,
-          jpegEncoder: encoder,
-          sessionDirectoryProvider: () =>
-              Directory('${root.path}${Platform.pathSeparator}session')
-                  .create());
-      final accepted = request(png, output.path, jpeg: true, retain: retain);
-      final first = storage.submit(accepted);
-      await expectLater(first.completed, throwsStateError);
-      Object? retryError;
-      GeneratedImageArtifact? result;
-      try {
-        result = await storage.submit(accepted).completed;
-      } catch (e) {
-        retryError = e;
-      }
-      debugPrint(
-          'IMG-02 retain=$retain firstFile=${first.artifact.currentFile?.path} retryError=$retryError encoderCalls=${encoder.calls}');
-      await storage.close();
-      await root.delete(recursive: true);
-      expect(retryError, isNull,
-          reason:
-              'Same paid response should retry local storage rather than collide with its own source PNG.');
-      expect(result?.isDurablySaved, isTrue);
-      expect(encoder.calls, 2);
-    });
-  }
+  test('IMG-02 JPEG storage retry must recover after encoder failure',
+      () async {
+    final root = await Directory.systemTemp.createTemp('casrand-jpeg-retry-');
+    final output = await Directory('${root.path}/output').create();
+    final png = fixturePng();
+    final jpeg =
+        Uint8List.fromList(img.encodeJpg(img.decodePng(png)!, quality: 92));
+    final encoder = FlakyEncoder(jpeg);
+    final storage = GeneratedImageStorageService(
+        desktopJpegSupported: true,
+        jpegEncoder: encoder,
+        sessionDirectoryProvider: () =>
+            Directory('${root.path}${Platform.pathSeparator}session').create());
+    final accepted = request(png, output.path, jpeg: true);
+    final first = storage.submit(accepted);
+    await expectLater(first.completed, throwsStateError);
+    Object? retryError;
+    GeneratedImageArtifact? result;
+    try {
+      result = await storage.submit(accepted).completed;
+    } catch (e) {
+      retryError = e;
+    }
+    debugPrint(
+        'IMG-02 firstFile=${first.artifact.currentFile?.path} retryError=$retryError encoderCalls=${encoder.calls}');
+    await storage.close();
+    await root.delete(recursive: true);
+    expect(retryError, isNull,
+        reason:
+            'Same paid response should retry local storage rather than collide with its own source PNG.');
+    expect(result?.isDurablySaved, isTrue);
+    expect(encoder.calls, 2);
+  });
   test(
       'IMG-02B repairing a real blocked JPEG output directory should make retry usable',
       () async {
@@ -201,7 +196,7 @@ void storageRecoveryGuards() {
         sessionDirectoryProvider: () =>
             Directory('${root.path}${Platform.pathSeparator}session').create(),
       );
-      final accepted = request(png, output.path, jpeg: true, retain: true);
+      final accepted = request(png, output.path, jpeg: true);
       final first = storage.submit(accepted);
       await expectLater(first.completed, throwsStateError);
       final original = File(first.artifact.currentFile!.path);
@@ -209,9 +204,8 @@ void storageRecoveryGuards() {
           ? Uint8List.fromList([91, 81, 71])
           : await original.readAsBytes();
       if (sameRequest) await original.writeAsBytes(preserved, flush: true);
-      final retry = storage.submit(sameRequest
-          ? accepted
-          : request(png, output.path, jpeg: true, retain: true));
+      final retry = storage.submit(
+          sameRequest ? accepted : request(png, output.path, jpeg: true));
       await expectLater(retry.completed, throwsA(isA<FileSystemException>()));
       expect(encoder.calls, 1);
       expect(await original.readAsBytes(), preserved);
@@ -219,9 +213,7 @@ void storageRecoveryGuards() {
     });
   }
 
-  test(
-      'JPEG identical external PNG is not adopted as a paid-request intermediate',
-      () async {
+  test('JPEG leaves an unrelated external PNG untouched', () async {
     final root =
         await Directory.systemTemp.createTemp('casrand-storage-external-');
     addTearDown(() => root.delete(recursive: true));
@@ -230,14 +222,17 @@ void storageRecoveryGuards() {
     await source.writeAsBytes(png, flush: true);
     final encoder = FlakyEncoder(Uint8List.fromList([1, 2]), failOnce: false);
     final storage = GeneratedImageStorageService(
-        desktopJpegSupported: true, jpegEncoder: encoder);
-    await expectLater(
-        storage
-            .submit(request(png, root.path, jpeg: true, retain: true))
-            .completed,
-        throwsA(isA<FileSystemException>()));
+      desktopJpegSupported: true,
+      jpegEncoder: encoder,
+      sessionDirectoryProvider: () =>
+          Directory('${root.path}${Platform.pathSeparator}session').create(),
+    );
+    final artifact =
+        await storage.submit(request(png, root.path, jpeg: true)).completed;
     expect(await source.readAsBytes(), png);
-    expect(encoder.calls, 0);
+    expect(encoder.calls, 1);
+    expect(artifact.currentFile?.mediaType, 'image/jpeg');
+    expect(await File('${root.path}/PAID_RESULT.jpg').exists(), isTrue);
     await storage.close();
   });
 

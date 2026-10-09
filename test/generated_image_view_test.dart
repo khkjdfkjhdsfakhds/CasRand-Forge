@@ -29,21 +29,6 @@ void main() {
     expect(titles, ['Copy Original Image', 'Show in Finder']);
   });
 
-  test('retained PNG adds a distinct original-file action', () {
-    final items = buildGeneratedImageMenuItems(
-      copyOriginalLabel: 'Copy Current Image File',
-      copyRetainedPngLabel: 'Copy Retained Original PNG',
-      showInFinderLabel: 'Show in Finder',
-      showFinder: true,
-    ).cast<PopupMenuItem<GeneratedImageAction>>();
-
-    expect(items.map((item) => item.value), [
-      GeneratedImageAction.copyOriginal,
-      GeneratedImageAction.copyRetainedPng,
-      GeneratedImageAction.showInFinder,
-    ]);
-  });
-
   test('storage terminal states have explicit user-facing labels', () {
     expect(
       generatedImageStorageStatusKey(

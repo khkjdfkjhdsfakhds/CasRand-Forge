@@ -1276,7 +1276,6 @@ void main() {
       '/chosen-output',
     );
     expect(storage.requests.single.storagePolicy.jpegEnabled, isFalse);
-    expect(storage.requests.single.storagePolicy.retainOriginalPng, isTrue);
     expect(storage.requests.single.storagePolicy.requestOfficialWebp, isFalse);
     expect(
       (api.requests.single.payload['parameters'] as Map)
@@ -1364,8 +1363,7 @@ void main() {
         ..generationCount = 1
         ..generationIntervalSec = 0
         ..outputFolderPath = '/shared-output'
-        ..imageSaveFormat = GeneratedImageSaveFormat.jpegWithoutMetadata
-        ..retainOriginalPng = false;
+        ..imageSaveFormat = GeneratedImageSaveFormat.jpegWithoutMetadata;
 
       viewmodel.startGeneration();
       await waitForCurrentCommand(tester, viewmodel);
@@ -1376,7 +1374,6 @@ void main() {
       expect(policy.requestOfficialWebp, isFalse);
       expect(policy.jpegOutputDirectory, '/shared-output');
       expect(policy.pngOutputDirectory, '/shared-output');
-      expect(policy.retainOriginalPng, isFalse);
       viewmodel.dispose();
     } finally {
       debugDefaultTargetPlatformOverride = null;

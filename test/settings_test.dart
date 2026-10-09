@@ -13,22 +13,25 @@ void main() {
     expect(Settings.fromJson({}).rememberSequentialProgress, isFalse);
   });
 
-  test('image save format defaults to PNG without a retained original', () {
+  test('image save format defaults to PNG', () {
     final settings = Settings.fromJson({});
 
     expect(settings.imageSaveFormat, GeneratedImageSaveFormat.png);
-    expect(settings.retainOriginalPng, isFalse);
   });
 
   test('every image save format survives a JSON round trip', () {
     for (final format in GeneratedImageSaveFormat.values) {
-      final settings = Settings.fromJson({'retain_original_png': true})
-        ..imageSaveFormat = format;
+      final settings = Settings.fromJson({})..imageSaveFormat = format;
 
       final restored = Settings.fromJson(settings.toJson());
       expect(restored.imageSaveFormat, format);
-      expect(restored.retainOriginalPng, isTrue);
     }
+  });
+
+  test('removed retained-PNG setting is ignored and omitted on save', () {
+    final settings = Settings.fromJson({'retain_original_png': true});
+
+    expect(settings.toJson().containsKey('retain_original_png'), isFalse);
   });
 
   test('legacy JPEG and metadata-erase switches map onto a save format', () {

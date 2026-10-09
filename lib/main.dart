@@ -9,6 +9,7 @@ import 'package:nai_casrand/data/models/navigation_request.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/services/config_service.dart';
 import 'package:nai_casrand/data/services/generated_image_storage.dart';
+import 'package:nai_casrand/ui/app_update/app_update_controller.dart';
 import 'package:nai_casrand/ui/generation_page/view_models/generation_page_viewmodel.dart';
 import 'package:nai_casrand/ui/navigation/widgets/navigation_view.dart';
 import 'package:nai_casrand/ui/navigation/view_models/navigation_view_model.dart';
@@ -46,6 +47,14 @@ void main() async {
   GetIt.instance.registerLazySingleton(
     () => GenerationPageViewmodel(
       generatedImageStorage: generatedImageStorage,
+    ),
+  );
+
+  GetIt.instance.registerLazySingleton(
+    () => AppUpdateController(
+      currentVersion: configService.packageInfo.version,
+      preferences: HiveAppUpdatePreferences(configService.saveBox),
+      proxy: () => GetIt.I<PayloadConfig>().settings.proxy,
     ),
   );
 

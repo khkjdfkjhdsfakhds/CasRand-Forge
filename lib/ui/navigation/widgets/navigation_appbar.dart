@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:get_it/get_it.dart';
@@ -7,6 +8,8 @@ import 'package:blinking_text/blinking_text.dart';
 import 'package:nai_casrand/core/constants/app_identity.dart';
 import 'package:nai_casrand/data/models/command_status.dart';
 import 'package:nai_casrand/data/services/config_service.dart';
+import 'package:nai_casrand/ui/app_update/app_update_controller.dart';
+import 'package:nai_casrand/ui/app_update/app_update_dialog.dart';
 import 'package:nai_casrand/ui/navigation/widgets/debug_settings_view.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -63,6 +66,8 @@ class AppHelpButton extends StatelessWidget {
       applicationVersion: appVersion,
       applicationIcon: iconImage,
       children: [
+        if (!kIsWeb && GetIt.I.isRegistered<AppUpdateController>())
+          _buildCheckUpdateTile(context),
         _buildLinkTile(),
         _buildDonationLink(context),
         _buildRestoreWelcomeMessageTile(context),
@@ -80,6 +85,23 @@ class AppHelpButton extends StatelessWidget {
         Navigator.of(context).pop();
         WidgetsBinding.instance.addPostFrameCallback((_) {
           onRestoreWelcomeMessage();
+        });
+      },
+    );
+  }
+
+  Widget _buildCheckUpdateTile(BuildContext context) {
+    return ListTile(
+      key: const Key('about-check-update'),
+      title: Text(tr('app_update_about_tile')),
+      leading: const Icon(Icons.system_update_alt),
+      onTap: () {
+        final controller = GetIt.I<AppUpdateController>();
+        Navigator.of(context).pop();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (context.mounted) {
+            checkForUpdatesInteractively(context, controller);
+          }
         });
       },
     );

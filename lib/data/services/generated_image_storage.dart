@@ -59,7 +59,6 @@ class GeneratedImageArtifact extends ChangeNotifier {
 
   GeneratedImageStorageStatus _status;
   GeneratedImageFile? _currentFile;
-  GeneratedImageFile? _originalPngFile;
   List<GeneratedImageFile> _permanentFiles;
   Object? _failure;
   GeneratedImageSaveDestination? _saveDestination;
@@ -74,7 +73,6 @@ class GeneratedImageArtifact extends ChangeNotifier {
 
   GeneratedImageStorageStatus get status => _status;
   GeneratedImageFile? get currentFile => _currentFile;
-  GeneratedImageFile? get originalPngFile => _originalPngFile;
   List<GeneratedImageFile> get permanentFiles =>
       List.unmodifiable(_permanentFiles);
   Object? get failure => _failure;
@@ -110,7 +108,6 @@ class GeneratedImageArtifact extends ChangeNotifier {
   void _completeWithFile(GeneratedImageFile? file) {
     if (isTerminal) return;
     _currentFile = file;
-    if (file?.mediaType == 'image/png') _originalPngFile = file;
     _permanentFiles = file == null ? const [] : [file];
     _saveDestination =
         file == null ? null : GeneratedImageSaveDestination.fileSystem;
@@ -153,7 +150,6 @@ class GeneratedImageArtifact extends ChangeNotifier {
   }) {
     if (isTerminal) return;
     _currentFile = file;
-    if (file.mediaType == 'image/png') _originalPngFile = file;
     _permanentFiles = List.unmodifiable(permanentFiles);
     _status = status;
     notifyListeners();
@@ -166,12 +162,11 @@ class GeneratedImageArtifact extends ChangeNotifier {
   }
 
   void _completeWithJpeg(
-    GeneratedImageFile jpeg, {
-    List<GeneratedImageFile> otherPermanentFiles = const [],
-  }) {
+    GeneratedImageFile jpeg,
+  ) {
     if (isTerminal) return;
     _currentFile = jpeg;
-    _permanentFiles = List.unmodifiable([jpeg, ...otherPermanentFiles]);
+    _permanentFiles = List.unmodifiable([jpeg]);
     _status = GeneratedImageStorageStatus.jpegSaved;
     notifyListeners();
   }
@@ -179,7 +174,6 @@ class GeneratedImageArtifact extends ChangeNotifier {
   void _completeWithPngFallback(GeneratedImageFile png) {
     if (isTerminal) return;
     _currentFile = png;
-    _originalPngFile = png;
     _permanentFiles = List.unmodifiable([png]);
     _status = GeneratedImageStorageStatus.pngFallbackSaved;
     notifyListeners();
@@ -212,13 +206,12 @@ class GeneratedImageStorageRequest {
 
 class GeneratedImageStoragePolicy {
   final bool jpegEnabled;
-  final bool retainOriginalPng;
   final String pngOutputDirectory;
   final String jpegOutputDirectory;
 
   /// Whether JPEG output carries the NovelAI metadata. Without it, a PNG
   /// published in place of the JPEG (transparent or not smaller) is stripped
-  /// too; a deliberately retained original PNG is left untouched.
+  /// too.
   final bool jpegIncludesMetadata;
 
   /// Whether generation requests ask NovelAI for its official WebP output.
@@ -226,7 +219,6 @@ class GeneratedImageStoragePolicy {
 
   const GeneratedImageStoragePolicy({
     required this.jpegEnabled,
-    required this.retainOriginalPng,
     required this.pngOutputDirectory,
     required this.jpegOutputDirectory,
     this.jpegIncludesMetadata = true,
@@ -236,7 +228,6 @@ class GeneratedImageStoragePolicy {
     required String outputDirectory,
     this.requestOfficialWebp = false,
   })  : jpegEnabled = false,
-        retainOriginalPng = true,
         pngOutputDirectory = outputDirectory,
         jpegOutputDirectory = '',
         jpegIncludesMetadata = true;
@@ -752,34 +743,16 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
         );
       }
       final policy = request.storagePolicy;
-      final File sourcePng;
-      final bool sourceIsPermanent;
-      if (policy.retainOriginalPng) {
-        if (policy.pngOutputDirectory.trim().isEmpty) {
-          throw ArgumentError.value(
-            policy.pngOutputDirectory,
-            'pngOutputDirectory',
-            'must be selected when retaining original PNG files',
-          );
-        }
-        sourcePng = File(
-          '${policy.pngOutputDirectory}${Platform.pathSeparator}'
-          '${request.fileName}',
-        );
-        sourceIsPermanent = true;
-      } else {
-        artifact._setStatus(GeneratedImageStorageStatus.savingSessionPng);
-        await initialize();
-        job.throwIfAbandoned();
-        final session = await _sessionDirectory;
-        if (session == null) {
-          throw StateError('Generated-image session was not initialized.');
-        }
-        sourcePng = File(
-          '${session.path}${Platform.pathSeparator}${request.fileName}',
-        );
-        sourceIsPermanent = false;
+      artifact._setStatus(GeneratedImageStorageStatus.savingSessionPng);
+      await initialize();
+      job.throwIfAbandoned();
+      final session = await _sessionDirectory;
+      if (session == null) {
+        throw StateError('Generated-image session was not initialized.');
       }
+      final sourcePng = File(
+        '${session.path}${Platform.pathSeparator}${request.fileName}',
+      );
       await _writeNewFileAtomically(
         sourcePng,
         storagePngBytes,
@@ -790,7 +763,7 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
       final sourceArtifact = GeneratedImageFile(
         path: sourcePng.absolute.path,
         mediaType: 'image/png',
-        isPermanent: sourceIsPermanent,
+        isPermanent: false,
       );
       Future<Uint8List> fallbackPngBytes() => policy.jpegIncludesMetadata
           ? Future.value(storagePngBytes)
@@ -798,7 +771,6 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
       artifact._setCurrentFile(
         sourceArtifact,
         status: GeneratedImageStorageStatus.queued,
-        permanentFiles: sourceIsPermanent ? [sourceArtifact] : const [],
       );
 
       // submit() order is the public FIFO contract. Source PNG preparation
@@ -818,10 +790,6 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
           job.throwIfAbandoned();
           if (result.status ==
               GeneratedImageJpegEncodingStatus.transparencyUnsupported) {
-            if (sourceIsPermanent) {
-              artifact._completeWithPngFallback(sourceArtifact);
-              return;
-            }
             final fallbackPng = File(
               '${policy.jpegOutputDirectory}${Platform.pathSeparator}'
               '${request.fileName}',
@@ -849,10 +817,6 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
           final jpegBytes = result.jpegBytes!;
           job.throwIfAbandoned();
           if (jpegBytes.length >= storagePngBytes.length) {
-            if (sourceIsPermanent) {
-              artifact._completeWithPngFallback(sourceArtifact);
-              return;
-            }
             final fallbackPng = File(
               '${policy.jpegOutputDirectory}${Platform.pathSeparator}'
               '${request.fileName}',
@@ -893,14 +857,11 @@ class GeneratedImageStorageService implements GeneratedImageStorage {
               'Published JPEG did not match the verified candidate.',
             );
           }
-          artifact._completeWithJpeg(
-              GeneratedImageFile(
-                path: jpegFile.absolute.path,
-                mediaType: 'image/jpeg',
-                isPermanent: true,
-              ),
-              otherPermanentFiles:
-                  sourceIsPermanent ? [sourceArtifact] : const []);
+          artifact._completeWithJpeg(GeneratedImageFile(
+            path: jpegFile.absolute.path,
+            mediaType: 'image/jpeg',
+            isPermanent: true,
+          ));
         }, cancellationToken: job.cancellationToken);
       } finally {
         enqueueTurn.release();

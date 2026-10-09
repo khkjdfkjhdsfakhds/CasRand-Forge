@@ -7,6 +7,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/core/constants/app_identity.dart';
+import 'package:nai_casrand/data/services/app_update_service.dart';
+import 'package:nai_casrand/ui/app_update/app_update_controller.dart';
+import 'package:nai_casrand/ui/app_update/app_update_dialog.dart';
 import 'package:nai_casrand/ui/config_page/widgets/config_page_view.dart';
 import 'package:nai_casrand/ui/config_page/view_models/config_page_viewmodel.dart';
 import 'package:nai_casrand/ui/core/utils/flushbar.dart';
@@ -78,7 +81,35 @@ class NavigationViewState extends State<NavigationView>
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _showWelcomeDialog();
+      _scheduleLaunchUpdateCheck();
     });
+  }
+
+  /// Checks GitHub shortly after launch (and periodically afterwards); the
+  /// prompt waits until the welcome dialog or any other dialog is closed.
+  void _scheduleLaunchUpdateCheck() {
+    if (!mounted || !GetIt.I.isRegistered<AppUpdateController>()) return;
+    final controller = GetIt.I<AppUpdateController>();
+    if (!controller.autoCheckEnabled) return;
+    controller.onBackgroundUpdateFound = _promptBackgroundUpdate;
+    Future.delayed(const Duration(seconds: 3), () async {
+      if (!mounted) return;
+      final release = await controller.checkInBackground();
+      if (release != null) _promptBackgroundUpdate(release);
+    });
+  }
+
+  /// Shows the update prompt once nothing else is covering the main page.
+  Future<void> _promptBackgroundUpdate(ReleaseInfo release) async {
+    for (var attempt = 0; attempt < 120; attempt++) {
+      if (!mounted) return;
+      if (ModalRoute.of(context)?.isCurrent ?? true) break;
+      await Future.delayed(const Duration(seconds: 5));
+    }
+    if (!mounted || !(ModalRoute.of(context)?.isCurrent ?? true)) return;
+    final controller = GetIt.I<AppUpdateController>();
+    if (controller.phase != AppUpdatePhase.available) return;
+    await showAppUpdateDialog(context, controller, automatic: true);
   }
 
   @override
@@ -244,13 +275,13 @@ class NavigationViewState extends State<NavigationView>
     );
   }
 
-  void _showWelcomeDialog() {
+  Future<void> _showWelcomeDialog() async {
     final dontShowAgainVersion =
         GetIt.I<PayloadConfig>().settings.welcomeMessageVersion;
     final packageInfo = GetIt.instance<ConfigService>().packageInfo;
     final appVersion = packageInfo.version;
     if (appVersion == dontShowAgainVersion) return;
-    showDialog(
+    await showDialog(
         context: context,
         builder: (dialogContext) {
           return AlertDialog(

@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:adaptive_theme/adaptive_theme.dart';
@@ -431,62 +430,6 @@ void main() {
         .setImageSaveFormat(GeneratedImageSaveFormat.jpegWithMetadata);
     expect(unwritable.settings.imageSaveFormat, GeneratedImageSaveFormat.png);
     expect(unwritable.settings.outputFolderPath, isEmpty);
-  });
-
-  test('retaining PNG requires and persists a writable output directory',
-      () async {
-    final viewmodel = SettingsPageViewmodel(
-      pickDirectory: () async => '/tmp/casrand-output',
-      validateDirectory: (path) async => path == '/tmp/casrand-output',
-    );
-    viewmodel.settings.imageSaveFormat =
-        GeneratedImageSaveFormat.jpegWithMetadata;
-
-    await viewmodel.setRetainOriginalPng(true);
-
-    expect(viewmodel.settings.retainOriginalPng, isTrue);
-    expect(viewmodel.settings.outputFolderPath, '/tmp/casrand-output');
-    final savedSettings = configService.savedConfigs[configService.currentUuid]
-        ?['settings'] as Map<String, dynamic>?;
-    expect(savedSettings?['retain_original_png'], isTrue);
-    expect(savedSettings?['output_folder'], '/tmp/casrand-output');
-
-    final cancelled = SettingsPageViewmodel(
-      pickDirectory: () async => null,
-      validateDirectory: (_) async => false,
-    );
-    cancelled.settings
-      ..imageSaveFormat = GeneratedImageSaveFormat.jpegWithMetadata
-      ..outputFolderPath = ''
-      ..retainOriginalPng = false;
-    await cancelled.setRetainOriginalPng(true);
-    expect(cancelled.settings.retainOriginalPng, isFalse);
-  });
-
-  test('latest retain-PNG toggle wins while directory picking is pending',
-      () async {
-    final picker = Completer<String?>();
-    final viewmodel = SettingsPageViewmodel(
-      pickDirectory: () => picker.future,
-      validateDirectory: (_) async => true,
-    );
-    viewmodel.settings
-      ..imageSaveFormat = GeneratedImageSaveFormat.jpegWithMetadata
-      ..outputFolderPath = ''
-      ..retainOriginalPng = false;
-
-    final enabling = viewmodel.setRetainOriginalPng(true);
-    await Future<void>.delayed(Duration.zero);
-    final disabling = viewmodel.setRetainOriginalPng(false);
-    picker.complete('/tmp/casrand-output');
-    await Future.wait([enabling, disabling]);
-
-    expect(viewmodel.settings.retainOriginalPng, isFalse);
-    expect(
-      configService.savedConfigs[configService.currentUuid]?['settings']
-          ?['retain_original_png'],
-      isFalse,
-    );
   });
 
   testWidgets('Android offers only the PNG and official WebP formats',

@@ -1,11 +1,34 @@
 package io.github.khkjdfkjhdsfakhds.casrandforge.beta
 
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
+import java.io.File
 
 class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, updateChannel)
+            .setMethodCallHandler { call, result ->
+                try {
+                    when (call.method) {
+                        "installApk" -> result.success(
+                            installApk(call.argument<String>("path") ?: "")
+                        )
+                        "openInstallPermissionSettings" -> {
+                            openInstallPermissionSettings()
+                            result.success(null)
+                        }
+                        else -> result.notImplemented()
+                    }
+                } catch (error: Throwable) {
+                    result.error("update_failed", error.message, null)
+                }
+            }
         registerPlugin("device_info_plus") {
             flutterEngine.plugins.add(
                 dev.fluttercommunity.plus.device_info.DeviceInfoPlusPlugin()
@@ -52,6 +75,36 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun canInstallPackages(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
+            packageManager.canRequestPackageInstalls()
+
+    private fun openInstallPermissionSettings() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        startActivity(
+            Intent(
+                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                Uri.parse("package:$packageName")
+            )
+        )
+    }
+
+    private fun installApk(path: String): String {
+        val file = File(path)
+        if (!file.isFile) throw IllegalArgumentException("APK not found")
+        if (!canInstallPackages()) {
+            openInstallPermissionSettings()
+            return "permission_required"
+        }
+        val uri = UpdateApkProvider.uriFor("$packageName.updates", file)
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, UpdateApkProvider.APK_MIME)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        startActivity(intent)
+        return "started"
+    }
+
     private fun registerPlugin(name: String, block: () -> Unit) {
         try {
             block()
@@ -62,5 +115,7 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         private const val tag = "CasRandPluginRegistrant"
+        private const val updateChannel =
+            "io.github.khkjdfkjhdsfakhds.casrandforge/app_update"
     }
 }

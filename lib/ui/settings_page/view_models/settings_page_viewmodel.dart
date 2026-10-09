@@ -31,7 +31,6 @@ class SettingsPageViewmodel extends ChangeNotifier {
   final Future<SelectedSettingsFile?> Function() _pickSettingsFile;
   final AccountService _accountService;
   int _saveFormatRevision = 0;
-  int _retainOriginalPngToggleRevision = 0;
   Future<void> _metadataSettingsSave = Future<void>.value();
   Object? settingsPersistenceError;
 
@@ -241,33 +240,6 @@ class SettingsPageViewmodel extends ChangeNotifier {
     payloadConfig.settings
       ..outputFolderPath = directory
       ..imageSaveFormat = format;
-    await configService.saveConfig(payloadConfig.toJson());
-    notifyListeners();
-  }
-
-  Future<void> setRetainOriginalPng(bool? value) async {
-    if (value == null) return;
-    final revision = ++_retainOriginalPngToggleRevision;
-    if (!value) {
-      payloadConfig.settings.retainOriginalPng = false;
-      await configService.saveConfig(payloadConfig.toJson());
-      notifyListeners();
-      return;
-    }
-    var directory = payloadConfig.settings.outputFolderPath.trim();
-    var valid = directory.isNotEmpty && await _validateDirectory(directory);
-    if (revision != _retainOriginalPngToggleRevision) return;
-    if (!valid) {
-      directory = (await _pickDirectory())?.trim() ?? '';
-      if (revision != _retainOriginalPngToggleRevision || directory.isEmpty) {
-        return;
-      }
-      valid = await _validateDirectory(directory);
-      if (!valid || revision != _retainOriginalPngToggleRevision) return;
-    }
-    payloadConfig.settings
-      ..outputFolderPath = directory
-      ..retainOriginalPng = true;
     await configService.saveConfig(payloadConfig.toJson());
     notifyListeners();
   }

@@ -205,17 +205,15 @@ GeneratedImageJpegEncodingResult _jpegResult(
 
 GeneratedImageStorageRequest _jpegRequest(
   String id,
-  String outputDirectory, {
-  bool retainOriginalPng = false,
-}) {
+  String outputDirectory,
+) {
   return GeneratedImageStorageRequest(
     logicalTaskId: id,
     pngBytes: _opaquePng(),
     fileName: '$id.png',
     storagePolicy: GeneratedImageStoragePolicy(
       jpegEnabled: true,
-      retainOriginalPng: retainOriginalPng,
-      pngOutputDirectory: retainOriginalPng ? outputDirectory : '',
+      pngOutputDirectory: '',
       jpegOutputDirectory: outputDirectory,
     ),
   );
@@ -297,7 +295,6 @@ void main() {
       fileName: 'no-metadata.png',
       storagePolicy: GeneratedImageStoragePolicy(
         jpegEnabled: true,
-        retainOriginalPng: false,
         pngOutputDirectory: '',
         jpegOutputDirectory: output.path,
         jpegIncludesMetadata: false,
@@ -345,7 +342,6 @@ void main() {
       fileName: 'no-metadata-error.png',
       storagePolicy: GeneratedImageStoragePolicy(
         jpegEnabled: true,
-        retainOriginalPng: false,
         pngOutputDirectory: '',
         jpegOutputDirectory: output.path,
         jpegIncludesMetadata: false,
@@ -387,7 +383,6 @@ void main() {
       // A JPEG policy never receives WebP in practice; keep the paid bytes.
       GeneratedImageStoragePolicy(
         jpegEnabled: true,
-        retainOriginalPng: false,
         pngOutputDirectory: output.path,
         jpegOutputDirectory: output.path,
       ),
@@ -405,7 +400,6 @@ void main() {
       expect(artifact.status, GeneratedImageStorageStatus.saved);
       expect(artifact.currentFile?.path, file.absolute.path);
       expect(artifact.currentFile?.mediaType, 'image/webp');
-      expect(artifact.originalPngFile, isNull);
       expect(await file.readAsBytes(), webp);
       expect(await File(_pathIn(output, '$name.png')).exists(), isFalse);
     }
@@ -514,7 +508,6 @@ void main() {
       fileName: 'result.png',
       storagePolicy: GeneratedImageStoragePolicy(
         jpegEnabled: true,
-        retainOriginalPng: false,
         pngOutputDirectory: '',
         jpegOutputDirectory: output.path,
       ),
@@ -573,7 +566,6 @@ void main() {
       fileName: 'larger.png',
       storagePolicy: GeneratedImageStoragePolicy(
         jpegEnabled: true,
-        retainOriginalPng: false,
         pngOutputDirectory: '',
         jpegOutputDirectory: output.path,
       ),
@@ -617,7 +609,6 @@ void main() {
       fileName: 'same.png',
       storagePolicy: GeneratedImageStoragePolicy(
         jpegEnabled: true,
-        retainOriginalPng: false,
         pngOutputDirectory: '',
         jpegOutputDirectory: output.path,
       ),
@@ -692,7 +683,6 @@ void main() {
           fileName: 'real.png',
           storagePolicy: GeneratedImageStoragePolicy(
             jpegEnabled: true,
-            retainOriginalPng: false,
             pngOutputDirectory: '',
             jpegOutputDirectory: output.path,
           ),
@@ -728,7 +718,6 @@ void main() {
           fileName: 'metadata.png',
           storagePolicy: GeneratedImageStoragePolicy(
             jpegEnabled: true,
-            retainOriginalPng: false,
             pngOutputDirectory: '',
             jpegOutputDirectory: output.path,
           ),
@@ -763,7 +752,6 @@ void main() {
           fileName: 'itxt-metadata.png',
           storagePolicy: GeneratedImageStoragePolicy(
             jpegEnabled: true,
-            retainOriginalPng: false,
             pngOutputDirectory: '',
             jpegOutputDirectory: output.path,
           ),
@@ -801,7 +789,6 @@ void main() {
           fileName: fileName,
           storagePolicy: GeneratedImageStoragePolicy(
             jpegEnabled: true,
-            retainOriginalPng: false,
             pngOutputDirectory: '',
             jpegOutputDirectory: output.path,
           ),
@@ -835,7 +822,6 @@ void main() {
         fileName: '$id.png',
         storagePolicy: GeneratedImageStoragePolicy(
           jpegEnabled: true,
-          retainOriginalPng: false,
           pngOutputDirectory: '',
           jpegOutputDirectory: output.path,
         ),
@@ -861,10 +847,9 @@ void main() {
     expect(failed.artifact.currentFile?.mediaType, 'image/png');
   });
 
-  test('retaining PNG publishes both formats with one stem in the same folder',
-      () async {
+  test('JPEG uses a session PNG and publishes only the JPEG', () async {
     final session = await Directory.systemTemp.createTemp('casrand-session-');
-    final output = await Directory.systemTemp.createTemp('casrand-both-');
+    final output = await Directory.systemTemp.createTemp('casrand-jpeg-');
     addTearDown(() async {
       if (await session.exists()) await session.delete(recursive: true);
       if (await output.exists()) await output.delete(recursive: true);
@@ -878,12 +863,11 @@ void main() {
     );
 
     final submission = storage.submit(GeneratedImageStorageRequest(
-      logicalTaskId: 'retain:both',
+      logicalTaskId: 'jpeg:session-source',
       pngBytes: source,
       fileName: 'paired.png',
       storagePolicy: GeneratedImageStoragePolicy(
         jpegEnabled: true,
-        retainOriginalPng: true,
         pngOutputDirectory: output.path,
         jpegOutputDirectory: output.path,
       ),
@@ -892,26 +876,24 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 10));
     }
 
-    final permanentPng = File(_pathIn(output, 'paired.png'));
-    expect(submission.artifact.currentFile?.path, permanentPng.absolute.path);
-    expect(submission.artifact.currentFile?.isPermanent, isTrue);
-    expect(
-        submission.artifact.originalPngFile?.path, permanentPng.absolute.path);
-    expect(await permanentPng.readAsBytes(), source);
+    final sessionPng = File(_pathIn(session, 'paired.png'));
+    expect(submission.artifact.currentFile?.path, sessionPng.absolute.path);
+    expect(submission.artifact.currentFile?.isPermanent, isFalse);
+    expect(await sessionPng.readAsBytes(), source);
 
     encoder.calls.single.complete(_jpegResult(Uint8List(64)));
     final artifact = await submission.completed;
     final permanentJpeg = File(_pathIn(output, 'paired.jpg'));
 
     expect(artifact.currentFile?.path, permanentJpeg.absolute.path);
-    expect(artifact.originalPngFile?.path, permanentPng.absolute.path);
     expect(
       artifact.permanentFiles.map((file) => file.mediaType),
-      ['image/jpeg', 'image/png'],
+      ['image/jpeg'],
     );
-    expect(await permanentPng.exists(), isTrue);
     expect(await permanentJpeg.exists(), isTrue);
-    expect(session.listSync().whereType<File>(), isEmpty);
+    expect(await File(_pathIn(session, 'paired.png')).exists(), isTrue);
+    await storage.close();
+    expect(await File(_pathIn(session, 'paired.png')).exists(), isFalse);
   });
 
   test('a truly transparent image publishes an exact permanent PNG fallback',
@@ -935,7 +917,6 @@ void main() {
       fileName: 'transparent.png',
       storagePolicy: GeneratedImageStoragePolicy(
         jpegEnabled: true,
-        retainOriginalPng: false,
         pngOutputDirectory: '',
         jpegOutputDirectory: output.path,
       ),
@@ -956,7 +937,6 @@ void main() {
     final fallback = File(_pathIn(output, 'transparent.png'));
     expect(artifact.status, GeneratedImageStorageStatus.pngFallbackSaved);
     expect(artifact.currentFile?.path, fallback.absolute.path);
-    expect(artifact.originalPngFile?.path, fallback.absolute.path);
     expect(artifact.permanentFiles, [artifact.currentFile]);
     expect(await fallback.readAsBytes(), source);
     expect(await File(_pathIn(output, 'transparent.jpg')).exists(), isFalse);
@@ -985,7 +965,6 @@ void main() {
         fileName: 'collision.png',
         storagePolicy: GeneratedImageStoragePolicy(
           jpegEnabled: true,
-          retainOriginalPng: false,
           pngOutputDirectory: '',
           jpegOutputDirectory: output.path,
         ),

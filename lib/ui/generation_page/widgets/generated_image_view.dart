@@ -13,14 +13,12 @@ import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 
 enum GeneratedImageAction {
   copyOriginal,
-  copyRetainedPng,
   showInFinder,
 }
 
 List<PopupMenuEntry<GeneratedImageAction>> buildGeneratedImageMenuItems({
   required String copyOriginalLabel,
   required String showInFinderLabel,
-  String? copyRetainedPngLabel,
   bool showFinder = true,
 }) {
   return [
@@ -32,15 +30,6 @@ List<PopupMenuEntry<GeneratedImageAction>> buildGeneratedImageMenuItems({
         title: Text(copyOriginalLabel),
       ),
     ),
-    if (copyRetainedPngLabel != null)
-      PopupMenuItem(
-        value: GeneratedImageAction.copyRetainedPng,
-        child: ListTile(
-          contentPadding: EdgeInsets.zero,
-          leading: const Icon(Icons.image_outlined),
-          title: Text(copyRetainedPngLabel),
-        ),
-      ),
     if (showFinder)
       PopupMenuItem(
         value: GeneratedImageAction.showInFinder,
@@ -245,7 +234,6 @@ class GeneratedImageView extends StatelessWidget {
         context,
         details.globalPosition,
         imageFile,
-        artifact.originalPngFile,
       ),
       child: child,
     );
@@ -285,7 +273,6 @@ class GeneratedImageView extends StatelessWidget {
     BuildContext context,
     Offset globalPosition,
     GeneratedImageFile imageFile,
-    GeneratedImageFile? originalPngFile,
   ) async {
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     final position = overlay.globalToLocal(globalPosition);
@@ -300,10 +287,6 @@ class GeneratedImageView extends StatelessWidget {
       items: buildGeneratedImageMenuItems(
         copyOriginalLabel: context.tr('copy_original_image'),
         showInFinderLabel: context.tr('show_in_finder'),
-        copyRetainedPngLabel: originalPngFile?.isPermanent == true &&
-                originalPngFile?.path != imageFile.path
-            ? context.tr('copy_original_png')
-            : null,
         showFinder: Platform.isMacOS,
       ),
     );
@@ -312,10 +295,6 @@ class GeneratedImageView extends StatelessWidget {
     switch (action) {
       case GeneratedImageAction.copyOriginal:
         await _copyOriginalImage(context, imageFile);
-      case GeneratedImageAction.copyRetainedPng:
-        if (originalPngFile != null) {
-          await _copyOriginalImage(context, originalPngFile);
-        }
       case GeneratedImageAction.showInFinder:
         await _showInFinder(context, imageFile);
     }

@@ -96,9 +96,6 @@ class Settings {
   /// fall back to PNG elsewhere.
   GeneratedImageSaveFormat imageSaveFormat;
 
-  /// Keep a permanent PNG next to the JPEG when a JPEG format is selected.
-  bool retainOriginalPng;
-
   // Proxy settings
   String proxy;
 
@@ -125,7 +122,6 @@ class Settings {
     required this.apiKey,
     required this.outputFolderPath,
     this.imageSaveFormat = GeneratedImageSaveFormat.png,
-    this.retainOriginalPng = false,
     required this.proxy,
     this.apiBaseUrl = officialApiBaseUrl,
     required this.debugApiEnabled,
@@ -402,7 +398,6 @@ class Settings {
       subscriptionTier: json['subscription_tier'] ?? 0,
       outputFolderPath: json['output_folder'] ?? '',
       imageSaveFormat: GeneratedImageSaveFormat.fromJson(json),
-      retainOriginalPng: json['retain_original_png'] ?? false,
       proxy: json['proxy'] ?? '',
       apiBaseUrl: json['api_base_url'] ?? officialApiBaseUrl,
       debugApiEnabled: false,
@@ -433,7 +428,6 @@ class Settings {
       'subscription_tier': subscriptionTier,
       'output_folder': outputFolderPath,
       'image_save_format': imageSaveFormat.jsonValue,
-      'retain_original_png': retainOriginalPng,
       'proxy': proxy,
       'api_base_url': normalizedApiBaseUrl,
       'file_name_prefix_key': fileNamePrefixKey,

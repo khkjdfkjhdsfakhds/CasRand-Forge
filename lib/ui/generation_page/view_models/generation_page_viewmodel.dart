@@ -116,7 +116,6 @@ GeneratedImageStoragePolicy _storagePolicySnapshot(Settings settings) {
   }
   return GeneratedImageStoragePolicy(
     jpegEnabled: true,
-    retainOriginalPng: settings.retainOriginalPng,
     pngOutputDirectory: outputDirectory,
     jpegOutputDirectory: outputDirectory,
     jpegIncludesMetadata: format == GeneratedImageSaveFormat.jpegWithMetadata,

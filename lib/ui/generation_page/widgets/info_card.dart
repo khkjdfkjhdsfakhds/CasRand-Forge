@@ -341,8 +341,7 @@ Widget buildInfoCardImage(
   BoxFit fit = BoxFit.contain,
   FilterQuality filterQuality = FilterQuality.medium,
 }) {
-  final filePath =
-      content.currentImageFile?.path ?? content.originalImageFile?.path;
+  final filePath = content.currentImageFile?.path;
   if (filePath != null && filePath.isNotEmpty) {
     return Image.file(
       File(filePath),
