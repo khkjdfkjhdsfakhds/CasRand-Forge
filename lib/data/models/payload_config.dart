@@ -667,6 +667,10 @@ class PayloadConfig extends ChangeNotifier {
     i2iConfig.setUseRandomSeed(jsonData['i2i_use_random_seed'] == true);
   }
 
+  /// Refreshes every listening view after an external controller (Agent
+  /// control) replaced or edited the configuration outside a page viewmodel.
+  void notifyExternalChange() => notifyListeners();
+
   /// Metadata always targets the fixed profile. It must never alter the
   /// random profile's prompts, negative cascade, seed mode, or other params.
   int loadParamJson(Map<String, dynamic> json) {
