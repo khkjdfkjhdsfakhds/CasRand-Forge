@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:easy_localization/easy_localization.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
@@ -13,6 +15,7 @@ import 'package:nai_casrand/agent_control/agent_generation_port.dart';
 import 'package:nai_casrand/agent_control/json_edit.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/services/config_service.dart';
+import 'package:nai_casrand/ui/agent_control/agent_control_settings_tiles.dart';
 
 class _FakeGenerationPort implements AgentGenerationPort {
   bool active = false;
@@ -333,7 +336,19 @@ void main() {
       final identity = Object();
       port.onStart = () {
         Timer(const Duration(milliseconds: 20), () {
-          port.finishWith(_result(identity, bytes: _png(64, 32)));
+          port.finishWith(AgentResultView(
+            identity: identity,
+            status: 'succeeded',
+            title: 'result.png',
+            info: '',
+            imageBytes: _png(64, 32),
+            currentFilePath: '/tmp/session.png',
+            storageStatus: 'encoding',
+          ));
+        });
+        // JPG conversion finishes after the batch itself has ended.
+        Timer(const Duration(milliseconds: 80), () {
+          port.views[0] = _result(identity, bytes: _png(64, 32));
         });
       };
       final result = await service.call('start_generation', {
@@ -603,6 +618,83 @@ void main() {
       await directory.delete(recursive: true);
     });
   });
+
+  group('AgentControlSettingsTiles', () {
+    late Map<String, dynamic> translations;
+
+    setUpAll(() async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+        const MethodChannel('plugins.flutter.io/shared_preferences'),
+        (call) async => call.method == 'getAll' ? <String, Object>{} : true,
+      );
+      await EasyLocalization.ensureInitialized();
+      translations =
+          json.decode(await rootBundle.loadString('assets/l10n/en.json'))
+              as Map<String, dynamic>;
+    });
+
+    testWidgets('switch starts the server and reveals connection tiles',
+        (tester) async {
+      final directory = await tester.runAsync(
+        () => Directory.systemTemp.createTemp('casrand-agent-tiles-'),
+      );
+      final controller = AgentControlController(
+        preferences: _MemoryPreferences(),
+        appVersion: '1.0.0',
+        preferredPort: 0,
+        discoveryDirectory: () async => directory!,
+        service: (_) => AgentControlService(
+          payloadConfig: () => throw UnimplementedError(),
+          configService: () => throw UnimplementedError(),
+          generation: () => _FakeGenerationPort(),
+        ),
+      );
+      await tester.pumpWidget(EasyLocalization(
+        supportedLocales: const [Locale('en')],
+        path: 'test',
+        assetLoader: _MapAssetLoader(translations),
+        fallbackLocale: const Locale('en'),
+        startLocale: const Locale('en'),
+        saveLocale: false,
+        child: Builder(
+          builder: (context) => MaterialApp(
+            localizationsDelegates: context.localizationDelegates,
+            supportedLocales: context.supportedLocales,
+            locale: context.locale,
+            home: Scaffold(
+              body: AgentControlSettingsTiles(controller: controller),
+            ),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      expect(find.text('Allow agent control'), findsOneWidget);
+      expect(find.byKey(const Key('agent-control-copy-command')), findsNothing);
+
+      await tester.runAsync(() => controller.setEnabled(true));
+      await tester.pumpAndSettle();
+      expect(
+          find.byKey(const Key('agent-control-copy-command')), findsOneWidget);
+      expect(find.textContaining(controller.mcpUrl!), findsOneWidget);
+
+      await tester.runAsync(() => controller.setEnabled(false));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('agent-control-copy-command')), findsNothing);
+      controller.dispose();
+      await tester.runAsync(() => directory!.delete(recursive: true));
+    });
+  });
+}
+
+class _MapAssetLoader extends AssetLoader {
+  const _MapAssetLoader(this.translations);
+
+  final Map<String, dynamic> translations;
+
+  @override
+  Future<Map<String, dynamic>?> load(String path, Locale locale) async =>
+      translations;
 }
 
 class _MemoryPreferences implements AgentControlPreferences {

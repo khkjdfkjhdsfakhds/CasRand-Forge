@@ -407,16 +407,26 @@ class AgentControlService {
     );
   }
 
+  static const _pendingStorageStatuses = <String>{
+    'queued',
+    'savingSessionPng',
+    'encoding',
+    'publishing',
+    'saving',
+  };
+
   Future<void> _waitUntilIdle(Duration timeout) async {
     final deadline = DateTime.now().add(timeout);
     while (_generatorOccupied) {
       if (DateTime.now().isAfter(deadline)) return;
       await Future<void>.delayed(_pollInterval);
     }
-    // Let the last result card settle its storage state.
-    final settleDeadline = DateTime.now().add(const Duration(seconds: 10));
+    // Let the run's result cards finish saving (e.g. JPG conversion) so the
+    // returned file paths are the final ones.
+    final settleDeadline = DateTime.now().add(const Duration(seconds: 30));
     while (_runResults().any((view) =>
         view.status == 'running' ||
+        _pendingStorageStatuses.contains(view.storageStatus) ||
         (view.imageBytes != null &&
             view.currentFilePath == null &&
             view.storageError == null))) {
