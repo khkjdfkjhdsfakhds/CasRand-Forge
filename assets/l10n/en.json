@@ -415,7 +415,7 @@
     "api_token_free_blocked_error": "This account is configured not to use the free allowance.",
     "api_token_concurrency": "Concurrency",
     "takoma_feature_unavailable": "Unavailable with Takoma API",
-    "takoma_unsupported_feature_error": "This account uses the Takoma API, which does not support Precise Reference or mask inpainting.",
+    "takoma_unsupported_feature_error": "This account uses the Takoma API, which does not support Precise Reference.",
     "generation_no_eligible_points_accounts": "Cannot start generation: No enabled accounts are permitted to spend Anlas points.",
     "generation_no_eligible_free_accounts": "Cannot start generation: No enabled accounts are permitted to use the free allowance.",
     "anlas_balance": "{balance} Anlas left",

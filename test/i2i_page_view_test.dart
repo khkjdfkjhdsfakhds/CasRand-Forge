@@ -196,6 +196,25 @@ void main() {
     expect(find.text('Img2Img Parameters'), findsOneWidget);
   });
 
+  testWidgets('Takoma API keeps the inpaint entry available', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    GetIt.I<PayloadConfig>().settings.apiBaseUrl = 'https://api.takoma.app';
+    expect(GetIt.I<PayloadConfig>().settings.isTakomaApi, isTrue);
+
+    await tester.pumpWidget(
+      localizedApp(I2iPageView(viewmodel: I2iPageViewmodel())),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<FilledButton>(find.byKey(const Key('inpaint-edit-mask')))
+          .onPressed,
+      isNotNull,
+    );
+  });
+
   testWidgets('I2I drop read failure is visible and preserves its source', (
     tester,
   ) async {

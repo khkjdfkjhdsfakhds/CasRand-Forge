@@ -423,6 +423,34 @@ void main() {
     expect(cached!.plans.single.imageB64, batch.plans.single.imageB64);
   });
 
+  // Dragging the strength slider re-estimates the cost on every tick. Before
+  // the first preparation finished, each tick started another background
+  // preparation and the copies of the source image stalled the UI.
+  for (final inpaint in [false, true]) {
+    test('concurrent batch requests share one preparation (inpaint $inpaint)',
+        () async {
+      final config = I2IConfig()..setImage(quadrantPng(1600, 2400));
+      if (inpaint) {
+        config
+            .setMask(maskPngWithWhiteRect(1600, 2400, 700, 1100, 120, 160), []);
+      }
+      final useCase = PrepareI2iRequestUseCase(config: config);
+
+      final pending = [
+        for (var i = 0; i < 5; i++)
+          useCase.planBatch(targetWidth: 832, targetHeight: 1216),
+      ];
+      config.setStrength(0.42);
+      final batches = await Future.wait(pending);
+
+      final first = batches.first!.plans.first.imageB64;
+      for (final batch in batches) {
+        expect(identical(batch!.plans.first.imageB64, first), isTrue);
+      }
+      expect(batches.last!.plans.first.strength, 0.42);
+    });
+  }
+
   test('plain img2img reuses normalized pixels for light parameter changes',
       () async {
     final config = I2IConfig()..setImage(quadrantPng(500, 300));

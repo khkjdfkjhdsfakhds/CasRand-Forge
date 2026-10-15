@@ -459,6 +459,11 @@ class PrepareI2iRequestUseCase {
 
   static final List<_PlanCacheEntry> _planCache = [];
   static final List<_BatchCacheEntry> _batchCache = [];
+
+  /// Batches being prepared right now, keyed like [_batchCache]. Callers that
+  /// ask for the same batch meanwhile wait for it instead of starting another
+  /// background preparation with its own copy of the source image.
+  static final Map<String, Future<I2iRequestBatch?>> _batchInFlight = {};
   static const int _planCacheLimit = 4;
 
   static img.Image? _decodedBase;
@@ -471,6 +476,7 @@ class PrepareI2iRequestUseCase {
   static void clearCache() {
     _planCache.clear();
     _batchCache.clear();
+    _batchInFlight.clear();
     _decodedBase = null;
     _decodedBaseConfigId = -1;
     _decodedBaseRevision = -1;
@@ -553,24 +559,32 @@ class PrepareI2iRequestUseCase {
         }
       }
 
-      late final I2iRequestBatch batch;
-      if (!config.hasInpaintSelection) {
-        final plan = await call(
-          targetWidth: targetWidth,
-          targetHeight: targetHeight,
-        );
-        if (plan == null) return null;
-        batch = I2iRequestBatch(
-          plans: [plan],
-          serial: true,
-          summary: plan.summary,
-        );
-      } else {
-        batch = await _prepareInpaintBatch(
-          targetWidth: targetWidth,
-          targetHeight: targetHeight,
-        );
+      final inFlightKey = '$configId|$revision|$targetWidth|$targetHeight|'
+          '$transparentBackground';
+      final pending = _batchInFlight[inFlightKey];
+      if (pending != null) {
+        // The owner caches the result before this waiter resumes; a failure
+        // is retried by this caller and surfaces from its own preparation.
+        try {
+          await pending;
+        } catch (_) {}
+        continue;
       }
+
+      final preparation = _prepareBatch(
+        targetWidth: targetWidth,
+        targetHeight: targetHeight,
+      );
+      _batchInFlight[inFlightKey] = preparation;
+      final I2iRequestBatch? batch;
+      try {
+        batch = await preparation;
+      } finally {
+        if (identical(_batchInFlight[inFlightKey], preparation)) {
+          _batchInFlight.remove(inFlightKey);
+        }
+      }
+      if (batch == null) return null;
       if (identityHashCode(config) != configId ||
           config.planRevision != revision) {
         continue;
@@ -589,6 +603,28 @@ class PrepareI2iRequestUseCase {
       return _withCurrentParameters(batch);
     }
     return null;
+  }
+
+  Future<I2iRequestBatch?> _prepareBatch({
+    required int targetWidth,
+    required int targetHeight,
+  }) async {
+    if (config.hasInpaintSelection) {
+      return _prepareInpaintBatch(
+        targetWidth: targetWidth,
+        targetHeight: targetHeight,
+      );
+    }
+    final plan = await call(
+      targetWidth: targetWidth,
+      targetHeight: targetHeight,
+    );
+    if (plan == null) return null;
+    return I2iRequestBatch(
+      plans: [plan],
+      serial: true,
+      summary: plan.summary,
+    );
   }
 
   /// Synchronous seam for tests that need to exercise generation command

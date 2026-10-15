@@ -414,7 +414,7 @@
     "api_token_free_blocked_error": "该账号已设置禁止使用免费额度，生成已拦截。",
     "api_token_concurrency": "并发数",
     "takoma_feature_unavailable": "Takoma API 不支持该功能",
-    "takoma_unsupported_feature_error": "该账号使用 Takoma API，不支持 Precise Reference 与蒙版局部重绘。",
+    "takoma_unsupported_feature_error": "该账号使用 Takoma API，不支持 Precise Reference。",
     "generation_no_eligible_points_accounts": "无法开始生成：当前没有允许消耗点数的可用账号。",
     "generation_no_eligible_free_accounts": "无法开始生成：当前没有允许使用免费额度的可用账号。",
     "anlas_balance": "剩余 {balance} Anlas",

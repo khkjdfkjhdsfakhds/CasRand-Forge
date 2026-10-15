@@ -456,11 +456,10 @@ class GenerationPageViewmodel extends ChangeNotifier {
   }
 
   /// True when the payload needs a relay feature Takoma does not expose:
-  /// Precise Reference images or a mask-inpainting pass.
+  /// Precise Reference images. Mask inpainting travels as a multipart part.
   bool _takomaUnsupportedFeature(PayloadGenerationResult payloadResult) {
     final parameters = payloadResult.payload['parameters'];
     if (parameters is! Map<String, dynamic>) return false;
-    if (parameters['mask'] is String) return true;
     final preciseReferences = parameters['director_reference_images'];
     return preciseReferences is List && preciseReferences.isNotEmpty;
   }
@@ -1447,8 +1446,8 @@ class GenerationPageViewmodel extends ChangeNotifier {
         }
         if (toolSnapshot == null) _applyCurrentVibesToPayload(payloadResult);
 
-        // Takoma's relay exposes neither director reference encoding nor mask
-        // inpainting, so stop before paying for a request its upstream rejects.
+        // Takoma's relay does not expose director reference encoding, so stop
+        // before paying for a request its upstream rejects.
         if (settings.isTakomaToken(token) &&
             _takomaUnsupportedFeature(payloadResult)) {
           throw NovelAiApiException(

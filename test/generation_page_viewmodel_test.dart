@@ -3880,7 +3880,7 @@ void main() {
       expect(vm.commandList.single.value.imageBytes, isNotNull);
     });
 
-    testWidgets('Takoma accounts refuse mask inpainting before sending', (
+    testWidgets('Takoma accounts send mask inpainting as multipart', (
       tester,
     ) async {
       final api =
@@ -3926,16 +3926,16 @@ void main() {
       vm.startGeneration();
       await waitForCurrentCommand(tester, vm);
 
-      expect(api.calls, 0);
-      expect(vm.commandList, hasLength(1));
-      expect(vm.commandList.single.value.imageBytes, isNull);
-      expect(
-        vm.commandList.single.value.info,
-        anyOf(
-          contains('Takoma API'),
-          contains('takoma_unsupported_feature_error'),
-        ),
-      );
+      // Verified against the live relay: infill with a mask part returns 200.
+      expect(api.calls, 1);
+      final request = api.requests.single;
+      expect(request.endpoint, startsWith('https://api.takoma.app'));
+      expect(request.payload['action'], 'infill');
+      final parameters = request.payload['parameters'] as Map<String, dynamic>;
+      expect(parameters['image'], 'image');
+      expect(parameters['mask'], 'mask');
+      expect(request.multipart!.parts.map((part) => part.field),
+          containsAll(<String>['image', 'mask', 'request']));
       vm.dispose();
       await tester.pump(const Duration(seconds: 1));
     });
