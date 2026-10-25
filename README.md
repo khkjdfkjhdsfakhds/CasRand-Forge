@@ -230,13 +230,3 @@ CasRand Forge 是一个按照指定模式生成随机提示词（prompt），并
 ## 开源许可与致谢
 
 NAI CasRand Forge 继承原项目的 [GNU GPL-3.0](LICENSE) 许可。原项目由 [Exception0x0194](https://github.com/Exception0x0194) 开发；本 Fork 保留原许可证、版权与权利说明。NovelAI 是 Anlatan 的商标，本项目与 NovelAI/Anlatan 没有官方隶属关系。
-
-## 支持作者
-
-☕ 请作者喝杯咖。。。<br>
-不，还是接济点 token 钱吧，实在太烧了。。
-
-<p align="center">
-  <img src="assets/donation/wechat-pay.png" alt="微信支付收款码" width="320">
-  <img src="assets/donation/alipay.jpg" alt="支付宝收款码" width="320">
-</p>
