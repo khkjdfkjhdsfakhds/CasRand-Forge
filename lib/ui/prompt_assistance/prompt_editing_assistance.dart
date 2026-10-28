@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -52,8 +53,8 @@ class PromptTagCandidate {
 
   String get normalizedTag => _normalizedTag ??= normalizePromptTag(tag);
 
-  List<String> get normalizedAliases => _normalizedAliases ??=
-      aliases.map(normalizePromptTag).toList(growable: false);
+  List<String> get normalizedAliases =>
+      _normalizedAliases ??= _normalizeAliases(aliases);
 
   @override
   bool operator ==(Object other) {
@@ -227,11 +228,11 @@ class PromptEditingAssistance {
 class DanbooruTagIndex {
   final List<PromptTagCandidate> entries;
 
-  late final List<_PromptPrefixRecord> _canonicalPrefixes;
-  late final List<_PromptPrefixRecord> _aliasPrefixes;
+  late final _PromptPrefixTable _canonicalPrefixes;
+  late final _PromptPrefixTable _aliasPrefixes;
   late final Map<String, List<int>> _substringBuckets;
-  late final List<_PromptPrefixRecord> _translationPrefixes;
-  late final List<_PromptPrefixRecord> _pinyinPrefixes;
+  late final _PromptPrefixTable _translationPrefixes;
+  late final _PromptPrefixTable _pinyinPrefixes;
   bool _indexesBuilt = false;
 
   DanbooruTagIndex(Iterable<PromptTagCandidate> source)
@@ -303,26 +304,18 @@ class DanbooruTagIndex {
         }
       }
     }
-    canonicalPrefixes.sort(
-      (a, b) => _comparePrefixRecords(a, b, entries),
-    );
-    aliasPrefixes.sort(
-      (a, b) => _comparePrefixRecords(a, b, entries),
-    );
-    translationPrefixes.sort(
-      (a, b) => _comparePrefixRecords(a, b, entries),
-    );
-    pinyinPrefixes.sort(
-      (a, b) => _comparePrefixRecords(a, b, entries),
-    );
-    for (final bucket in substringBuckets.values) {
-      bucket.sort((a, b) => _compareEntryIndexes(a, b, entries));
-    }
-    _canonicalPrefixes = List.unmodifiable(canonicalPrefixes);
-    _aliasPrefixes = List.unmodifiable(aliasPrefixes);
-    _translationPrefixes = List.unmodifiable(translationPrefixes);
-    _pinyinPrefixes = List.unmodifiable(pinyinPrefixes);
-    _substringBuckets = Map.unmodifiable(substringBuckets);
+    _canonicalPrefixes = _PromptPrefixTable(canonicalPrefixes, entries);
+    _aliasPrefixes = _PromptPrefixTable(aliasPrefixes, entries);
+    _translationPrefixes = _PromptPrefixTable(translationPrefixes, entries);
+    _pinyinPrefixes = _PromptPrefixTable(pinyinPrefixes, entries);
+    // Packed buckets hold millions of indexes for the bundled corpus; a
+    // growable list would keep a full pointer per index plus spare capacity.
+    _substringBuckets = Map.unmodifiable({
+      for (final MapEntry(:key, value: bucket) in substringBuckets.entries)
+        key: Uint32List.fromList(
+          bucket..sort((a, b) => _compareEntryIndexes(a, b, entries)),
+        ),
+    });
     _indexesBuilt = true;
   }
 
@@ -391,6 +384,42 @@ class _PromptPrefixRecord {
   const _PromptPrefixRecord({required this.key, required this.entryIndex});
 }
 
+/// Sorted lookup keys and their entries in parallel arrays, so the index
+/// does not keep a record object for each of its hundreds of thousands of
+/// keys once it is built.
+class _PromptPrefixTable {
+  final List<String> keys;
+  final Uint32List entryIndexes;
+
+  factory _PromptPrefixTable(
+    List<_PromptPrefixRecord> records,
+    List<PromptTagCandidate> entries,
+  ) {
+    records.sort((a, b) => _comparePrefixRecords(a, b, entries));
+    return _PromptPrefixTable._(
+      List.generate(records.length, (index) => records[index].key,
+          growable: false),
+      Uint32List.fromList([for (final record in records) record.entryIndex]),
+    );
+  }
+
+  const _PromptPrefixTable._(this.keys, this.entryIndexes);
+}
+
+/// Normalized aliases, reusing [aliases] itself when normalizing changes
+/// nothing, as for nearly every bundled tag.
+List<String> _normalizeAliases(List<String> aliases) {
+  if (aliases.isEmpty) return const [];
+  List<String>? normalized;
+  for (var index = 0; index < aliases.length; index++) {
+    final alias = normalizePromptTag(aliases[index]);
+    if (alias != aliases[index]) {
+      (normalized ??= List.of(aliases, growable: false))[index] = alias;
+    }
+  }
+  return normalized ?? aliases;
+}
+
 int _comparePrefixRecords(
   _PromptPrefixRecord a,
   _PromptPrefixRecord b,
@@ -418,23 +447,24 @@ int _compareEntryIndexes(
 }
 
 Iterable<int> _prefixEntryIndexes(
-  List<_PromptPrefixRecord> records,
+  _PromptPrefixTable table,
   String query,
 ) sync* {
+  final keys = table.keys;
   var low = 0;
-  var high = records.length;
+  var high = keys.length;
   while (low < high) {
     final middle = low + ((high - low) >> 1);
-    if (records[middle].key.compareTo(query) < 0) {
+    if (keys[middle].compareTo(query) < 0) {
       low = middle + 1;
     } else {
       high = middle;
     }
   }
   for (var index = low;
-      index < records.length && records[index].key.startsWith(query);
+      index < keys.length && keys[index].startsWith(query);
       index++) {
-    yield records[index].entryIndex;
+    yield table.entryIndexes[index];
   }
 }
 
@@ -621,7 +651,9 @@ DanbooruTagIndex _decodeBundledIndex(Map<String, Uint8List> assetBytes) {
   }
   final entries = <PromptTagCandidate>[];
   for (final row in decoded.cast<List<dynamic>>()) {
-    final aliases = row[3] is List
+    // Most rows have no aliases or pinyin; sharing one empty list saves an
+    // object per row across the corpus.
+    final aliases = row[3] is List && (row[3] as List).isNotEmpty
         ? (row[3] as List).whereType<String>().toList(growable: false)
         : const <String>[];
     var translation = translations[row[0] as String];
@@ -673,7 +705,8 @@ DanbooruTagIndex _decodeBundledIndex(Map<String, Uint8List> assetBytes) {
         translation: translation,
         searchTranslations:
             searchTranslations?.toList(growable: false) ?? const [],
-        pinyinVariants: pinyin.toList(growable: false),
+        pinyinVariants:
+            pinyin.isEmpty ? const [] : pinyin.toList(growable: false),
       ),
     );
   }
