@@ -276,7 +276,7 @@ class DanbooruTagIndex {
       // Substring matching is backed by unique two-character buckets. A
       // candidate is added once per bucket even when the same pair occurs
       // repeatedly in its canonical tag. Search picks the rarest bucket for
-      // each query, then verifies the full substring, avoiding a 140k scan.
+      // each query, then verifies the full substring, avoiding a full-corpus scan.
       final seenPairs = <String>{};
       final tag = entry.normalizedTag;
       for (var offset = 0; offset + 1 < tag.length; offset++) {

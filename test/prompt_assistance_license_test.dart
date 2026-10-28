@@ -20,9 +20,9 @@ void main() {
     expect(entries, hasLength(1));
     final text = entries.single.paragraphs.map((paragraph) => paragraph.text);
     final notice = text.join('\n\n');
-    expect(notice, contains('DominikDoom/a1111-sd-webui-tagcomplete'));
-    expect(notice, contains('4170882f90b47be130a0ff9314f663c230b9153d'));
-    expect(notice, contains('Permission is hereby granted'));
+    expect(notice, contains('DraconicDragon/dbr-e621-lists-archive'));
+    expect(notice, contains('0d3b4e4d7e9890329a884afee4fada2b76f794eb'));
+    expect(notice, contains('released into the public domain'));
     expect(notice, contains('THE SOFTWARE IS PROVIDED "AS IS"'));
   });
 

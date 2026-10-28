@@ -11,33 +11,43 @@ const promptAssistanceLicensePackage =
 /// packaged build and is reachable from the existing About dialog.
 const promptAssistanceLicenseText = '''
 CasRand Forge includes a derived Danbooru completion index from the
-DominikDoom/a1111-sd-webui-tagcomplete project:
-https://github.com/DominikDoom/a1111-sd-webui-tagcomplete
+DraconicDragon/dbr-e621-lists-archive project:
+https://github.com/DraconicDragon/dbr-e621-lists-archive
 
-Source file: tags/danbooru.csv
-Revision: 4170882f90b47be130a0ff9314f663c230b9153d
-Source SHA-256: f936684fa0b041e9a55d35f2052588e28d95eef8672be6829241f8b1a7214732
-Source rows: 140782
+Source file: tag-lists/danbooru/danbooru_2026-10-01_pt20-ia-dd.csv
+Revision: 0d3b4e4d7e9890329a884afee4fada2b76f794eb
+Source SHA-256: 45afb2554525464ee49112512f6367ee004bd351afcef5f2435e99d6286884e3
+Source rows: 220510
 
-Copyright (c) 2023 DominikDoom
+Deprecated Danbooru tags that the source list no longer contains were added
+as aliases of the replacement tags linked from their Danbooru wiki pages.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+The source project is released into the public domain under the Unlicense:
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+This is free and unencumbered software released into the public domain.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Anyone is free to copy, modify, publish, use, compile, sell, or
+distribute this software, either in source code form or as a compiled
+binary, for any purpose, commercial or non-commercial, and by any
+means.
+
+In jurisdictions that recognize copyright laws, the author or authors
+of this software dedicate any and all copyright interest in the
+software to the public domain. We make this dedication for the benefit
+of the public at large and to the detriment of our heirs and
+successors. We intend this dedication to be an overt act of
+relinquishment in perpetuity of all present and future rights to this
+software under copyright law.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+
+For more information, please refer to <https://unlicense.org>
 
 The optional Chinese labels and pinyin lookup data were adapted from the
 MIT-licensed Novelai Prompt Helper Enhanced project at:

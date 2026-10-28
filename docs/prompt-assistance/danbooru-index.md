@@ -6,13 +6,16 @@ to Danbooru or another completion service.
 
 ## Pinned source
 
-- Project: [`DominikDoom/a1111-sd-webui-tagcomplete`](https://github.com/DominikDoom/a1111-sd-webui-tagcomplete)
-- File: [`tags/danbooru.csv`](https://github.com/DominikDoom/a1111-sd-webui-tagcomplete/blob/4170882f90b47be130a0ff9314f663c230b9153d/tags/danbooru.csv)
-- Revision: `4170882f90b47be130a0ff9314f663c230b9153d`
-- Source SHA-256: `f936684fa0b041e9a55d35f2052588e28d95eef8672be6829241f8b1a7214732`
-- Source rows: `140782`
+- Project: [`DraconicDragon/dbr-e621-lists-archive`](https://github.com/DraconicDragon/dbr-e621-lists-archive)
+- File: [`tag-lists/danbooru/danbooru_2026-10-01_pt20-ia-dd.csv`](https://github.com/DraconicDragon/dbr-e621-lists-archive/blob/0d3b4e4d7e9890329a884afee4fada2b76f794eb/tag-lists/danbooru/danbooru_2026-10-01_pt20-ia-dd.csv)
+  (Danbooru tags with at least 20 posts, active and deleted aliases)
+- Revision: `0d3b4e4d7e9890329a884afee4fada2b76f794eb` (monthly list of 2026-10-01)
+- Source SHA-256: `45afb2554525464ee49112512f6367ee004bd351afcef5f2435e99d6286884e3`
+- Source rows: `220510`
+- Deprecated-tag aliases: [`tool/danbooru_deprecated_aliases.json`](../../tool/danbooru_deprecated_aliases.json)
+  (327 tags, 1336 aliases added)
 - Derived asset: `assets/prompt_assistance/danbooru-index.json.gz`
-- Derived asset SHA-256 (at this revision): `ba4ce991bcbde3f7acc35f68d569bd067d6cea66cb7a39506c778a140d171614`
+- Derived asset SHA-256 (at this revision): `5674d0c42c435f43f018e1bc3c464ad1c1c78ad7ebe5e8d2ef76ff535b72c259`
 
 Each derived row is `[canonical_tag, category, post_count, aliases]`.
 
@@ -22,6 +25,24 @@ worker isolate. Queries use binary prefix lookup and the rarest substring
 bucket, then retain only the deterministic top 12 candidates. This keeps
 repeated broad queries bounded without sending prompt text or requiring a
 network service.
+
+## Deprecated tags
+
+Danbooru deprecates some broad tags in favour of more specific ones (for
+example `black_footwear` → `black_shoes`, `black_boots`, …), and the source
+list drops them.  So that typing an old name still offers its replacements,
+`tool/danbooru_deprecated_aliases.json` maps each such tag to its
+replacements, and the generator appends the old tag to the aliases of every
+replacement.
+
+The map was built on 2026-10-29 from the tags of the previous source
+(DominikDoom/a1111-sd-webui-tagcomplete `tags/danbooru.csv` at
+`4170882f90b47be130a0ff9314f663c230b9153d`) that are neither a tag nor an
+alias in the new list.  Of those, the tags Danbooru's API reports as
+deprecated were kept, mapped to the tags linked from the introduction of
+their Danbooru wiki page (resolved through the new list's aliases), and
+limited to replacements in the same category.  The file holds only tag
+names, so regenerating the index needs no network access.
 
 ## Reproducible import
 
@@ -33,35 +54,41 @@ python3 tool/generate_danbooru_index.py \
   --output assets/prompt_assistance/danbooru-index.json.gz
 ```
 
-The script checks the source checksum and row count, emits compact UTF-8 JSON,
-and writes gzip with a zero timestamp and no filename header so the output is
-reproducible.
+The script checks the source checksum and row count, refuses a deprecated
+tag that the source already contains or a replacement it lacks, emits compact
+UTF-8 JSON, and writes gzip with a zero timestamp and no filename header so
+the output is reproducible.
 
 ## Attribution and license
 
-The upstream `a1111-sd-webui-tagcomplete` project is distributed under the MIT
-license.  Its copyright notice is reproduced here for the redistributed data
-derivative:
+The `dbr-e621-lists-archive` project is released into the public domain
+under the [Unlicense](https://unlicense.org), which places no conditions on
+redistribution.  The bundled notice credits the source anyway:
 
-> Copyright (c) 2023 DominikDoom
+> This is free and unencumbered software released into the public domain.
 >
-> Permission is hereby granted, free of charge, to any person obtaining a copy
-> of this software and associated documentation files (the "Software"), to deal
-> in the Software without restriction, including without limitation the rights
-> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-> copies of the Software, and to permit persons to whom the Software is
-> furnished to do so, subject to the following conditions:
+> Anyone is free to copy, modify, publish, use, compile, sell, or
+> distribute this software, either in source code form or as a compiled
+> binary, for any purpose, commercial or non-commercial, and by any
+> means.
 >
-> The above copyright notice and this permission notice shall be included in all
-> copies or substantial portions of the Software.
+> In jurisdictions that recognize copyright laws, the author or authors
+> of this software dedicate any and all copyright interest in the
+> software to the public domain. We make this dedication for the benefit
+> of the public at large and to the detriment of our heirs and
+> successors. We intend this dedication to be an overt act of
+> relinquishment in perpetuity of all present and future rights to this
+> software under copyright law.
 >
-> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-> SOFTWARE.
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+> EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+> MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+> IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+> OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+> ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+> OTHER DEALINGS IN THE SOFTWARE.
+>
+> For more information, please refer to <https://unlicense.org>
 
-CasRand Forge remains GPL-3.0; this attribution applies to the bundled derived
+CasRand Forge remains GPL-3.0; this notice applies to the bundled derived
 data only.

@@ -25,16 +25,19 @@ void main() {
     final assistance = PromptEditingAssistance();
     final index = await assistance.ready;
 
-    expect(index.length, 140782);
+    expect(index.length, 220510);
     expect(index.entries.first.tag, '1girl');
     expect(index.entries.first.category, 0);
-    expect(index.entries.first.postCount, 6008644);
+    expect(index.entries.first.postCount, 8483124);
     expect(
       index.entries.map((entry) => entry.category).toSet(),
       containsAll(<int>{0, 1, 3, 4, 5}),
     );
     expect(index.search('high_res').first.tag, 'highres');
     expect(index.search('original_character').first.tag, 'original');
+    // Deprecated tags the source list dropped resolve to their replacements.
+    expect(index.search('black_footwear').map((candidate) => candidate.tag),
+        containsAll(<String>['black_shoes', 'black_boots']));
     expect(index.search('蓝发').first.tag, 'blue_hair');
     final pinyinMatches = index.search('/jl');
     expect(pinyinMatches.map((candidate) => candidate.tag),
