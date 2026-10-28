@@ -26,6 +26,13 @@ bucket, then retain only the deterministic top 12 candidates. This keeps
 repeated broad queries bounded without sending prompt text or requiring a
 network service.
 
+The optional Chinese labels in `danbooru-translations.json.gz` are keyed by
+tag name.  A key that is only an alias in this index (a tag Danbooru renamed
+or deprecated) still applies to the tags listing it: a tag with no label of
+its own shows the label of an alias that belongs to it alone, and every other
+alias label is kept as a hidden search name, so `黑色的鞋` finds
+`black_shoes` and `black_boots` without labelling either.
+
 ## Deprecated tags
 
 Danbooru deprecates some broad tags in favour of more specific ones (for

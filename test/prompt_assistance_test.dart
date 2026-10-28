@@ -38,6 +38,16 @@ void main() {
     // Deprecated tags the source list dropped resolve to their replacements.
     expect(index.search('black_footwear').map((candidate) => candidate.tag),
         containsAll(<String>['black_shoes', 'black_boots']));
+    // Chinese labels of renamed or deprecated tags carry over through
+    // aliases: shown for a single replacement, only searchable when shared.
+    final byTag = {for (final entry in index.entries) entry.tag: entry};
+    expect(byTag['hand_between_own_legs']!.displayTranslation, '手放在两腿之间');
+    expect(index.search('中国服饰').map((candidate) => candidate.tag),
+        contains('qipao'));
+    expect(byTag['qipao']!.displayTranslation, '旗袍');
+    expect(index.search('黑色的鞋').map((candidate) => candidate.tag),
+        containsAll(<String>['black_shoes', 'black_boots']));
+    expect(byTag['black_shoes']!.displayTranslation, isNull);
     expect(index.search('蓝发').first.tag, 'blue_hair');
     final pinyinMatches = index.search('/jl');
     expect(pinyinMatches.map((candidate) => candidate.tag),
@@ -108,6 +118,31 @@ void main() {
     expect(index.search('azure').single.tag, 'blue_hair');
     expect(index.search('BLUE HA').single.tag, 'blue_hair');
     expect(index.search('blue').length, 3);
+  });
+
+  test('search translations find a tag without labelling it', () {
+    final index = DanbooruTagIndex([
+      PromptTagCandidate(
+        tag: 'black_shoes',
+        category: 0,
+        postCount: 100,
+        searchTranslations: ['黑色的鞋'],
+      ),
+      PromptTagCandidate(
+        tag: 'qipao',
+        category: 0,
+        postCount: 50,
+        translation: '旗袍',
+        searchTranslations: ['中国服饰'],
+      ),
+    ]);
+
+    final shoes = index.search('黑色').single;
+    expect(shoes.tag, 'black_shoes');
+    expect(shoes.displayTranslation, isNull);
+    final dress = index.search('中国').single;
+    expect(dress.tag, 'qipao');
+    expect(dress.displayTranslation, '旗袍');
   });
 
   test('completion resolves a fragment and preserves surrounding text',

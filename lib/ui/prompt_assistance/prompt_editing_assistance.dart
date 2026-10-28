@@ -15,6 +15,10 @@ class PromptTagCandidate {
   final int postCount;
   final List<String> aliases;
   final String? translation;
+
+  /// Further Chinese names that find this tag but are not shown, such as the
+  /// label of a deprecated tag that now aliases several replacements.
+  final List<String> searchTranslations;
   final List<String> pinyinVariants;
 
   PromptTagCandidate({
@@ -23,6 +27,7 @@ class PromptTagCandidate {
     required this.postCount,
     this.aliases = const [],
     this.translation,
+    this.searchTranslations = const [],
     this.pinyinVariants = const [],
   });
 
@@ -58,12 +63,19 @@ class PromptTagCandidate {
         other.postCount == postCount &&
         listEquals(other.aliases, aliases) &&
         other.translation == translation &&
+        listEquals(other.searchTranslations, searchTranslations) &&
         listEquals(other.pinyinVariants, pinyinVariants);
   }
 
   @override
-  int get hashCode => Object.hash(tag, category, postCount,
-      Object.hashAll(aliases), translation, Object.hashAll(pinyinVariants));
+  int get hashCode => Object.hash(
+      tag,
+      category,
+      postCount,
+      Object.hashAll(aliases),
+      translation,
+      Object.hashAll(searchTranslations),
+      Object.hashAll(pinyinVariants));
 }
 
 /// Text and selection passed through the shared completion seam.
@@ -259,11 +271,16 @@ class DanbooruTagIndex {
           );
         }
       }
-      final translation = normalizePromptTag(entry.translation ?? '');
-      if (translation.isNotEmpty) {
-        translationPrefixes.add(
-          _PromptPrefixRecord(key: translation, entryIndex: index),
-        );
+      for (final label in [
+        if (entry.translation != null) entry.translation!,
+        ...entry.searchTranslations,
+      ]) {
+        final translation = normalizePromptTag(label);
+        if (translation.isNotEmpty) {
+          translationPrefixes.add(
+            _PromptPrefixRecord(key: translation, entryIndex: index),
+          );
+        }
       }
       for (final pinyin in entry.pinyinVariants) {
         if (pinyin.isNotEmpty) {
@@ -581,18 +598,51 @@ DanbooruTagIndex _decodeBundledIndex(Map<String, Uint8List> assetBytes) {
       });
     }
   }
-  final entries = <PromptTagCandidate>[];
+  // Translation keys that are only aliases here (tags Danbooru renamed or
+  // deprecated) still describe the tags that list them as aliases.
+  final translatedTags = <String>{};
+  final aliasOwners = <String, String>{};
+  final sharedAliases = <String>{};
   for (final row in decoded) {
     if (row is! List || row.length != 4) {
       throw const FormatException('Danbooru index row has an invalid shape');
     }
+    final tag = row[0] as String;
+    if (translations.containsKey(tag)) translatedTags.add(tag);
+    if (row[3] is List) {
+      for (final alias in row[3] as List) {
+        if (alias is! String || !translations.containsKey(alias)) continue;
+        // A row may repeat an alias; only a second tag makes it shared.
+        if (aliasOwners.putIfAbsent(alias, () => tag) != tag) {
+          sharedAliases.add(alias);
+        }
+      }
+    }
+  }
+  final entries = <PromptTagCandidate>[];
+  for (final row in decoded.cast<List<dynamic>>()) {
     final aliases = row[3] is List
         ? (row[3] as List).whereType<String>().toList(growable: false)
         : const <String>[];
-    final translation = translations[row[0] as String];
+    var translation = translations[row[0] as String];
+    Set<String>? searchTranslations;
+    for (final alias in aliases) {
+      final aliasTranslation = translations[alias];
+      if (aliasTranslation == null || translatedTags.contains(alias)) continue;
+      // A label shared by several tags (black_footwear for black_shoes,
+      // black_boots, ...) only finds them; shown on each it would mislabel.
+      if (translation == null && !sharedAliases.contains(alias)) {
+        translation = aliasTranslation;
+      } else if (aliasTranslation != translation) {
+        (searchTranslations ??= <String>{}).add(aliasTranslation);
+      }
+    }
     final pinyin = <String>{};
-    if (translation != null) {
-      for (final segment in translation.split(RegExp(r'[|/(),\s]+'))) {
+    for (final label in [
+      if (translation != null) translation,
+      ...?searchTranslations,
+    ]) {
+      for (final segment in label.split(RegExp(r'[|/(),\s]+'))) {
         if (segment.isEmpty) continue;
         var full = StringBuffer();
         var initials = StringBuffer();
@@ -621,6 +671,8 @@ DanbooruTagIndex _decodeBundledIndex(Map<String, Uint8List> assetBytes) {
         postCount: (row[2] as num).toInt(),
         aliases: aliases,
         translation: translation,
+        searchTranslations:
+            searchTranslations?.toList(growable: false) ?? const [],
         pinyinVariants: pinyin.toList(growable: false),
       ),
     );
