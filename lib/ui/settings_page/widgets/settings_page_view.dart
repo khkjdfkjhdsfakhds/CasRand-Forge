@@ -127,6 +127,7 @@ class _SettingsPageViewState extends State<SettingsPageView> {
             _buildRememberSequentialProgressTile(),
             _buildPromptModeConfirmationTile(),
             _buildPromptAutocompleteTile(),
+            _buildSwapEnterTile(),
             const Divider(),
             ExpansionTile(
               key: const Key('navigation-settings-expansion'),
@@ -288,6 +289,17 @@ class _SettingsPageViewState extends State<SettingsPageView> {
       subtitle: Text(tr('prompt_autocomplete_enabled_hint')),
       value: viewmodel.settings.promptAutocompleteEnabled,
       onChanged: viewmodel.setPromptAutocompleteEnabled,
+    );
+  }
+
+  Widget _buildSwapEnterTile() {
+    return SwitchListTile(
+      key: const Key('swap-enter-and-shift-enter'),
+      secondary: const Icon(Icons.keyboard_return),
+      title: Text(tr('swap_enter_and_shift_enter')),
+      subtitle: Text(tr('swap_enter_and_shift_enter_hint')),
+      value: viewmodel.settings.swapEnterAndShiftEnter,
+      onChanged: viewmodel.setSwapEnterAndShiftEnter,
     );
   }
 

@@ -242,6 +242,17 @@ void main() {
       await tester.pump();
       expect(
           GetIt.I<PayloadConfig>().settings.promptAutocompleteEnabled, isFalse);
+
+      final swapEnter = find.byKey(const Key('swap-enter-and-shift-enter'));
+      expect(swapEnter, findsOneWidget);
+      expect(
+        tester.getTopLeft(autocomplete).dy,
+        lessThan(tester.getTopLeft(swapEnter).dy),
+      );
+      expect(GetIt.I<PayloadConfig>().settings.swapEnterAndShiftEnter, isFalse);
+      await tester.tap(swapEnter);
+      await tester.pump();
+      expect(GetIt.I<PayloadConfig>().settings.swapEnterAndShiftEnter, isTrue);
     } finally {
       debugDefaultTargetPlatformOverride = null;
       await tester.binding.setSurfaceSize(null);

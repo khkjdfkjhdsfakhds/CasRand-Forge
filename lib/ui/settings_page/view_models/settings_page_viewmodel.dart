@@ -140,6 +140,12 @@ class SettingsPageViewmodel extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setSwapEnterAndShiftEnter(bool value) {
+    payloadConfig.settings.swapEnterAndShiftEnter = value;
+    configService.saveConfig(payloadConfig.toJson());
+    notifyListeners();
+  }
+
   void setNavigationDestinationEnabled(
     AppDestination destination,
     bool enabled,

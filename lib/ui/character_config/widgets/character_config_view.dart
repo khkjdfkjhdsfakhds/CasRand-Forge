@@ -16,6 +16,7 @@ class CharacterConfigView extends StatelessWidget {
   final CharacterConfigViewmodel viewmodel;
   final PromptEditingAssistance? promptAssistance;
   final bool autocompleteEnabled;
+  final bool swapEnterAndShiftEnter;
   final int characterIndex;
   final List<CharacterConfig> allCharacters;
 
@@ -24,6 +25,7 @@ class CharacterConfigView extends StatelessWidget {
     required this.viewmodel,
     this.promptAssistance,
     this.autocompleteEnabled = true,
+    this.swapEnterAndShiftEnter = false,
     this.characterIndex = 0,
     this.allCharacters = const [],
   });
@@ -77,6 +79,7 @@ class CharacterConfigView extends StatelessWidget {
                 ),
                 promptAssistance: promptAssistance,
                 autocompleteEnabled: autocompleteEnabled,
+                swapEnterAndShiftEnter: swapEnterAndShiftEnter,
               ),
             ),
             const Divider(height: 25, indent: 12, endIndent: 12),
@@ -93,6 +96,7 @@ class CharacterConfigView extends StatelessWidget {
                 ),
                 promptAssistance: promptAssistance,
                 autocompleteEnabled: autocompleteEnabled,
+                swapEnterAndShiftEnter: swapEnterAndShiftEnter,
               ),
             ),
           ],

@@ -11,12 +11,14 @@ class SavedConfigListView extends StatelessWidget {
   final SavedConfigListViewmodel viewmodel;
   final PromptEditingAssistance? promptAssistance;
   final bool autocompleteEnabled;
+  final bool swapEnterAndShiftEnter;
 
   const SavedConfigListView({
     super.key,
     required this.viewmodel,
     this.promptAssistance,
     this.autocompleteEnabled = true,
+    this.swapEnterAndShiftEnter = false,
   });
 
   @override
@@ -56,6 +58,7 @@ class SavedConfigListView extends StatelessWidget {
                       ),
                       promptAssistance: promptAssistance,
                       autocompleteEnabled: autocompleteEnabled,
+                      swapEnterAndShiftEnter: swapEnterAndShiftEnter,
                     )),
                     IconButton(
                         padding: const EdgeInsets.symmetric(vertical: 12.0),

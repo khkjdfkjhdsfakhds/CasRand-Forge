@@ -23,12 +23,17 @@ class PromptEntryEditor extends StatefulWidget {
     required this.onChanged,
     this.promptAssistance,
     this.autocompleteEnabled = true,
+    this.swapEnterAndShiftEnter = false,
   });
 
   final List<String> initialEntries;
   final ValueChanged<List<String>> onChanged;
   final PromptEditingAssistance? promptAssistance;
   final bool autocompleteEnabled;
+
+  /// When true, Shift+Enter starts a new entry and Enter inserts a newline
+  /// inside the current entry.
+  final bool swapEnterAndShiftEnter;
 
   @override
   State<PromptEntryEditor> createState() => _PromptEntryEditorState();
@@ -144,7 +149,8 @@ class _PromptEntryEditorState extends State<PromptEntryEditor> {
     if (_isEnter(event.logicalKey)) {
       _replaceSelection(
         '\n',
-        insertedNewlinesAreBoundaries: !hardware.isShiftPressed,
+        insertedNewlinesAreBoundaries:
+            hardware.isShiftPressed == widget.swapEnterAndShiftEnter,
       );
       return KeyEventResult.handled;
     }

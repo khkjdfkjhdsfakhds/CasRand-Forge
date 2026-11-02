@@ -26,6 +26,8 @@ class PromptTabViewmodel extends ChangeNotifier {
   bool get isMediumEffort => isMediumEffortModel(paramConfig.model);
   bool get promptAutocompleteEnabled =>
       payloadConfig?.settings.promptAutocompleteEnabled ?? true;
+  bool get swapEnterAndShiftEnter =>
+      payloadConfig?.settings.swapEnterAndShiftEnter ?? false;
   String get fixedPromptText =>
       promptConfig.strs.isEmpty ? '' : promptConfig.strs.first;
   String get fixedNegativePromptText =>

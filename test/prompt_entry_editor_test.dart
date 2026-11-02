@@ -36,6 +36,7 @@ void main() {
     WidgetTester tester, {
     required List<String> entries,
     required ValueChanged<List<String>> onChanged,
+    bool swapEnterAndShiftEnter = false,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -47,6 +48,7 @@ void main() {
               child: PromptEntryEditor(
                 initialEntries: entries,
                 onChanged: onChanged,
+                swapEnterAndShiftEnter: swapEnterAndShiftEnter,
               ),
             ),
           ),
@@ -1240,6 +1242,38 @@ void main() {
 
     expect(entries, ['red \nhair']);
     expect(controller.text, 'red \nhair');
+  });
+
+  testWidgets('swapped keys: Enter breaks the line, Shift Enter splits', (
+    tester,
+  ) async {
+    var entries = <String>[];
+    await pumpEditor(
+      tester,
+      entries: const ['red hair'],
+      onChanged: (value) => entries = value,
+      swapEnterAndShiftEnter: true,
+    );
+
+    final controller = controllerFor(tester);
+    await tester.tap(find.byKey(const Key('prompt-entry-editor')));
+    controller.selection = const TextSelection.collapsed(offset: 4);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+
+    expect(entries, ['red \nhair']);
+    expect(controller.text, 'red \nhair');
+
+    controller.selection = TextSelection.collapsed(
+      offset: controller.text.length,
+    );
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pump();
+
+    expect(entries, ['red \nhair', '']);
+    expect(controller.selection.baseOffset, controller.text.length);
   });
 
   testWidgets('deleting a boundary preserves an adjacent internal newline', (

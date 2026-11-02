@@ -14,12 +14,14 @@ class PromptConfigView extends StatelessWidget {
   final PromptConfigViewModel viewModel;
   final PromptEditingAssistance? promptAssistance;
   final bool autocompleteEnabled;
+  final bool swapEnterAndShiftEnter;
 
   const PromptConfigView({
     super.key,
     required this.viewModel,
     this.promptAssistance,
     this.autocompleteEnabled = true,
+    this.swapEnterAndShiftEnter = false,
   });
 
   @override
@@ -88,6 +90,7 @@ class PromptConfigView extends StatelessWidget {
             viewModel: subViewModel,
             promptAssistance: promptAssistance,
             autocompleteEnabled: autocompleteEnabled,
+            swapEnterAndShiftEnter: swapEnterAndShiftEnter,
           ),
         );
       }
@@ -115,6 +118,7 @@ class PromptConfigView extends StatelessWidget {
         viewModel: viewModel,
         promptAssistance: promptAssistance,
         autocompleteEnabled: autocompleteEnabled,
+        swapEnterAndShiftEnter: swapEnterAndShiftEnter,
       ),
     );
   }
@@ -227,11 +231,13 @@ class _PromptEntryEditorDialog extends StatefulWidget {
     required this.viewModel,
     this.promptAssistance,
     required this.autocompleteEnabled,
+    required this.swapEnterAndShiftEnter,
   });
 
   final PromptConfigViewModel viewModel;
   final PromptEditingAssistance? promptAssistance;
   final bool autocompleteEnabled;
+  final bool swapEnterAndShiftEnter;
 
   @override
   State<_PromptEntryEditorDialog> createState() =>
@@ -274,6 +280,7 @@ class _PromptEntryEditorDialogState extends State<_PromptEntryEditorDialog> {
                 onChanged: (value) => _entries = value,
                 promptAssistance: widget.promptAssistance,
                 autocompleteEnabled: widget.autocompleteEnabled,
+                swapEnterAndShiftEnter: widget.swapEnterAndShiftEnter,
               ),
             ),
           ],

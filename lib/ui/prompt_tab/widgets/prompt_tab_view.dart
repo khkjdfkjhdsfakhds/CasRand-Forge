@@ -71,6 +71,7 @@ class PromptTabView extends StatelessWidget {
                       promptAssistance:
                           promptAssistance ?? PromptEditingAssistance.shared,
                       autocompleteEnabled: viewmodel.promptAutocompleteEnabled,
+                      swapEnterAndShiftEnter: viewmodel.swapEnterAndShiftEnter,
                     ),
                   ),
                   for (final (index, characterConfig)
@@ -104,6 +105,8 @@ class PromptTabView extends StatelessWidget {
                                 PromptEditingAssistance.shared,
                             autocompleteEnabled:
                                 viewmodel.promptAutocompleteEnabled,
+                            swapEnterAndShiftEnter:
+                                viewmodel.swapEnterAndShiftEnter,
                           ),
                         ),
                       ],
@@ -135,8 +138,9 @@ class PromptTabView extends StatelessWidget {
                           configList: viewmodel.savedConfigList),
                       promptAssistance:
                           promptAssistance ?? PromptEditingAssistance.shared,
-                      autocompleteEnabled:
-                          viewmodel.promptAutocompleteEnabled))),
+                      autocompleteEnabled: viewmodel.promptAutocompleteEnabled,
+                      swapEnterAndShiftEnter:
+                          viewmodel.swapEnterAndShiftEnter))),
               tooltip: tr('manage_saved_configs'),
               heroTag: 'ptvfab1',
               child: const Icon(Icons.format_list_bulleted),
@@ -642,6 +646,7 @@ class _CharacterPromptSectionState extends State<_CharacterPromptSection> {
           allCharacters: vm.characterConfigList,
           promptAssistance: widget.promptAssistance,
           autocompleteEnabled: vm.promptAutocompleteEnabled,
+          swapEnterAndShiftEnter: vm.swapEnterAndShiftEnter,
         ),
       );
     });

@@ -52,6 +52,10 @@ class Settings {
   /// This is enabled by default for existing and new configurations.
   bool promptAutocompleteEnabled;
 
+  /// Swaps Enter and Shift+Enter in the prompt entry editor for users used to
+  /// the NovelAI website, where Shift+Enter starts a new line. Off by default.
+  bool swapEnterAndShiftEnter;
+
   /// Result display style: 'classic' (default) or 'waterfall'. The classic
   /// mode restores the 0.55-style grid with the prompt beside the image.
   String resultDisplayMode;
@@ -134,6 +138,7 @@ class Settings {
     required this.generationPageColumnCount,
     required this.themeMode,
     this.promptAutocompleteEnabled = true,
+    this.swapEnterAndShiftEnter = false,
     this.resultDisplayMode = 'classic',
     NavigationConfiguration? navigation,
     this.confirmPromptModeSwitch = true,
@@ -412,6 +417,7 @@ class Settings {
       generationPageColumnCount: json['generation_page_column_count'] ?? 2,
       themeMode: json['theme_mode'] ?? 'system',
       promptAutocompleteEnabled: json['prompt_autocomplete_enabled'] ?? true,
+      swapEnterAndShiftEnter: json['swap_enter_and_shift_enter'] ?? false,
     );
   }
 
@@ -438,6 +444,7 @@ class Settings {
       'generation_page_column_count': generationPageColumnCount,
       'theme_mode': themeMode,
       'prompt_autocomplete_enabled': promptAutocompleteEnabled,
+      'swap_enter_and_shift_enter': swapEnterAndShiftEnter,
     };
   }
 

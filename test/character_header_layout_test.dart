@@ -11,6 +11,8 @@ import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/data/models/settings.dart';
 import 'package:nai_casrand/ui/character_config/widgets/character_config_view.dart';
 import 'package:nai_casrand/ui/prompt_assistance/prompt_editing_assistance.dart';
+import 'package:nai_casrand/ui/prompt_config/widgets/prompt_config_view.dart';
+import 'package:nai_casrand/ui/prompt_config/widgets/prompt_entry_editor.dart';
 import 'package:nai_casrand/ui/prompt_tab/view_models/prompt_tab_viewmodel.dart';
 import 'package:nai_casrand/ui/prompt_tab/widgets/prompt_tab_view.dart';
 
@@ -361,5 +363,35 @@ void main() {
     expect(
         inside(PromptMode.random, 0, 'character-position-tile'), findsNothing);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Enter swap setting reaches every cascaded prompt view',
+      (tester) async {
+    final config = payload(PromptMode.random);
+    config.settings.swapEnterAndShiftEnter = true;
+    final vm = PromptTabViewmodel(payloadConfig: config);
+    addTearDown(vm.dispose);
+    vm.addCharacter();
+    await mount(tester, vm);
+
+    final characterViews = tester
+        .widgetList<CharacterConfigView>(find.byType(CharacterConfigView));
+    final promptViews =
+        tester.widgetList<PromptConfigView>(find.byType(PromptConfigView));
+    expect(characterViews, isNotEmpty);
+    expect(promptViews.length, greaterThanOrEqualTo(4));
+    expect(characterViews.every((view) => view.swapEnterAndShiftEnter), isTrue);
+    expect(promptViews.every((view) => view.swapEnterAndShiftEnter), isTrue);
+
+    await click(
+      tester,
+      find.descendant(
+        of: find.byKey(const Key('base-prompt-section')),
+        matching: find.textContaining('String Values'),
+      ),
+    );
+    final editor =
+        tester.widget<PromptEntryEditor>(find.byType(PromptEntryEditor));
+    expect(editor.swapEnterAndShiftEnter, isTrue);
   });
 }

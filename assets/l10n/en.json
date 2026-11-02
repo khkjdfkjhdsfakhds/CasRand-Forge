@@ -513,6 +513,8 @@
     "confirm_prompt_mode_switch_hint": "Turn this back on after choosing “Do not show again” if you want the full warning dialog restored.",
     "prompt_autocomplete_enabled": "Prompt autocomplete",
     "prompt_autocomplete_enabled_hint": "Show offline Danbooru candidates while typing tag fragments; turning this off keeps ordinary editing unchanged.",
+    "swap_enter_and_shift_enter": "Swap Enter and Shift+Enter",
+    "swap_enter_and_shift_enter_hint": "When editing cascaded and character prompt entries, Shift+Enter starts a new entry and Enter adds a line break inside the entry, matching the NovelAI website habit of Shift+Enter for new lines.",
     "action_enhance_fixed_mode_done": "Sent to Enhance. The complete generation parameters were imported into the fixed profile, which is now active.",
     "advanced_features_status": "References in Use",
     "resource_ready": "Resource ready; disabling it keeps the image and settings",

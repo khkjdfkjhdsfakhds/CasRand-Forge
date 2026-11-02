@@ -512,6 +512,8 @@
     "confirm_prompt_mode_switch_hint": "选择“后续不再提示”后，可在这里重新开启完整的切换说明对话框。",
     "prompt_autocomplete_enabled": "提示词自动补全",
     "prompt_autocomplete_enabled_hint": "输入标签片段时显示离线 Danbooru 候选；关闭后不会影响普通输入。",
+    "swap_enter_and_shift_enter": "对调回车与 Shift+回车",
+    "swap_enter_and_shift_enter_hint": "开启后，编辑级联与角色提示词词条时，Shift+回车新建词条，回车在词条内换行，贴近 NovelAI 官网用 Shift+回车换行的习惯。",
     "action_enhance_fixed_mode_done": "已发送到 Enhance。完整生成参数已导入并启用独立的固定提示词方案。",
     "advanced_features_status": "使用中的参考图",
     "resource_ready": "资源已就绪；关闭后仍会保留图片和参数",

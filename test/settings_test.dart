@@ -64,6 +64,15 @@ void main() {
     expect(restored.promptAutocompleteEnabled, isFalse);
   });
 
+  test('Enter swap defaults to disabled and persists its switch', () {
+    final settings = Settings.fromJson({});
+    expect(settings.swapEnterAndShiftEnter, isFalse);
+
+    settings.swapEnterAndShiftEnter = true;
+    final restored = Settings.fromJson(settings.toJson());
+    expect(restored.swapEnterAndShiftEnter, isTrue);
+  });
+
   test('sequential progress memory is persisted in settings JSON', () {
     final settings = Settings.fromJson({
       'remember_sequential_progress': false,
