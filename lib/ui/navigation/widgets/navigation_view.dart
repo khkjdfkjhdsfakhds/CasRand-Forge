@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'dart:ui' show AppExitResponse;
 
+import 'package:adaptive_theme/adaptive_theme.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:get_it/get_it.dart';
+import 'package:nai_casrand/agent_control/agent_control_controller.dart';
+import 'package:nai_casrand/ui/agent_control/agent_control_settings_tiles.dart';
 import 'package:nai_casrand/core/constants/app_identity.dart';
 import 'package:nai_casrand/data/services/app_update_service.dart';
 import 'package:nai_casrand/ui/app_update/app_update_controller.dart';
@@ -69,6 +72,7 @@ class NavigationViewState extends State<NavigationView>
   };
 
   NavigationRequest get _navigationRequest => GetIt.I<NavigationRequest>();
+  StreamSubscription<AgentActivity>? _agentActivitySubscription;
 
   void _saveNavigationConfiguration() {
     final config = GetIt.I<PayloadConfig>();
@@ -79,6 +83,12 @@ class NavigationViewState extends State<NavigationView>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    if (GetIt.I.isRegistered<AgentControlController>()) {
+      final agentControl = GetIt.I<AgentControlController>();
+      _agentActivitySubscription =
+          agentControl.activities.listen(_showAgentActivity);
+      agentControl.configRevision.addListener(_applyAgentConfigAppearance);
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _showWelcomeDialog();
       _scheduleLaunchUpdateCheck();
@@ -112,17 +122,47 @@ class NavigationViewState extends State<NavigationView>
     await showAppUpdateDialog(context, controller, automatic: true);
   }
 
+  /// Lets the user see that an agent, not they, changed or ran something.
+  void _showAgentActivity(AgentActivity activity) {
+    if (!mounted) return;
+    showInfoBar(
+      context,
+      tr('agent_control_activity',
+          namedArgs: {'action': agentActionLabel(activity.action)}),
+    );
+  }
+
+  void _applyAgentConfigAppearance() {
+    if (!mounted) return;
+    AdaptiveTheme.maybeOf(context)
+        ?.setThemeMode(GetIt.I<PayloadConfig>().settings.theme);
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _agentActivitySubscription?.cancel();
+    if (GetIt.I.isRegistered<AgentControlController>()) {
+      GetIt.I<AgentControlController>()
+          .configRevision
+          .removeListener(_applyAgentConfigAppearance);
+    }
     super.dispose();
   }
 
   @override
   Future<AppExitResponse> didRequestAppExit() async {
-    return await _prepareGeneratedImageStorageForExit()
-        ? AppExitResponse.exit
-        : AppExitResponse.cancel;
+    final exit = await _prepareGeneratedImageStorageForExit();
+    if (exit && GetIt.I.isRegistered<AgentControlController>()) {
+      try {
+        await GetIt.I<AgentControlController>()
+            .shutdown()
+            .timeout(const Duration(seconds: 2));
+      } catch (_) {
+        // A stale discovery file only points to a closed port.
+      }
+    }
+    return exit ? AppExitResponse.exit : AppExitResponse.cancel;
   }
 
   @override

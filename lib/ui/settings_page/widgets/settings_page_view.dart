@@ -4,6 +4,8 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
+import 'package:nai_casrand/agent_control/agent_control_controller.dart';
+import 'package:nai_casrand/ui/agent_control/agent_control_settings_tiles.dart';
 import 'package:nai_casrand/core/constants/settings.dart';
 import 'package:nai_casrand/ui/app_update/app_update_controller.dart';
 import 'package:nai_casrand/ui/app_update/app_update_settings_tiles.dart';
@@ -64,12 +66,26 @@ class _SettingsPageViewState extends State<SettingsPageView> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _revealNavigationDirectoryAnchor();
     });
+    if (GetIt.I.isRegistered<AgentControlController>()) {
+      GetIt.I<AgentControlController>()
+          .configRevision
+          .addListener(_handleAgentConfigChange);
+    }
+  }
+
+  void _handleAgentConfigChange() {
+    if (mounted) viewmodel.refresh();
   }
 
   @override
   void dispose() {
     _navigationRequest?.apiProxySettingsRevision
         .removeListener(_handleApiProxySettingsRequest);
+    if (GetIt.I.isRegistered<AgentControlController>()) {
+      GetIt.I<AgentControlController>()
+          .configRevision
+          .removeListener(_handleAgentConfigChange);
+    }
     _scrollController
       ..removeListener(_rememberScrollOffset)
       ..dispose();
@@ -170,6 +186,12 @@ class _SettingsPageViewState extends State<SettingsPageView> {
             _sectionHeading(context, 'settings_group_appearance'),
             _buildThemeModeTile(context),
             _buildLanguageTile(context),
+            if (GetIt.I.isRegistered<AgentControlController>()) ...[
+              _sectionHeading(context, 'settings_group_agent_control'),
+              AgentControlSettingsTiles(
+                controller: GetIt.I<AgentControlController>(),
+              ),
+            ],
             if (!kIsWeb && GetIt.I.isRegistered<AppUpdateController>()) ...[
               _sectionHeading(context, 'settings_group_update'),
               AppUpdateSettingsTiles(

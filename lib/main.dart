@@ -1,6 +1,11 @@
+import 'dart:async';
+
 import 'package:adaptive_theme/adaptive_theme.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:nai_casrand/agent_control/agent_control_controller.dart';
+import 'package:nai_casrand/agent_control/agent_control_service.dart';
+import 'package:nai_casrand/agent_control/agent_generation_port.dart';
 import 'package:nai_casrand/core/constants/app_identity.dart';
 import 'package:nai_casrand/core/licenses/prompt_assistance_license.dart';
 import 'package:nai_casrand/data/models/command_status.dart';
@@ -57,6 +62,28 @@ void main() async {
       proxy: () => GetIt.I<PayloadConfig>().settings.proxy,
     ),
   );
+
+  if (agentControlPlatformSupported) {
+    final agentControl = AgentControlController(
+      preferences: HiveAgentControlPreferences(configService.saveBox),
+      appVersion: configService.packageInfo.version,
+      service: (controller) {
+        AgentGenerationPort? port;
+        return AgentControlService(
+          payloadConfig: () => GetIt.I<PayloadConfig>(),
+          configService: () => GetIt.I<ConfigService>(),
+          generation: () => port ??= ViewmodelGenerationPort(
+            GetIt.I<GenerationPageViewmodel>(),
+            GetIt.I<CommandStatus>(),
+          ),
+          onActivity: controller.recordActivity,
+          onConfigReplaced: controller.notifyConfigReplaced,
+        );
+      },
+    );
+    GetIt.instance.registerSingleton(agentControl);
+    unawaited(agentControl.restore());
+  }
 
   final appWithLocales = EasyLocalization(
     supportedLocales: const [Locale('en'), Locale('zh', 'CN')],

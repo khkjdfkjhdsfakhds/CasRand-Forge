@@ -60,8 +60,15 @@ typedef I2iBatchPreparer = Future<I2iRequestBatch?> Function({
 
 Future<void> _defaultPreparationFeedbackBarrier() async {
   final binding = WidgetsBinding.instance;
+  // A hidden or minimized window produces no frames (for example while an
+  // agent drives the app in the background); feedback ordering must never
+  // hold the request back then.
+  if (!binding.framesEnabled) return;
   if (!binding.hasScheduledFrame) binding.scheduleFrame();
-  await binding.endOfFrame;
+  await binding.endOfFrame.timeout(
+    const Duration(milliseconds: 500),
+    onTimeout: () {},
+  );
 }
 
 Future<I2iRequestBatch?> _defaultI2iBatchPreparer({
