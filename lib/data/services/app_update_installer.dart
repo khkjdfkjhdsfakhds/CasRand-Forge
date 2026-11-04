@@ -5,6 +5,8 @@ import 'package:archive/archive_io.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:nai_casrand/data/services/app_update_service.dart';
+import 'package:nai_casrand/data/services/app_update_abi_stub.dart'
+    if (dart.library.ffi) 'package:nai_casrand/data/services/app_update_abi_native.dart';
 import 'package:path_provider/path_provider.dart';
 
 /// How an installer finished handing the update over.
@@ -47,6 +49,7 @@ typedef UpdateProcessStarter = Future<Process> Function(
 class AppUpdateInstaller {
   AppUpdateInstaller({
     TargetPlatform? platform,
+    bool? windowsArm64,
     String? resolvedExecutable,
     int? currentPid,
     UpdateProcessRunner? runProcess,
@@ -54,6 +57,7 @@ class AppUpdateInstaller {
     Future<Directory> Function()? temporaryDirectory,
     MethodChannel? androidChannel,
   })  : _platform = platform ?? (kIsWeb ? null : defaultTargetPlatform),
+        _windowsArm64 = windowsArm64 ?? isWindowsArm64,
         _resolvedExecutable = resolvedExecutable,
         _currentPid = currentPid,
         _runProcess = runProcess ?? Process.run,
@@ -67,6 +71,7 @@ class AppUpdateInstaller {
       MethodChannel('io.github.khkjdfkjhdsfakhds.casrandforge/app_update');
 
   final TargetPlatform? _platform;
+  final bool _windowsArm64;
   final String? _resolvedExecutable;
   final int? _currentPid;
   final UpdateProcessRunner _runProcess;
@@ -80,7 +85,9 @@ class AppUpdateInstaller {
   /// Package this platform installs in place, or null to use the release page.
   UpdatePackageKind? get packageKind => switch (_platform) {
         TargetPlatform.macOS => UpdatePackageKind.macosDmg,
-        TargetPlatform.windows => UpdatePackageKind.windowsZip,
+        TargetPlatform.windows => _windowsArm64
+            ? UpdatePackageKind.windowsArm64Zip
+            : UpdatePackageKind.windowsZip,
         TargetPlatform.android => UpdatePackageKind.androidApk,
         _ => null,
       };

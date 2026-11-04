@@ -42,6 +42,7 @@ Map<String, dynamic> _releaseJson({
     'assets': [
       asset('NAI-CasRand-Forge-$tag-Android.apk'),
       asset('NAI-CasRand-Forge-$tag-macOS-universal.dmg'),
+      asset('NAI-CasRand-Forge-$tag-Z-Windows-arm64.zip'),
       asset('NAI-CasRand-Forge-$tag-Windows-x64.zip'),
       asset('SHA256SUMS.txt'),
     ],
@@ -164,6 +165,8 @@ void main() {
           endsWith('macOS-universal.dmg'));
       expect(release.assetFor(UpdatePackageKind.windowsZip)!.name,
           endsWith('Windows-x64.zip'));
+      expect(release.assetFor(UpdatePackageKind.windowsArm64Zip)!.name,
+          endsWith('Windows-arm64.zip'));
       final apk = release.assetFor(UpdatePackageKind.androidApk)!;
       expect(apk.sha256, _packageSha);
       expect(apk.size, _packageBytes.length);
@@ -177,6 +180,35 @@ void main() {
           isNull);
     });
 
+    test('never substitutes another Windows architecture when missing', () {
+      final json = _releaseJson();
+      (json['assets'] as List).removeWhere(
+          (asset) => (asset['name'] as String).contains('Windows-arm64'));
+      final release = ReleaseInfo.fromGitHubJson(json)!;
+      expect(release.assetFor(UpdatePackageKind.windowsArm64Zip), isNull);
+      expect(release.assetFor(UpdatePackageKind.windowsZip), isNotNull);
+      (json['assets'] as List).removeWhere(
+          (asset) => (asset['name'] as String).contains('Windows-x64'));
+      expect(
+          ReleaseInfo.fromGitHubJson(json)!
+              .assetFor(UpdatePackageKind.windowsZip),
+          isNull);
+    });
+
+    test('name-sorted assets keep x64 as the first Windows zip', () {
+      // GitHub lists assets by name; v1.02/v1.03 clients take the first
+      // `.zip` whose name contains "windows".
+      final names = ReleaseInfo.fromTag('v1.04')!
+          .assets
+          .map((asset) => asset.name)
+          .toList()
+        ..sort();
+      final firstWindowsZip = names.firstWhere((name) =>
+          name.toLowerCase().endsWith('.zip') &&
+          name.toLowerCase().contains('windows'));
+      expect(firstWindowsZip, endsWith('-Windows-x64.zip'));
+    });
+
     test('builds conventional asset URLs from a tag', () {
       final release = ReleaseInfo.fromTag('v1.02')!;
       expect(
@@ -185,6 +217,14 @@ void main() {
         'NAI-CasRand-Forge-v1.02-macOS-universal.dmg',
       );
       expect(release.notes, isEmpty);
+      expect(
+        release
+            .assetFor(UpdatePackageKind.windowsArm64Zip)!
+            .downloadUrl
+            .toString(),
+        'https://github.com/$appUpdateRepository/releases/download/v1.02/'
+        'NAI-CasRand-Forge-v1.02-Z-Windows-arm64.zip',
+      );
     });
 
     test('parses sha256sum files', () {
@@ -460,8 +500,16 @@ void main() {
     test('only desktop and Android platforms install in place', () {
       expect(AppUpdateInstaller(platform: TargetPlatform.macOS).packageKind,
           UpdatePackageKind.macosDmg);
-      expect(AppUpdateInstaller(platform: TargetPlatform.windows).packageKind,
+      expect(
+          AppUpdateInstaller(
+                  platform: TargetPlatform.windows, windowsArm64: false)
+              .packageKind,
           UpdatePackageKind.windowsZip);
+      expect(
+          AppUpdateInstaller(
+                  platform: TargetPlatform.windows, windowsArm64: true)
+              .packageKind,
+          UpdatePackageKind.windowsArm64Zip);
       expect(AppUpdateInstaller(platform: TargetPlatform.android).packageKind,
           UpdatePackageKind.androidApk);
       expect(

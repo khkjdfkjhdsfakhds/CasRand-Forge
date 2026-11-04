@@ -91,7 +91,7 @@ class AppVersion implements Comparable<AppVersion> {
 }
 
 /// Platform package that an in-app update can install.
-enum UpdatePackageKind { macosDmg, windowsZip, androidApk }
+enum UpdatePackageKind { macosDmg, windowsZip, windowsArm64Zip, androidApk }
 
 class ReleaseAsset {
   const ReleaseAsset({
@@ -151,8 +151,9 @@ class ReleaseInfo {
       final name = asset.name.toLowerCase();
       return switch (kind) {
         UpdatePackageKind.macosDmg => name.endsWith('.dmg'),
-        UpdatePackageKind.windowsZip =>
-          name.endsWith('.zip') && name.contains('windows'),
+        UpdatePackageKind.windowsZip => name.endsWith('-windows-x64.zip'),
+        UpdatePackageKind.windowsArm64Zip =>
+          name.endsWith('-windows-arm64.zip'),
         UpdatePackageKind.androidApk => name.endsWith('.apk'),
       };
     }
@@ -223,6 +224,7 @@ class ReleaseInfo {
       assets: [
         asset('NAI-CasRand-Forge-$tag-macOS-universal.dmg'),
         asset('NAI-CasRand-Forge-$tag-Windows-x64.zip'),
+        asset('NAI-CasRand-Forge-$tag-Z-Windows-arm64.zip'),
         asset('NAI-CasRand-Forge-$tag-Android.apk'),
         asset('SHA256SUMS.txt'),
       ],

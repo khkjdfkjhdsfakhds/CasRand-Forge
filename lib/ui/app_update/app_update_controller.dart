@@ -133,7 +133,8 @@ class AppUpdateController extends ChangeNotifier {
 
   bool get restartIsAutomatic =>
       installer.packageKind == UpdatePackageKind.macosDmg ||
-      installer.packageKind == UpdatePackageKind.windowsZip;
+      installer.packageKind == UpdatePackageKind.windowsZip ||
+      installer.packageKind == UpdatePackageKind.windowsArm64Zip;
 
   void setAutoCheckEnabled(bool value) {
     preferences.autoCheck = value;
