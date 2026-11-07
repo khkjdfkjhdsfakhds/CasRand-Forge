@@ -554,8 +554,19 @@ void main() {
       ..parallelApiEnabled = true;
     final imported = PayloadConfig.fromJson(legacyConfigJson('imported'));
     imported.settings.themeMode = 'light';
+    imported.settings.proxy = '127.0.0.1:7897';
+    local.settings.proxy = '10.0.0.2:1080';
+    expect(imported.toShareableJson()['settings'], isNot(contains('proxy')));
 
-    local.loadShareableJson(imported.toShareableJson());
+    final olderExport = imported.toJson();
+    (olderExport['settings'] as Map<String, dynamic>)
+      ..remove('api_key')
+      ..remove('api_tokens');
+
+    local.loadShareableJson(olderExport);
+
+    expect(local.settings.proxy, '10.0.0.2:1080',
+        reason: 'Older exports still carry the source device proxy');
 
     expect(local.settings.themeMode, 'light');
     expect(local.settings.apiKey, 'pst-local-primary');

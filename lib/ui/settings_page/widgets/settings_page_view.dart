@@ -365,7 +365,9 @@ class _SettingsPageViewState extends State<SettingsPageView> {
   }
 
   Widget _buildOutputSelectionTile() {
-    if (kIsWeb || Platform.isAndroid) return const SizedBox.shrink();
+    if (kIsWeb || Platform.isAndroid || Platform.isIOS) {
+      return const SizedBox.shrink();
+    }
     final outputDirPath = viewmodel.settings.outputFolderPath == ''
         ? '<${tr('system_document_folder')}>${Platform.pathSeparator}'
             'nai-generated'
@@ -545,7 +547,7 @@ class _ApiProxySettingsDialogState extends State<_ApiProxySettingsDialog> {
   late final TextEditingController _apiController;
   late bool _useTakomaApi;
   late final TextEditingController _proxyController;
-  bool _obscureToken = true;
+  bool _obscureToken = false;
   bool _detecting = false;
   String? _detectionMessage;
   bool _detectionSucceeded = false;
@@ -592,10 +594,14 @@ class _ApiProxySettingsDialogState extends State<_ApiProxySettingsDialog> {
   Future<void> _openTokenManager() async {
     // Parent fields stay a draft until Confirm. Changes explicitly made in
     // the account manager are independent and must survive parent Cancel.
+    final primaryBefore = widget.viewmodel.settings.apiKey;
     await Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const TokenManagerPageView()),
     );
     if (!mounted) return;
+    // Confirm would otherwise write the old draft over a token edited there.
+    final primaryAfter = widget.viewmodel.settings.apiKey;
+    if (primaryAfter != primaryBefore) _apiController.text = primaryAfter;
     widget.viewmodel.refresh();
     setState(() {});
   }

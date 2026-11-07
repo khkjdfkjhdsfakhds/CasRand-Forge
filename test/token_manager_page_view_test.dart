@@ -160,4 +160,36 @@ void main() {
     expect(tester.getSize(concurrencyFrame).width, lessThan(220));
     viewmodel.dispose();
   });
+
+  testWidgets('tokens are shown in full and editable from the list',
+      (tester) async {
+    final viewmodel = TokenManagerViewmodel(
+      accountService: _NoopAccountService(),
+    );
+    await tester.pumpWidget(
+      MaterialApp(home: TokenManagerPageView(viewmodel: viewmodel)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('pst-secondary-account-token'), findsOneWidget);
+
+    await tester.tap(find.text('pst-secondary-account-token'));
+    await tester.pumpAndSettle();
+    final field = tester.widget<TextField>(
+      find.byKey(const Key('token-manager-edit-token')),
+    );
+    expect(field.obscureText, isFalse);
+    expect(field.controller!.text, 'pst-secondary-account-token');
+
+    await tester.enterText(
+      find.byKey(const Key('token-manager-edit-token')),
+      'pst-replaced-token',
+    );
+    await tester.tap(find.byKey(const Key('token-manager-edit-confirm')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('pst-replaced-token'), findsOneWidget);
+    expect(find.byType(AlertDialog), findsNothing);
+    viewmodel.dispose();
+  });
 }

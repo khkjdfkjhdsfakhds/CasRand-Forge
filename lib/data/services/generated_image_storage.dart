@@ -83,7 +83,8 @@ class GeneratedImageArtifact extends ChangeNotifier {
 
   bool get isDurablySaved =>
       _permanentFiles.isNotEmpty ||
-      _saveDestination == GeneratedImageSaveDestination.androidGallery;
+      _saveDestination == GeneratedImageSaveDestination.androidGallery ||
+      _saveDestination == GeneratedImageSaveDestination.iosPhotos;
 
   bool get isTerminal => _isTerminalStatus(_status);
 

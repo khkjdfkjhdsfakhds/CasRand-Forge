@@ -1,0 +1,54 @@
+name: Build iOS (Manual Only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios:
+    runs-on: macos-15
+    env:
+      ASSET_NAME: NAI-CasRand-Forge-v1.05-iOS-unsigned.ipa
+      APP_PATH: build/ios/iphoneos/Runner.app
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.6
+          cache: true
+
+      - name: Resolve locked dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Build iOS release without signing
+        run: flutter build ios --release --no-codesign
+
+      - name: Validate iOS app
+        run: |
+          test -d "$APP_PATH"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Info.plist")" = "1.0.5"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Info.plist")" = "167"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")" = "io.github.khkjdfkjhdsfakhds.casrandforge.beta"
+          grep -qw arm64 <<<"$(lipo -archs "$APP_PATH/Runner")"
+
+      - name: Package unsigned IPA
+        run: |
+          STAGING="$RUNNER_TEMP/casrand-forge-ipa"
+          mkdir -p "$STAGING/Payload"
+          ditto "$APP_PATH" "$STAGING/Payload/Runner.app"
+          (cd "$STAGING" && ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/$ASSET_NAME")
+
+      - name: Upload iOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-stable
+          path: ${{ env.ASSET_NAME }}
+          if-no-files-found: error
+          retention-days: 14

@@ -491,20 +491,25 @@ class PayloadConfig extends ChangeNotifier {
       json['settings'] as Map<String, dynamic>? ?? const {},
     )
       ..remove('api_key')
-      ..remove('api_tokens');
+      ..remove('api_tokens')
+      // A proxy address only works on the device it was set up on.
+      ..remove('proxy');
     json['settings'] = settingsJson;
     return json;
   }
 
   /// Loads a credential-free shared configuration without replacing this
-  /// device's primary or additional NovelAI tokens.
+  /// device's primary or additional NovelAI tokens or its proxy. Older exports
+  /// still carry the proxy of the device they came from.
   void loadShareableJson(Map<String, dynamic> jsonData) {
     final primary = settings.apiKey;
     final tokens = settings.apiTokens
         .map((entry) => ApiTokenConfig.fromJson(entry.toJson()))
         .toList(growable: false);
     final parallel = settings.parallelApiEnabled;
+    final proxy = settings.proxy;
     loadJson(jsonData);
+    settings.proxy = proxy;
     settings.updatePrimaryApiKey(primary);
     settings.apiTokens
       ..clear()

@@ -15,6 +15,7 @@ import 'package:saver_gallery/saver_gallery.dart';
 enum GeneratedImageSaveDestination {
   fileSystem,
   androidGallery,
+  iosPhotos,
   webDownload,
 }
 
@@ -124,19 +125,55 @@ class PlatformAndroidGalleryWriter implements AndroidGalleryWriter {
   }
 }
 
+abstract interface class IosPhotoLibraryWriter {
+  /// Adds the image's original bytes to Photos, or throws if it was not saved.
+  Future<void> saveImage(Uint8List bytes, {required String name});
+}
+
+class PlatformIosPhotoLibraryWriter implements IosPhotoLibraryWriter {
+  static const MethodChannel _channel =
+      MethodChannel('io.github.khkjdfkjhdsfakhds.casrandforge/photo_library');
+
+  @override
+  Future<void> saveImage(Uint8List bytes, {required String name}) async {
+    // Handing Photos the file itself keeps PNG/WebP metadata byte for byte.
+    final dot = name.lastIndexOf('.');
+    final extension = dot < 0 ? '' : name.substring(dot);
+    final temporary = File(
+      '${(await getTemporaryDirectory()).path}${Platform.pathSeparator}'
+      'photos-${DateTime.now().microsecondsSinceEpoch}$extension',
+    );
+    await temporary.writeAsBytes(bytes, flush: true);
+    try {
+      await _channel.invokeMethod<void>('saveImage', {
+        'path': temporary.path,
+        'name': name,
+      });
+    } finally {
+      try {
+        await temporary.delete();
+      } catch (_) {}
+    }
+  }
+}
+
 class FileService {
   static final Set<String> _reservedImagePaths = {};
   static int _imageTemporarySequence = 0;
   FileService({
     AndroidGalleryWriter? androidGalleryWriter,
+    IosPhotoLibraryWriter? iosPhotoLibraryWriter,
     TargetPlatform? targetPlatform,
     bool? isWeb,
   })  : _androidGalleryWriter =
             androidGalleryWriter ?? PlatformAndroidGalleryWriter(),
+        _iosPhotoLibraryWriter =
+            iosPhotoLibraryWriter ?? PlatformIosPhotoLibraryWriter(),
         _targetPlatform = targetPlatform,
         _isWeb = isWeb;
 
   final AndroidGalleryWriter _androidGalleryWriter;
+  final IosPhotoLibraryWriter _iosPhotoLibraryWriter;
   final TargetPlatform? _targetPlatform;
   final bool? _isWeb;
 
@@ -171,6 +208,11 @@ class FileService {
     if (_platform == TargetPlatform.android) {
       return const GeneratedImageSaveResult(
         destination: GeneratedImageSaveDestination.androidGallery,
+      );
+    }
+    if (_platform == TargetPlatform.iOS) {
+      return const GeneratedImageSaveResult(
+        destination: GeneratedImageSaveDestination.iosPhotos,
       );
     }
     throw StateError('Generated image was not published to durable storage.');
@@ -224,6 +266,9 @@ class FileService {
           result.errorMessage ?? 'Android gallery rejected the image.',
         );
       }
+      return null;
+    } else if (_platform == TargetPlatform.iOS) {
+      await _iosPhotoLibraryWriter.saveImage(bytes, name: fileName);
       return null;
     }
     return null;
@@ -295,7 +340,7 @@ class FileService {
       if (path == null) return;
       final file = File(path);
       await file.writeAsBytes(utf8.encode(content));
-    } else if (Platform.isAndroid) {
+    } else if (Platform.isAndroid || Platform.isIOS) {
       await FilePicker.platform.saveFile(
         fileName: fileName,
         bytes: utf8.encode(content),

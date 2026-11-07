@@ -51,6 +51,40 @@ class TokenManagerViewmodel extends ChangeNotifier {
     return true;
   }
 
+  /// Replaces an account's label and token, keeping its other settings.
+  /// Returns false when the token is empty or belongs to another account.
+  bool updateToken(int index, String label, String token) {
+    if (index < 0 || index >= tokens.length) return false;
+    final trimmedToken = token.trim();
+    if (trimmedToken.isEmpty) return false;
+    final entry = tokens[index];
+    final previousToken = entry.token;
+    final tokenChanged = trimmedToken != previousToken;
+    if (tokenChanged &&
+        tokens.any((other) =>
+            !identical(other, entry) && other.token == trimmedToken)) {
+      return false;
+    }
+    if (label.trim().isNotEmpty) entry.label = label.trim();
+    if (!tokenChanged) {
+      _persist();
+      return true;
+    }
+    if (entry.isPrimary) {
+      payloadConfig.settings.updatePrimaryApiKey(trimmedToken);
+    } else {
+      entry.token = trimmedToken;
+    }
+    balances.remove(previousToken);
+    subscriptions.remove(previousToken);
+    _loadingTokens.remove(previousToken);
+    _refreshRevisions.remove(previousToken);
+    _accountService.invalidate(token: previousToken);
+    _persist();
+    refreshBalance(trimmedToken);
+    return true;
+  }
+
   void removeTokenAt(int index) {
     if (index < 0 || index >= tokens.length) return;
     if (tokens[index].isPrimary) return;
@@ -124,13 +158,6 @@ class TokenManagerViewmodel extends ChangeNotifier {
     if (newIndex < 0 || newIndex >= tokens.length) return;
     final entry = tokens.removeAt(oldIndex);
     tokens.insert(newIndex, entry);
-    _persist();
-  }
-
-  void renameToken(int index, String label) {
-    if (index < 0 || index >= tokens.length) return;
-    if (label.trim().isEmpty) return;
-    tokens[index].label = label.trim();
     _persist();
   }
 

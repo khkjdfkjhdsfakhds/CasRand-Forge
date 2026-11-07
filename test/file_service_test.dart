@@ -3,6 +3,22 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nai_casrand/data/services/file_service.dart';
 
+class _FakeIosPhotoLibraryWriter implements IosPhotoLibraryWriter {
+  _FakeIosPhotoLibraryWriter({this.failure});
+
+  final Object? failure;
+  Uint8List? savedBytes;
+  String? savedName;
+
+  @override
+  Future<void> saveImage(Uint8List bytes, {required String name}) async {
+    final error = failure;
+    if (error != null) throw error;
+    savedBytes = bytes;
+    savedName = name;
+  }
+}
+
 class _FakeAndroidGalleryWriter implements AndroidGalleryWriter {
   _FakeAndroidGalleryWriter({
     required this.permissionGranted,
@@ -117,6 +133,38 @@ void main() {
 
     expect(result.destination, GeneratedImageSaveDestination.androidGallery);
     expect(result.path, isNull);
+  });
+
+  test('iOS publishes the original bytes to Photos as a durable save',
+      () async {
+    final photos = _FakeIosPhotoLibraryWriter();
+    final service = FileService(
+      targetPlatform: TargetPlatform.iOS,
+      isWeb: false,
+      iosPhotoLibraryWriter: photos,
+    );
+    final bytes = Uint8List.fromList([1, 2, 3]);
+
+    final result = await service.saveGeneratedImage(bytes, 'saved.webp', '');
+
+    expect(result.destination, GeneratedImageSaveDestination.iosPhotos);
+    expect(result.path, isNull);
+    expect(photos.savedName, 'saved.webp');
+    expect(photos.savedBytes, bytes);
+  });
+
+  test('iOS Photos refusal is a failed durable save', () async {
+    final service = FileService(
+      targetPlatform: TargetPlatform.iOS,
+      isWeb: false,
+      iosPhotoLibraryWriter:
+          _FakeIosPhotoLibraryWriter(failure: StateError('x')),
+    );
+
+    await expectLater(
+      service.saveGeneratedImage(Uint8List(0), 'saved.png', ''),
+      throwsStateError,
+    );
   });
 
   test('legacy Android requests storage permission but modern Android does not',

@@ -242,6 +242,42 @@ void main() {
     expect(saveBox.get('savedUuid'), selectedUuid);
   });
 
+  test('saved configs leave the proxy with the device', () async {
+    final config = json.decode(
+      await rootBundle.loadString('assets/json/example.json'),
+    ) as Map<String, dynamic>;
+    final current = json.decode(json.encode(config)) as Map<String, dynamic>;
+    (current['settings'] as Map<String, dynamic>)['proxy'] = '127.0.0.1:7897';
+    final fromOtherDevice =
+        json.decode(json.encode(config)) as Map<String, dynamic>;
+    (fromOtherDevice['settings'] as Map<String, dynamic>)['proxy'] =
+        '10.0.0.2:1080';
+    final outgoingUuid = configService.currentUuid;
+
+    final importedUuid = await configService.saveImportedConfig(
+      fromOtherDevice,
+      title: 'Imported',
+    );
+    await configService.flush();
+    Map<String, dynamic> stored(String uuid) =>
+        (json.decode(saveBox.get('savedConfig-$uuid') as String)
+            as Map<String, dynamic>)['settings'] as Map<String, dynamic>;
+    expect(stored(importedUuid), isNot(contains('proxy')));
+
+    final selected = await configService.selectConfig(
+      importedUuid,
+      currentConfig: current,
+    );
+    await configService.flush();
+
+    expect((selected['settings'] as Map<String, dynamic>)['proxy'],
+        '127.0.0.1:7897');
+    expect(stored(importedUuid)['proxy'], '127.0.0.1:7897',
+        reason:
+            'The current entry must survive a restart before the next save');
+    expect(stored(outgoingUuid), isNot(contains('proxy')));
+  });
+
   test('startup bypasses a damaged current entry and keeps a healthy save',
       () async {
     final healthyConfig = json.decode(

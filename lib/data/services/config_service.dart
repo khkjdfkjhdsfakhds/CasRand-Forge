@@ -276,13 +276,29 @@ class ConfigService {
   /// Makes [uuid] the durable current selection. When [currentConfig] is
   /// supplied, the outgoing configuration and the new selection are committed
   /// together from the caller's perspective.
+  /// The proxy belongs to this device, not to a configuration: only the current
+  /// entry stores it, so it is needed again after a restart.
+  static Map<String, dynamic> _withoutProxy(Map<String, dynamic> jsonData) {
+    final settings = jsonData['settings'];
+    if (settings is! Map<String, dynamic>) return jsonData;
+    return {
+      ...jsonData,
+      'settings': Map<String, dynamic>.from(settings)..remove('proxy'),
+    };
+  }
+
   Future<Map<String, dynamic>> selectConfig(
     String uuid, {
     Map<String, dynamic>? currentConfig,
   }) {
     final outgoingUuid = currentUuid;
-    final outgoingSnapshot =
-        currentConfig == null ? null : json.encode(currentConfig);
+    final outgoingSnapshot = currentConfig == null
+        ? null
+        : json.encode(_withoutProxy(currentConfig));
+    final currentSettings = currentConfig?['settings'];
+    final deviceProxy = currentSettings is Map<String, dynamic>
+        ? currentSettings['proxy']
+        : null;
     return _enqueue(() async {
       final selectedJson = saveBox.get('savedConfig-$uuid');
       if (selectedJson is! String) {
@@ -292,6 +308,11 @@ class ConfigService {
       validateConfigJson(selected);
       final updated = _copyIndex();
       final writes = <String, dynamic>{'savedUuid': uuid};
+      final selectedSettings = selected['settings'];
+      if (deviceProxy != null && selectedSettings is Map<String, dynamic>) {
+        selectedSettings['proxy'] = deviceProxy;
+        writes['savedConfig-$uuid'] = json.encode(selected);
+      }
       if (outgoingSnapshot != null) {
         writes['savedConfig-$outgoingUuid'] = outgoingSnapshot;
         final outgoingInfo = updated[outgoingUuid];
@@ -355,7 +376,8 @@ class ConfigService {
     bool makeCurrent = false,
   }) {
     final uuid = const Uuid().v4();
-    final snapshot = json.encode(jsonData);
+    final snapshot =
+        json.encode(makeCurrent ? jsonData : _withoutProxy(jsonData));
     return _enqueue(() async {
       final updated = _copyIndex()
         ..[uuid] = SavedConfigInfo(

@@ -129,6 +129,55 @@ void main() {
     expect(configService.saveCount, 1);
   });
 
+  test('editing an account replaces its token and keeps its other settings',
+      () async {
+    final viewmodel = TokenManagerViewmodel(accountService: accountService);
+    final settings = GetIt.I<PayloadConfig>().settings;
+    viewmodel.addToken('second', 'pst-second');
+    final index =
+        viewmodel.tokens.indexWhere((entry) => entry.token == 'pst-second');
+    viewmodel.setTokenConcurrency(index, 3);
+
+    expect(viewmodel.updateToken(index, 'renamed', ' pst-replaced '), isTrue);
+
+    final edited = viewmodel.tokens[index];
+    expect(edited.label, 'renamed');
+    expect(edited.token, 'pst-replaced');
+    expect(edited.concurrency, 3);
+    expect(settings.apiTokens.any((e) => e.token == 'pst-second'), isFalse);
+  });
+
+  test('editing the primary account updates the main API token', () async {
+    final viewmodel = TokenManagerViewmodel(accountService: accountService);
+    final settings = GetIt.I<PayloadConfig>().settings;
+    final index = viewmodel.tokens.indexWhere((entry) => entry.isPrimary);
+
+    expect(viewmodel.updateToken(index, 'main', 'pst-new-main'), isTrue);
+
+    expect(settings.apiKey, 'pst-new-main');
+    final primary = viewmodel.tokens.singleWhere((entry) => entry.isPrimary);
+    expect(primary.token, 'pst-new-main');
+    expect(primary.label, 'main');
+  });
+
+  test('editing rejects an empty token or one used by another account',
+      () async {
+    final viewmodel = TokenManagerViewmodel(accountService: accountService);
+    viewmodel.addToken('second', 'pst-second');
+    final primaryIndex =
+        viewmodel.tokens.indexWhere((entry) => entry.isPrimary);
+    final primaryToken = viewmodel.tokens[primaryIndex].token;
+    final index =
+        viewmodel.tokens.indexWhere((entry) => entry.token == 'pst-second');
+
+    expect(viewmodel.updateToken(index, 'x', '  '), isFalse);
+    expect(viewmodel.updateToken(index, 'x', primaryToken), isFalse);
+    expect(viewmodel.tokens[index].token, 'pst-second');
+    expect(viewmodel.tokens[index].label, 'second');
+    expect(viewmodel.updateToken(index, 'y', 'pst-second'), isTrue);
+    expect(viewmodel.tokens[index].label, 'y');
+  });
+
   test('at most six accounts can be enabled and a freed slot can be reused',
       () async {
     final viewmodel = TokenManagerViewmodel(accountService: accountService);

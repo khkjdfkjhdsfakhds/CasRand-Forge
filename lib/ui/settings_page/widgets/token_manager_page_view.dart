@@ -144,9 +144,8 @@ class _TokenManagerPageViewState extends State<TokenManagerPageView> {
                           subtitle: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                '${entry.maskedToken} · ${_balanceText(entry.token)}',
-                              ),
+                              Text(entry.token),
+                              Text(_balanceText(entry.token)),
                               Text(_usageText(entry.token)),
                               Text(_expirationText(entry.token)),
                               Padding(
@@ -286,7 +285,7 @@ class _TokenManagerPageViewState extends State<TokenManagerPageView> {
                                 ),
                             ],
                           ),
-                          onTap: () => _showRenameDialog(context, index),
+                          onTap: () => _showEditDialog(context, index),
                           trailing: compact ? null : actions,
                         );
                       },
@@ -388,7 +387,7 @@ class _TokenManagerPageViewState extends State<TokenManagerPageView> {
   void _showAddTokenDialog(BuildContext context) {
     final labelController = TextEditingController();
     final tokenController = TextEditingController();
-    var obscure = true;
+    var obscure = false;
     String? tokenError;
     showDialog<void>(
       context: context,
@@ -457,27 +456,70 @@ class _TokenManagerPageViewState extends State<TokenManagerPageView> {
     );
   }
 
-  void _showRenameDialog(BuildContext context, int index) {
-    final controller =
-        TextEditingController(text: viewmodel.tokens[index].label);
+  void _showEditDialog(BuildContext context, int index) {
+    final entry = viewmodel.tokens[index];
+    final labelController = TextEditingController(text: entry.label);
+    final tokenController = TextEditingController(text: entry.token);
+    String? tokenError;
     showDialog<void>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(tr('api_token_label')),
-        content: TextField(controller: controller, autofocus: true),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: Text(tr('cancel')),
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: Text(tr('api_token_edit')),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                key: const Key('token-manager-edit-label'),
+                controller: labelController,
+                decoration: InputDecoration(
+                  labelText: tr('api_token_label'),
+                ),
+              ),
+              TextField(
+                key: const Key('token-manager-edit-token'),
+                controller: tokenController,
+                minLines: 1,
+                maxLines: 4,
+                onChanged: (_) {
+                  if (tokenError != null) {
+                    setDialogState(() => tokenError = null);
+                  }
+                },
+                decoration: InputDecoration(
+                  labelText: tr('api_token_value'),
+                  errorText: tokenError,
+                ),
+              ),
+            ],
           ),
-          TextButton(
-            onPressed: () {
-              viewmodel.renameToken(index, controller.text);
-              Navigator.of(dialogContext).pop();
-            },
-            child: Text(tr('confirm')),
-          ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: Text(tr('cancel')),
+            ),
+            TextButton(
+              key: const Key('token-manager-edit-confirm'),
+              onPressed: () {
+                final saved = viewmodel.updateToken(
+                  index,
+                  labelController.text,
+                  tokenController.text,
+                );
+                if (saved) {
+                  Navigator.of(dialogContext).pop();
+                } else {
+                  setDialogState(() => tokenError = tr(
+                        tokenController.text.trim().isEmpty
+                            ? 'api_token_empty_error'
+                            : 'api_token_duplicate',
+                      ));
+                }
+              },
+              child: Text(tr('confirm')),
+            ),
+          ],
+        ),
       ),
     );
   }
