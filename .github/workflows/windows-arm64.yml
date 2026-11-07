@@ -38,6 +38,10 @@ jobs:
 
       - name: Build and validate Windows ARM64 release
         shell: powershell
+        env:
+          # This runner has Visual Studio 2026, which rejects the coroutine
+          # headers that plugin C++/WinRT code still includes.
+          CL: /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
         run: .\tool\build_windows_arm64.ps1 -OutputDirectory artifacts
 
       - name: Launch the packaged app
