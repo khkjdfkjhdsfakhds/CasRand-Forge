@@ -1,0 +1,61 @@
+name: Build Windows ARM64 (Manual Only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-arm64:
+    runs-on: windows-11-arm
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      # The script needs the native ARM64 SDK, which Flutter builds on first run.
+      - name: Set up native ARM64 Flutter
+        shell: powershell
+        run: |
+          git clone --depth 1 -b 3.44.6 https://github.com/flutter/flutter.git C:\flutter
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Add-Content $env:GITHUB_PATH "C:\flutter\bin"
+          $env:Path = "C:\flutter\bin;$env:Path"
+          flutter --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          flutter config --enable-windows-desktop
+
+      - name: Set up Rust
+        shell: powershell
+        run: |
+          if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+            Invoke-WebRequest https://win.rustup.rs/aarch64 -OutFile rustup-init.exe
+            .\rustup-init.exe -y --default-toolchain stable
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            Add-Content $env:GITHUB_PATH "$env:USERPROFILE\.cargo\bin"
+          }
+
+      - name: Build and validate Windows ARM64 release
+        shell: powershell
+        run: .\tool\build_windows_arm64.ps1 -OutputDirectory artifacts
+
+      - name: Launch the packaged app
+        shell: powershell
+        run: |
+          $zip = Get-ChildItem artifacts\*.zip | Select-Object -First 1
+          $dir = Join-Path $env:RUNNER_TEMP 'casrand-arm64'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          tar.exe -x -f $zip.FullName -C $dir
+          $process = Start-Process (Join-Path $dir 'NAICasRandForge.exe') -PassThru
+          Start-Sleep -Seconds 20
+          if ($process.HasExited) { throw "App exited with code $($process.ExitCode)" }
+          Stop-Process -Id $process.Id -Force
+
+      - name: Upload Windows ARM64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-arm64-stable
+          path: artifacts/*.zip
+          if-no-files-found: error
+          retention-days: 14
