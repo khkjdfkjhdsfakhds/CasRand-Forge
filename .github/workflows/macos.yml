@@ -39,8 +39,8 @@ jobs:
       - name: Validate macOS app
         run: |
           test -d "$APP_PATH"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")" = "1.0.5"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Contents/Info.plist")" = "167"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")" = "1.0.6"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Contents/Info.plist")" = "168"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Contents/Info.plist")" = "io.github.khkjdfkjhdsfakhds.casrandforge.beta"
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
           MAIN_ARCHS="$(lipo -archs "$APP_PATH/Contents/MacOS/NAI CasRand Forge")"

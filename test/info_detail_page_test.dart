@@ -829,4 +829,173 @@ void main() {
     // It is its own destination, not a section of the Img2Img page.
     expect(navigation.requestedDestination.value, AppDestination.directorTools);
   });
+  group('prompt search', () {
+    Future<void> pressFind(WidgetTester tester,
+        {LogicalKeyboardKey modifier = LogicalKeyboardKey.metaLeft}) async {
+      await tester.sendKeyDownEvent(modifier);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
+      await tester.sendKeyUpEvent(modifier);
+      await tester.pumpAndSettle();
+    }
+
+    /// Highlighted match spans across all prompt cards.
+    int highlightedSpanCount(WidgetTester tester) {
+      var count = 0;
+      for (final widget
+          in tester.widgetList<SelectableText>(find.byType(SelectableText))) {
+        widget.textSpan?.visitChildren((span) {
+          if (span is TextSpan && span.style?.backgroundColor != null) {
+            count++;
+          }
+          return true;
+        });
+      }
+      return count;
+    }
+
+    String matchCount(WidgetTester tester) => tester
+        .widget<Text>(find.byKey(const Key('prompt-search-match-count')))
+        .data!;
+
+    testWidgets('Cmd+F finds across prompt cards without replace', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(localizedApp(
+        InfoDetailPage.gallery(
+          contents: [
+            buildContent(bytes: solidPng(64, 96)),
+            buildContent(bytes: solidPng(64, 96)),
+          ],
+          initialIndex: 0,
+        ),
+      ));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('prompt-search-replace-bar')), findsNothing);
+
+      await pressFind(tester);
+      expect(
+          find.byKey(const Key('prompt-search-replace-bar')), findsOneWidget);
+      expect(
+          find.byKey(const Key('prompt-search-toggle-replace')), findsNothing);
+      expect(find.byKey(const Key('prompt-replace-field')), findsNothing);
+
+      await tester.enterText(
+          find.byKey(const Key('detail-search-field')), 'SUNSET');
+      await tester.pumpAndSettle();
+      // One match in the prompt blocks, one in the final prompt.
+      expect(matchCount(tester), '1/2');
+      expect(highlightedSpanCount(tester), 2);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(matchCount(tester), '2/2');
+      await tester.tap(find.byKey(const Key('prompt-search-next')));
+      await tester.pumpAndSettle();
+      expect(matchCount(tester), '1/2');
+      await tester.tap(find.byKey(const Key('prompt-search-prev')));
+      await tester.pumpAndSettle();
+      expect(matchCount(tester), '2/2');
+
+      // Arrow keys stay in the search field instead of switching images.
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pumpAndSettle();
+      expect(find.text('1 / 2'), findsOneWidget);
+
+      await tester.enterText(
+          find.byKey(const Key('detail-search-field')), 'quality');
+      await tester.pumpAndSettle();
+      expect(matchCount(tester), '1/1');
+    });
+
+    testWidgets('Esc closes search first, then leaves the page', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(localizedApp(Builder(
+        builder: (context) => Scaffold(
+          body: TextButton(
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) =>
+                  InfoDetailPage(content: buildContent(bytes: solidPng(8, 8))),
+            )),
+            child: const Text('open detail'),
+          ),
+        ),
+      )));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('open detail'));
+      await tester.pumpAndSettle();
+
+      await pressFind(tester, modifier: LogicalKeyboardKey.controlLeft);
+      await tester.enterText(
+          find.byKey(const Key('detail-search-field')), '1girl');
+      await tester.pumpAndSettle();
+      expect(highlightedSpanCount(tester), greaterThan(0));
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('prompt-search-replace-bar')), findsNothing);
+      expect(find.byType(InfoDetailPage), findsOneWidget);
+      expect(highlightedSpanCount(tester), 0);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.byType(InfoDetailPage), findsNothing);
+      expect(find.text('open detail'), findsOneWidget);
+    });
+
+    testWidgets('search scrolls to the current match and follows the gallery',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1000, 600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final longBlocks = [
+        for (var i = 0; i < 120; i++) 'line $i: filler',
+        'needle at the end',
+      ].join('\n');
+      final first = InfoCardContent(
+        title: 'long.png',
+        info: longBlocks,
+        additionalInfo: const {'input': 'final', 'negative_prompt': 'neg'},
+        imageBytes: solidPng(64, 96),
+      );
+      final second = InfoCardContent(
+        title: 'other.png',
+        info: 'needle here, needle there',
+        additionalInfo: const {'input': 'needle', 'negative_prompt': 'neg'},
+        imageBytes: solidPng(64, 96),
+      );
+      await tester.pumpWidget(localizedApp(
+        InfoDetailPage.gallery(contents: [first, second], initialIndex: 0),
+      ));
+      await tester.pumpAndSettle();
+      final scrollable = find
+          .ancestor(
+            of: find.text('Prompt blocks'),
+            matching: find.byType(Scrollable),
+          )
+          .first;
+      expect(tester.state<ScrollableState>(scrollable).position.pixels, 0);
+
+      await pressFind(tester);
+      await tester.enterText(
+          find.byKey(const Key('detail-search-field')), 'needle');
+      await tester.pumpAndSettle();
+      expect(matchCount(tester), '1/1');
+      expect(
+        tester.state<ScrollableState>(scrollable).position.pixels,
+        greaterThan(1000),
+      );
+
+      // Switching results (here with the on-image button, since the search
+      // field owns the arrow keys) re-runs the search on the new texts.
+      await tester.tap(find.byKey(const Key('detail-gallery-next')));
+      await tester.pumpAndSettle();
+      expect(find.text('2 / 2'), findsOneWidget);
+      expect(matchCount(tester), '1/3');
+    });
+  });
 }

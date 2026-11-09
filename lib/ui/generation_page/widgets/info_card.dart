@@ -16,6 +16,8 @@ import 'package:nai_casrand/ui/generation_page/widgets/generated_image_view.dart
 import 'package:nai_casrand/ui/generation_page/widgets/result_actions.dart';
 import 'package:nai_casrand/ui/generation_page/widgets/prompt_token_usage.dart';
 import 'package:nai_casrand/ui/navigation/widgets/image_import_area.dart';
+import 'package:nai_casrand/ui/prompt_assistance/prompt_text_highlighting.dart';
+import 'package:nai_casrand/ui/prompt_config/widgets/prompt_search_replace_bar.dart';
 import 'package:flutter_command/flutter_command.dart';
 
 class InfoCard extends StatelessWidget {
@@ -424,9 +426,27 @@ class InfoDetailPage extends StatefulWidget {
   State<InfoDetailPage> createState() => _InfoDetailPageState();
 }
 
+/// Read-only search target for the detail page: the prompt cards' texts
+/// joined by [_InfoDetailPageState._segmentSeparator]. The search bar writes
+/// its matches here and each card renders the ones inside its own segment.
+class _DetailSearchController extends TextEditingController
+    with SearchHighlightable {}
+
 class _InfoDetailPageState extends State<InfoDetailPage> {
+  /// Joins the searchable cards. Typed queries cannot contain it, so a match
+  /// never spans two cards.
+  static const String _segmentSeparator = '\u0000';
+
   final FocusNode _focusNode = FocusNode();
   late int _currentIndex;
+
+  final _DetailSearchController _searchController = _DetailSearchController();
+  final GlobalKey<PromptSearchReplaceBarState> _searchBarKey = GlobalKey();
+  final Map<int, GlobalKey> _segmentKeys = {};
+  bool _searchVisible = false;
+  List<int> _segmentStarts = const [];
+  List<TextRange>? _revealedMatches;
+  int _revealedIndex = -1;
 
   InfoCardContent get content => widget.contents[_currentIndex];
   bool get _hasPrevious => _currentIndex > 0;
@@ -436,6 +456,8 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
   void initState() {
     super.initState();
     _currentIndex = widget.initialIndex.clamp(0, widget.contents.length - 1);
+    _syncSearchText();
+    _searchController.addListener(_handleSearchChanged);
   }
 
   @override
@@ -446,6 +468,132 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
       oldContents: oldWidget.contents,
       newContents: widget.contents,
     );
+    _syncSearchText();
+  }
+
+  /// Prompt texts shown as cards, in display order: prompt blocks, final
+  /// prompt, negative prompt. Indices are the cards' search segments.
+  List<String> _searchSegments(InfoCardContent content) {
+    final input = content.additionalInfo['input'];
+    final negative = content.additionalInfo['negative_prompt'];
+    return [
+      if (content.info.isNotEmpty) content.info,
+      if (input is String) input,
+      if (negative is String) negative,
+    ];
+  }
+
+  void _syncSearchText() {
+    final segments = _searchSegments(content);
+    final starts = <int>[];
+    var offset = 0;
+    for (final segment in segments) {
+      starts.add(offset);
+      offset += segment.length + _segmentSeparator.length;
+    }
+    _segmentStarts = starts;
+    final text = segments.join(_segmentSeparator);
+    if (_searchController.text != text) {
+      _searchController.value = TextEditingValue(text: text);
+      // A different result's texts: search them again from the top.
+      _searchBarKey.currentState?.restartSearch();
+    }
+  }
+
+  /// Matches inside one card, in card-local offsets, plus which of them (if
+  /// any) is the current match.
+  (List<TextRange>, int) _segmentMatches(int segment, int length) {
+    final matches = _searchController.searchMatches;
+    if (!_searchVisible ||
+        matches.isEmpty ||
+        segment >= _segmentStarts.length) {
+      return (const [], -1);
+    }
+    final start = _segmentStarts[segment];
+    final end = start + length;
+    final local = <TextRange>[];
+    var current = -1;
+    for (var i = 0; i < matches.length; i++) {
+      final match = matches[i];
+      if (match.start < start || match.end > end) continue;
+      if (i == _searchController.searchCurrentIndex) current = local.length;
+      local.add(TextRange(start: match.start - start, end: match.end - start));
+    }
+    return (local, current);
+  }
+
+  void _handleSearchChanged() {
+    final matches = _searchController.searchMatches;
+    final index = _searchController.searchCurrentIndex;
+    if (identical(matches, _revealedMatches) && index == _revealedIndex) {
+      return;
+    }
+    _revealedMatches = matches;
+    _revealedIndex = index;
+    if (index < 0 || index >= matches.length) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _revealCurrentMatch();
+    });
+  }
+
+  /// Scrolls the info panel so the current match's line is visible.
+  void _revealCurrentMatch() {
+    final matches = _searchController.searchMatches;
+    final index = _searchController.searchCurrentIndex;
+    if (index < 0 || index >= matches.length) return;
+    final match = matches[index];
+    var segment = -1;
+    for (var i = _segmentStarts.length - 1; i >= 0; i--) {
+      if (match.start >= _segmentStarts[i]) {
+        segment = i;
+        break;
+      }
+    }
+    if (segment < 0) return;
+    final targetContext = _segmentKeys[segment]?.currentContext;
+    final box = targetContext?.findRenderObject();
+    if (targetContext == null || box is! RenderBox || !box.hasSize) return;
+    final segments = _searchSegments(content);
+    if (segment >= segments.length) return;
+    final localStart = match.start - _segmentStarts[segment];
+    final localEnd = match.end - _segmentStarts[segment];
+    final painter = TextPainter(
+      text: TextSpan(
+        text: segments[segment],
+        style: DefaultTextStyle.of(targetContext)
+            .style
+            .merge(Theme.of(targetContext).textTheme.bodyMedium),
+      ),
+      textDirection: Directionality.of(targetContext),
+      textScaler: MediaQuery.textScalerOf(targetContext),
+    )..layout(maxWidth: box.size.width);
+    final boxes = painter.getBoxesForSelection(
+      TextSelection(baseOffset: localStart, extentOffset: localEnd),
+    );
+    painter.dispose();
+    final rect = boxes.isEmpty
+        ? Offset.zero & box.size
+        : boxes.first.toRect().inflate(32);
+    box.showOnScreen(
+      rect: rect,
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOut,
+    );
+  }
+
+  void _openSearch() {
+    if (_searchVisible) {
+      _searchBarKey.currentState?.searchFocusNode.requestFocus();
+      return;
+    }
+    setState(() => _searchVisible = true);
+  }
+
+  void _closeSearch() {
+    if (!_searchVisible) return;
+    setState(() => _searchVisible = false);
+    _searchController.clearSearchHighlights();
+    _focusNode.requestFocus();
   }
 
   /// Keeps the gallery on the result the user is already viewing when the
@@ -477,12 +625,22 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
 
   @override
   void dispose() {
+    _searchController.removeListener(_handleSearchChanged);
+    _searchController.dispose();
     _focusNode.dispose();
     super.dispose();
   }
 
   KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final hardware = HardwareKeyboard.instance;
+    if ((hardware.isMetaPressed || hardware.isControlPressed) &&
+        !hardware.isShiftPressed &&
+        !hardware.isAltPressed &&
+        event.logicalKey == LogicalKeyboardKey.keyF) {
+      _openSearch();
+      return KeyEventResult.handled;
+    }
     if (event.logicalKey == LogicalKeyboardKey.space && content.hasImage) {
       openFullscreenImage(context, content);
       return KeyEventResult.handled;
@@ -507,7 +665,12 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
       }
     }
     if (event.logicalKey == LogicalKeyboardKey.escape) {
-      Navigator.of(context).pop();
+      // An open search bar closes first; the next Esc leaves the page.
+      if (_searchVisible) {
+        _closeSearch();
+      } else {
+        Navigator.of(context).pop();
+      }
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
@@ -519,7 +682,10 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
         index == _currentIndex) {
       return;
     }
-    setState(() => _currentIndex = index);
+    setState(() {
+      _currentIndex = index;
+      _syncSearchText();
+    });
     widget.onIndexChanged?.call(index);
     _focusNode.requestFocus();
   }
@@ -570,19 +736,41 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
             ],
           ),
         ),
-        body: Focus(
-          focusNode: _focusNode,
-          autofocus: true,
-          onKeyEvent: _handleKey,
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final wide = constraints.maxWidth >= detailWideLayoutBreakpoint &&
-                  content.hasImage;
-              return wide
-                  ? _buildWideLayout(context)
-                  : _buildStackedLayout(context);
-            },
-          ),
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Outside the page's key handler, so arrow keys and Esc typed in
+            // the search field never switch images or leave the page.
+            Padding(
+              padding: EdgeInsets.fromLTRB(12, _searchVisible ? 8 : 0, 12, 0),
+              child: PromptSearchReplaceBar(
+                key: _searchBarKey,
+                controller: _searchController,
+                focusNode: _focusNode,
+                visible: _searchVisible,
+                allowReplace: false,
+                searchFieldKey: const Key('detail-search-field'),
+                onClose: _closeSearch,
+              ),
+            ),
+            Expanded(
+              child: Focus(
+                focusNode: _focusNode,
+                autofocus: true,
+                onKeyEvent: _handleKey,
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final wide =
+                        constraints.maxWidth >= detailWideLayoutBreakpoint &&
+                            content.hasImage;
+                    return wide
+                        ? _buildWideLayout(context)
+                        : _buildStackedLayout(context);
+                  },
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -609,9 +797,14 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
         ),
         Expanded(
           flex: 4,
-          child: ListView(
+          // Not a lazy ListView: search must be able to scroll to a match in
+          // any card, so every card stays laid out.
+          child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(0, 12, 12, 12),
-            children: _buildInfoPanel(context),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: _buildInfoPanel(context),
+            ),
           ),
         ),
       ],
@@ -620,19 +813,22 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
 
   /// Single-column layout for narrow windows and phones.
   Widget _buildStackedLayout(BuildContext context) {
-    return ListView(
+    return SingleChildScrollView(
       padding: const EdgeInsets.all(12),
-      children: [
-        if (content.hasImage) ...[
-          // Fixed-height stage so the layout does not jump while the image
-          // decodes; the dark surface absorbs the letterboxing.
-          SizedBox(height: 420, child: _buildImagePane(context)),
-          const SizedBox(height: 12),
-          ResultActionBar(content: content),
-          const SizedBox(height: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (content.hasImage) ...[
+            // Fixed-height stage so the layout does not jump while the image
+            // decodes; the dark surface absorbs the letterboxing.
+            SizedBox(height: 420, child: _buildImagePane(context)),
+            const SizedBox(height: 12),
+            ResultActionBar(content: content),
+            const SizedBox(height: 4),
+          ],
+          ..._buildInfoPanel(context),
         ],
-        ..._buildInfoPanel(context),
-      ],
+      ),
     );
   }
 
@@ -720,10 +916,16 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
     ];
     final input = additional['input'];
     final negative = additional['negative_prompt'];
+    // Search segment indices, matching [_searchSegments].
+    var nextSegment = 0;
+    final blocksSegment = content.info.isNotEmpty ? nextSegment++ : null;
+    final inputSegment = input is String ? nextSegment++ : null;
+    final negativeSegment = negative is String ? nextSegment++ : null;
 
     return [
       if (content.info.isNotEmpty)
-        _buildTextCard(context, tr('detail_prompt_blocks'), content.info),
+        _buildTextCard(context, tr('detail_prompt_blocks'), content.info,
+            searchSegment: blocksSegment),
       PromptTokenUsage(
         metadata: additional,
         counter: widget.tokenCounter,
@@ -732,10 +934,10 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
           children: [
             if (input is String)
               _buildTextCard(context, tr('detail_prompt_final'), input,
-                  footer: positiveBar),
+                  footer: positiveBar, searchSegment: inputSegment),
             if (negative is String)
               _buildTextCard(context, tr('detail_negative'), negative,
-                  footer: negativeBar),
+                  footer: negativeBar, searchSegment: negativeSegment),
           ],
         ),
       ),
@@ -769,7 +971,7 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
 
   /// A prompt-style card: selectable body text with a copy affordance.
   Widget _buildTextCard(BuildContext context, String title, String body,
-      {Widget? footer}) {
+      {Widget? footer, int? searchSegment}) {
     return Card(
       child: Padding(
         padding: EdgeInsets.fromLTRB(16, 8, 8, footer == null ? 12 : 4),
@@ -791,10 +993,13 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
                 ),
               ],
             ),
-            SelectableText(
-              body,
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
+            if (searchSegment == null)
+              SelectableText(
+                body,
+                style: Theme.of(context).textTheme.bodyMedium,
+              )
+            else
+              _buildSearchableBody(context, body, searchSegment),
             if (footer != null)
               Padding(
                 padding: const EdgeInsets.only(top: 4, right: 8),
@@ -803,6 +1008,37 @@ class _InfoDetailPageState extends State<InfoDetailPage> {
           ],
         ),
       ),
+    );
+  }
+
+  /// Card body that renders the search matches falling inside its segment.
+  Widget _buildSearchableBody(BuildContext context, String body, int segment) {
+    final key = _segmentKeys.putIfAbsent(segment, GlobalKey.new);
+    return ListenableBuilder(
+      listenable: _searchController,
+      builder: (context, _) {
+        final style = Theme.of(context).textTheme.bodyMedium;
+        final (matches, current) = _segmentMatches(segment, body.length);
+        if (matches.isEmpty) {
+          return SelectableText(body, key: key, style: style);
+        }
+        final colors = Theme.of(context).colorScheme;
+        final highlightBg = colors.primaryContainer.withAlpha(140);
+        final currentBg = colors.primary.withAlpha(100);
+        final span = applyPromptTextHighlights(
+          TextSpan(text: body),
+          [
+            for (var i = 0; i < matches.length; i++)
+              PromptTextHighlight(
+                range: matches[i],
+                style: TextStyle(
+                  backgroundColor: i == current ? currentBg : highlightBg,
+                ),
+              ),
+          ],
+        );
+        return SelectableText.rich(span, key: key, style: style);
+      },
     );
   }
 

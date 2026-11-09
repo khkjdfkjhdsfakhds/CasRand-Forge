@@ -45,6 +45,7 @@ curl -s -H "Authorization: Bearer <口令>" http://127.0.0.1:47823/api/v1/status
 | `get_status` | 生成状态、进度、当前配置、模型和参考图状态 |
 | `get_config` / `update_config` | 读取或修改整份配置，包括提示词、角色、模型、尺寸、步数、CFG、采样器、种子、数量、提示词模式、输出文件夹和保存格式等。修改方式为 JSON Merge Patch 或按 JSON Pointer 修改 |
 | `get_prompt_tree` / `set_prompt_node` | 列出级联提示词节点，并按注释路径（例如 `测试用/画师`）修改单个节点 |
+| `list_prompt_schemes` / `switch_prompt_scheme` / `create_prompt_scheme` / `rename_prompt_scheme` / `move_prompt_scheme` / `delete_prompt_scheme` | 管理当前配置的随机提示词方案。`get_config`、`get_prompt_tree` 的顶层内容就是当前方案，其他方案在 `/prompt_schemes/<序号>` 下 |
 | `list_configs` / `switch_config` / `save_config_as` / `rename_config` / `delete_config` | 管理已保存的配置 |
 | `export_config` / `import_config` | 整体导出或导入配置 |
 | `add_reference_image` / `clear_reference_images` / `set_reference_feature` / `list_reference_images` | 按文件路径加载图生图原图、Vibe Transfer 和 Precise Reference 参考图，或开关这些功能 |

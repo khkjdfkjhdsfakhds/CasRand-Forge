@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:nai_casrand/data/models/character_config.dart';
+import 'package:nai_casrand/data/models/generation_profile.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/prompt_config.dart';
@@ -7,6 +8,10 @@ import 'package:nai_casrand/core/constants/parameters.dart';
 
 class PromptTabViewmodel extends ChangeNotifier {
   final PayloadConfig? payloadConfig;
+
+  /// When set, this view edits that prompt scheme whether or not it is the
+  /// one generating. Otherwise it follows the active profile.
+  final GenerationProfile? profile;
   final PromptConfig? _promptConfig;
   final PromptConfig? _negativePromptConfig;
   final List<CharacterConfig>? _characterConfigList;
@@ -14,15 +19,25 @@ class PromptTabViewmodel extends ChangeNotifier {
   final ParamConfig? _paramConfig;
 
   PromptConfig get promptConfig =>
-      payloadConfig?.rootPromptConfig ?? _promptConfig!;
+      profile?.rootPromptConfig ??
+      payloadConfig?.rootPromptConfig ??
+      _promptConfig!;
   PromptConfig get negativePromptConfig =>
-      payloadConfig?.negativePromptConfig ?? _negativePromptConfig!;
+      profile?.negativePromptConfig ??
+      payloadConfig?.negativePromptConfig ??
+      _negativePromptConfig!;
   List<CharacterConfig> get characterConfigList =>
-      payloadConfig?.characterConfigList ?? _characterConfigList!;
+      profile?.characterConfigList ??
+      payloadConfig?.characterConfigList ??
+      _characterConfigList!;
   List<PromptConfig> get savedConfigList =>
-      payloadConfig?.savedPromptConfigList ?? _savedConfigList!;
-  ParamConfig get paramConfig => payloadConfig?.paramConfig ?? _paramConfig!;
-  bool get isFixedMode => payloadConfig?.promptMode == PromptMode.fixed;
+      profile?.savedPromptConfigList ??
+      payloadConfig?.savedPromptConfigList ??
+      _savedConfigList!;
+  ParamConfig get paramConfig =>
+      profile?.paramConfig ?? payloadConfig?.paramConfig ?? _paramConfig!;
+  bool get isFixedMode =>
+      profile == null && payloadConfig?.promptMode == PromptMode.fixed;
   bool get isMediumEffort => isMediumEffortModel(paramConfig.model);
   bool get promptAutocompleteEnabled =>
       payloadConfig?.settings.promptAutocompleteEnabled ?? true;
@@ -45,6 +60,7 @@ class PromptTabViewmodel extends ChangeNotifier {
 
   PromptTabViewmodel({
     this.payloadConfig,
+    this.profile,
     PromptConfig? promptConfig,
     PromptConfig? negativePromptConfig,
     List<CharacterConfig>? characterConfigList,

@@ -2,6 +2,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:nai_casrand/data/models/character_config.dart';
+import 'package:nai_casrand/data/models/prompt_config.dart';
 import 'package:nai_casrand/ui/character_config/widgets/character_config_view.dart';
 import 'package:nai_casrand/ui/character_config/view_models/character_config_viewmodel.dart';
 import 'package:nai_casrand/ui/core/widgets/prompt_mode_switch_button.dart';
@@ -30,6 +31,87 @@ const int kFixedPromptFieldMaxLines = 24;
 const int kFixedNegativePromptMinLines = 4;
 const int kFixedNegativePromptMaxLines = 8;
 
+/// The prompt editors without page chrome, so a prompt scheme card can host
+/// them inside its own scrolling list.
+class PromptTabContent extends StatelessWidget {
+  const PromptTabContent({
+    super.key,
+    required this.viewmodel,
+    this.promptAssistance,
+  });
+
+  final PromptTabViewmodel viewmodel;
+  final PromptEditingAssistance? promptAssistance;
+
+  @override
+  Widget build(BuildContext context) {
+    final changes = Listenable.merge([
+      viewmodel,
+      if (viewmodel.payloadConfig != null) viewmodel.payloadConfig!,
+    ]);
+    return ChangeNotifierProvider.value(
+      value: viewmodel,
+      child: ListenableBuilder(
+        listenable: changes,
+        builder: (context, child) => viewmodel.isFixedMode
+            ? _FixedPromptEditor(
+                viewmodel: viewmodel,
+                promptAssistance:
+                    promptAssistance ?? PromptEditingAssistance.shared,
+              )
+            : KeyedSubtree(
+                // Each prompt scheme is a separate document; no editor state
+                // may carry over when the scheme changes.
+                key: ObjectKey(
+                  viewmodel.profile ?? viewmodel.payloadConfig?.activeProfile,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _RootPromptSection(
+                      key: const Key('base-prompt-section'),
+                      settingsKey: const Key('base-prompt-root-settings'),
+                      title: context.tr('base_prompts'),
+                      icon: Icons.edit_note,
+                      accentColor: Theme.of(context).colorScheme.primary,
+                      config: viewmodel.promptConfig,
+                      viewmodel: viewmodel,
+                      promptAssistance:
+                          promptAssistance ?? PromptEditingAssistance.shared,
+                    ),
+                    for (final (index, characterConfig)
+                        in viewmodel.characterConfigList.indexed)
+                      _CharacterPromptSection(
+                        key: ObjectKey(characterConfig),
+                        viewmodel: viewmodel,
+                        character: characterConfig,
+                        index: index,
+                        promptAssistance:
+                            promptAssistance ?? PromptEditingAssistance.shared,
+                      ),
+                    _RootPromptSection(
+                      key: const Key('negative-prompt-section'),
+                      settingsKey: const Key('negative-prompt-root-settings'),
+                      contentKey: const Key('negative-prompt-config'),
+                      title: context.tr('negative_prompts'),
+                      icon: Icons.block,
+                      accentColor: Theme.of(context).colorScheme.tertiary,
+                      config: viewmodel.negativePromptConfig,
+                      viewmodel: viewmodel,
+                      promptAssistance:
+                          promptAssistance ?? PromptEditingAssistance.shared,
+                      leading: viewmodel.isMediumEffort
+                          ? const MediumEffortNotice()
+                          : null,
+                    ),
+                  ],
+                ),
+              ),
+      ),
+    );
+  }
+}
+
 class PromptTabView extends StatelessWidget {
   const PromptTabView({
     super.key,
@@ -46,75 +128,9 @@ class PromptTabView extends StatelessWidget {
       viewmodel,
       if (viewmodel.payloadConfig != null) viewmodel.payloadConfig!,
     ]);
-    final content = ChangeNotifierProvider.value(
-      value: viewmodel,
-      child: ListenableBuilder(
-        listenable: changes,
-        builder: (context, child) => viewmodel.isFixedMode
-            ? _FixedPromptEditor(
-                viewmodel: viewmodel,
-                promptAssistance:
-                    promptAssistance ?? PromptEditingAssistance.shared,
-              )
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _PromptSectionCard(
-                    key: const Key('base-prompt-section'),
-                    title: context.tr('base_prompts'),
-                    icon: Icons.edit_note,
-                    accentColor: Theme.of(context).colorScheme.primary,
-                    child: PromptConfigView(
-                      viewModel: PromptConfigViewModel(
-                        config: viewmodel.promptConfig,
-                      ),
-                      promptAssistance:
-                          promptAssistance ?? PromptEditingAssistance.shared,
-                      autocompleteEnabled: viewmodel.promptAutocompleteEnabled,
-                      swapEnterAndShiftEnter: viewmodel.swapEnterAndShiftEnter,
-                    ),
-                  ),
-                  for (final (index, characterConfig)
-                      in viewmodel.characterConfigList.indexed)
-                    _CharacterPromptSection(
-                      key: ObjectKey(characterConfig),
-                      viewmodel: viewmodel,
-                      character: characterConfig,
-                      index: index,
-                      promptAssistance:
-                          promptAssistance ?? PromptEditingAssistance.shared,
-                    ),
-                  _PromptSectionCard(
-                    key: const Key('negative-prompt-section'),
-                    title: context.tr('negative_prompts'),
-                    icon: Icons.block,
-                    accentColor: Theme.of(context).colorScheme.tertiary,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        if (viewmodel.isMediumEffort)
-                          const MediumEffortNotice(),
-                        Padding(
-                          key: const Key('negative-prompt-config'),
-                          padding: const EdgeInsets.only(left: 4),
-                          child: PromptConfigView(
-                            viewModel: PromptConfigViewModel(
-                              config: viewmodel.negativePromptConfig,
-                            ),
-                            promptAssistance: promptAssistance ??
-                                PromptEditingAssistance.shared,
-                            autocompleteEnabled:
-                                viewmodel.promptAutocompleteEnabled,
-                            swapEnterAndShiftEnter:
-                                viewmodel.swapEnterAndShiftEnter,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-      ),
+    final content = PromptTabContent(
+      viewmodel: viewmodel,
+      promptAssistance: promptAssistance,
     );
     final buttons = ListenableBuilder(
       listenable: changes,
@@ -132,15 +148,11 @@ class PromptTabView extends StatelessWidget {
           ],
           if (!viewmodel.isFixedMode) ...[
             FloatingActionButton(
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (context) => SavedConfigListView(
-                      viewmodel: SavedConfigListViewmodel(
-                          configList: viewmodel.savedConfigList),
-                      promptAssistance:
-                          promptAssistance ?? PromptEditingAssistance.shared,
-                      autocompleteEnabled: viewmodel.promptAutocompleteEnabled,
-                      swapEnterAndShiftEnter:
-                          viewmodel.swapEnterAndShiftEnter))),
+              onPressed: () => openSavedConfigList(
+                context,
+                viewmodel,
+                promptAssistance: promptAssistance,
+              ),
               tooltip: tr('manage_saved_configs'),
               heroTag: 'ptvfab1',
               child: const Icon(Icons.format_list_bulleted),
@@ -148,7 +160,7 @@ class PromptTabView extends StatelessWidget {
             const SizedBox(height: 20.0),
           ],
           FloatingActionButton(
-            onPressed: () => _showCharacterRearrangeDialog(context),
+            onPressed: () => showCharacterRearrangeDialog(context, viewmodel),
             tooltip: tr('rearrange_characters'),
             heroTag: 'ptvfab2',
             child: const Icon(Icons.group),
@@ -164,40 +176,60 @@ class PromptTabView extends StatelessWidget {
       floatingActionButton: buttons,
     );
   }
+}
 
-  void _showCharacterRearrangeDialog(BuildContext context) {
-    final addCharacterTile = ChangeNotifierProvider.value(
-      value: viewmodel,
-      child: Consumer<PromptTabViewmodel>(
-          builder: (context, viewmodel, child) => ListTile(
-                title: Text(tr('add_character')),
-                leading: const Icon(Icons.person_add),
-                onTap: () => viewmodel.addCharacter(),
-                enabled: viewmodel.canAddCharacter,
-              )),
-    );
-    showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-              title: Text(tr('rearrange_characters')),
-              content: SizedBox(
-                  width: 400.0,
-                  height: 600.0,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Expanded(
-                          child: CharacterRearrangeView(viewmodel: viewmodel)),
-                      addCharacterTile,
-                    ],
-                  )),
-              actions: [
-                TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: Text(tr('confirm')))
-              ],
-            ));
-  }
+void openSavedConfigList(
+  BuildContext context,
+  PromptTabViewmodel viewmodel, {
+  PromptEditingAssistance? promptAssistance,
+}) {
+  Navigator.of(context).push(MaterialPageRoute(
+    builder: (context) => SavedConfigListView(
+      viewmodel: SavedConfigListViewmodel(
+        configList: viewmodel.savedConfigList,
+      ),
+      promptAssistance: promptAssistance ?? PromptEditingAssistance.shared,
+      autocompleteEnabled: viewmodel.promptAutocompleteEnabled,
+      swapEnterAndShiftEnter: viewmodel.swapEnterAndShiftEnter,
+    ),
+  ));
+}
+
+void showCharacterRearrangeDialog(
+  BuildContext context,
+  PromptTabViewmodel viewmodel,
+) {
+  final addCharacterTile = ChangeNotifierProvider.value(
+    value: viewmodel,
+    child: Consumer<PromptTabViewmodel>(
+        builder: (context, viewmodel, child) => ListTile(
+              title: Text(tr('add_character')),
+              leading: const Icon(Icons.person_add),
+              onTap: () => viewmodel.addCharacter(),
+              enabled: viewmodel.canAddCharacter,
+            )),
+  );
+  showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+            title: Text(tr('rearrange_characters')),
+            content: SizedBox(
+                width: 400.0,
+                height: 600.0,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Expanded(
+                        child: CharacterRearrangeView(viewmodel: viewmodel)),
+                    addCharacterTile,
+                  ],
+                )),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: Text(tr('confirm')))
+            ],
+          ));
 }
 
 class _FixedPromptEditor extends StatelessWidget {
@@ -653,6 +685,70 @@ class _CharacterPromptSectionState extends State<_CharacterPromptSection> {
   }
 }
 
+/// Base / negative prompt section. The section itself stands for the root
+/// [PromptConfig]: its children (or string entries) sit directly in the card
+/// and the root's settings live in the header, so the root is not drawn as an
+/// extra nested row. Data is unchanged — the root is still the prompt config.
+class _RootPromptSection extends StatelessWidget {
+  const _RootPromptSection({
+    super.key,
+    required this.settingsKey,
+    this.contentKey,
+    required this.title,
+    required this.icon,
+    required this.accentColor,
+    required this.config,
+    required this.viewmodel,
+    required this.promptAssistance,
+    this.leading,
+  });
+
+  final Key settingsKey;
+  final Key? contentKey;
+  final String title;
+  final IconData icon;
+  final Color accentColor;
+  final PromptConfig config;
+  final PromptTabViewmodel viewmodel;
+  final PromptEditingAssistance promptAssistance;
+  final Widget? leading;
+
+  @override
+  Widget build(BuildContext context) {
+    // One view model shared by the header button and the content, so edits
+    // made through either side refresh both.
+    final rootViewModel = PromptConfigViewModel(config: config);
+    final content = PromptConfigView(
+      viewModel: rootViewModel,
+      promptAssistance: promptAssistance,
+      autocompleteEnabled: viewmodel.promptAutocompleteEnabled,
+      swapEnterAndShiftEnter: viewmodel.swapEnterAndShiftEnter,
+      flattenRoot: true,
+    );
+    return _PromptSectionCard(
+      title: title,
+      icon: icon,
+      accentColor: accentColor,
+      expandTrailing: true,
+      trailing: PromptConfigSettingsButton(
+        key: settingsKey,
+        viewModel: rootViewModel,
+        foregroundColor: accentColor,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (leading != null) leading!,
+          KeyedSubtree(
+            key: contentKey,
+            child: content,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _PromptSectionCard extends StatelessWidget {
   const _PromptSectionCard({
     super.key,
@@ -663,6 +759,7 @@ class _PromptSectionCard extends StatelessWidget {
     this.trailing,
     this.titleWidget,
     this.expanded = true,
+    this.expandTrailing = false,
   });
 
   final String title;
@@ -673,9 +770,23 @@ class _PromptSectionCard extends StatelessWidget {
   final Widget? titleWidget;
   final bool expanded;
 
+  /// Gives [trailing] the header's remaining width (right-aligned) instead
+  /// of the title, for long trailing content such as a settings summary.
+  final bool expandTrailing;
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final titleText = titleWidget ??
+        Text(
+          title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                color: accentColor,
+                fontWeight: FontWeight.w600,
+              ),
+        );
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 8, 8, 6),
       child: Material(
@@ -704,20 +815,19 @@ class _PromptSectionCard extends StatelessWidget {
                 children: [
                   Icon(icon, color: accentColor, size: 20),
                   const SizedBox(width: 8),
-                  Expanded(
-                    child: titleWidget ??
-                        Text(
-                          title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style:
-                              Theme.of(context).textTheme.titleMedium?.copyWith(
-                                    color: accentColor,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                        ),
-                  ),
-                  if (trailing != null) trailing!,
+                  if (expandTrailing) ...[
+                    titleText,
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: trailing,
+                      ),
+                    ),
+                  ] else ...[
+                    Expanded(child: titleText),
+                    if (trailing != null) trailing!,
+                  ],
                 ],
               ),
             ),

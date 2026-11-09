@@ -702,5 +702,22 @@
     "generation_response_disconnected": "Connection interrupted; image not fully received",
     "generation_response_disconnected_detail": "The original image can no longer be received. Regenerating uses the original prompt and settings and may consume credits again.",
     "generation_regenerate_original": "Regenerate original task",
-    "generation_error_details": "Error details"
+    "generation_error_details": "Error details",
+    "prompt_scheme_delete": "Delete scheme",
+    "prompt_scheme_default_name": "Scheme {number}",
+    "prompt_scheme_name_empty": "The name cannot be empty",
+    "prompt_scheme_name_duplicate": "A scheme with this name already exists",
+    "prompt_scheme_delete_confirm": "Delete scheme “{name}”? Its prompts, characters, negative prompt and parameters will be removed. This cannot be undone.",
+    "prompt_scheme_new": "New scheme",
+    "prompt_scheme_new_hint": "Copies the active scheme",
+    "prompt_scheme_move_up": "Move scheme up",
+    "prompt_scheme_move_down": "Move scheme down",
+    "prompt_scheme_expand": "Expand scheme",
+    "prompt_scheme_collapse": "Collapse scheme",
+    "prompt_scheme_active_badge": "Active",
+    "prompt_scheme_active_hint": "Generation uses this scheme. Turn on another scheme to switch",
+    "prompt_scheme_activate": "Make this the active scheme",
+    "prompt_scheme_more": "More actions",
+    "prompt_scheme_delete_active_note": "This is the active scheme. A neighboring scheme will become active.",
+    "prompt_scheme_locked_generating": "Schemes cannot be changed during generation"
 }

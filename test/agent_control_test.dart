@@ -415,6 +415,224 @@ void main() {
             .having((e) => e.code, 'code', 'not_found')),
       );
     });
+
+    group('prompt schemes', () {
+      Matcher failsWith(String code) => throwsA(
+            isA<AgentControlException>().having((e) => e.code, 'code', code),
+          );
+
+      Future<Map> call(String tool, [Map<String, dynamic>? args]) async =>
+          (await service.call(tool, args ?? {})).data as Map;
+
+      test('lists, creates, switches and renames with saving and refresh',
+          () async {
+        var notified = 0;
+        config.addListener(() => notified++);
+
+        final listed = await call('list_prompt_schemes');
+        expect(listed['current_index'], 0);
+        expect((listed['schemes'] as List).single['name'], '方案 1');
+
+        final created = await call('create_prompt_scheme', {'name': '测试用'});
+        expect(created['current_index'], 1);
+        expect(config.currentPromptScheme.name, '测试用');
+        expect(replacedCount, 1);
+        expect(notified, greaterThan(0));
+        expect(activities, ['create_prompt_scheme']);
+
+        final switched = await call('switch_prompt_scheme', {'index': 0});
+        expect(switched['current_index'], 0);
+        await call('switch_prompt_scheme', {'name': '测试用'});
+        expect(config.currentPromptSchemeIndex, 1);
+
+        await call('rename_prompt_scheme', {
+          'name': '测试用',
+          'new_name': '出图用',
+        });
+        expect(config.currentPromptScheme.name, '出图用');
+
+        await store.flush();
+        final saved = await store.loadSavedConfigFromBox(box);
+        expect(saved['current_prompt_scheme'], 1);
+        expect((saved['prompt_schemes'] as List).last['name'], '出图用');
+      });
+
+      test('create can keep the current scheme and picks a free name',
+          () async {
+        final result = await call('create_prompt_scheme', {'activate': false});
+
+        expect(result['current_index'], 0);
+        expect((result['schemes'] as List).last['name'], '方案 2');
+        expect(
+            (result['schemes'] as List).last['pointer'], '/prompt_schemes/1');
+      });
+
+      test('move reorders and keeps the current scheme', () async {
+        await call('create_prompt_scheme', {'name': 'b'});
+
+        final moved = await call('move_prompt_scheme', {
+          'name': 'b',
+          'to': 0,
+        });
+
+        expect(config.promptSchemes.map((s) => s.name), ['b', '方案 1']);
+        expect(moved['current_index'], 0);
+        expect(config.currentPromptScheme.name, 'b');
+        await expectLater(
+          call('move_prompt_scheme', {'index': 0, 'to': 5}),
+          failsWith('invalid_argument'),
+        );
+      });
+
+      test('delete refuses the last scheme', () async {
+        await expectLater(
+          call('delete_prompt_scheme', {'index': 0}),
+          failsWith('last_scheme'),
+        );
+
+        await call('create_prompt_scheme', {'name': 'b'});
+        await call('delete_prompt_scheme', {'name': 'b'});
+        expect(config.promptSchemes, hasLength(1));
+      });
+
+      test('bad selectors and names are reported', () async {
+        await expectLater(
+          call('switch_prompt_scheme', {'index': 5}),
+          failsWith('not_found'),
+        );
+        await expectLater(
+          call('switch_prompt_scheme', {'name': 'nope'}),
+          failsWith('not_found'),
+        );
+        await expectLater(
+          call('create_prompt_scheme', {'name': '方案 1'}),
+          failsWith('invalid_argument'),
+        );
+        expect(config.promptSchemes, hasLength(1));
+      });
+
+      test('every scheme mutation is refused during generation', () async {
+        await call('create_prompt_scheme', {'name': 'b'});
+        port.active = true;
+        for (final (tool, args) in <(String, Map<String, dynamic>)>[
+          ('switch_prompt_scheme', {'index': 0}),
+          ('create_prompt_scheme', {'name': 'c'}),
+          ('rename_prompt_scheme', {'index': 0, 'new_name': 'd'}),
+          ('delete_prompt_scheme', {'index': 0}),
+        ]) {
+          await expectLater(
+            call(tool, args),
+            failsWith('generation_in_progress'),
+            reason: tool,
+          );
+        }
+        expect(config.currentPromptScheme.name, 'b');
+        expect(config.promptSchemes, hasLength(2));
+      });
+
+      test('status and prompt tree follow the current scheme', () async {
+        await call('create_prompt_scheme', {'name': 'b'});
+        await call('update_config', {
+          'operations': [
+            {
+              'op': 'set',
+              'path': '/prompt_config/comment',
+              'value': 'in-scheme-b',
+            }
+          ],
+        });
+
+        final status = await call('get_status');
+        expect(status['prompt_scheme'], {'index': 1, 'name': 'b', 'count': 2});
+        final tree = await call('get_prompt_tree', {'include_strings': false});
+        expect(tree['prompt_scheme']['name'], 'b');
+        expect(jsonEncode(tree), contains('in-scheme-b'));
+
+        await call('switch_prompt_scheme', {'index': 0});
+        final other = await call('get_prompt_tree', {'include_strings': false});
+        expect(jsonEncode(other), isNot(contains('in-scheme-b')));
+      });
+
+      test('a non-current scheme can be edited through its pointer', () async {
+        await call('create_prompt_scheme', {'name': 'b'});
+
+        await call('set_prompt_node', {
+          'node': '/prompt_schemes/0/prompt_config',
+          'changes': {'comment': 'edited-first'},
+        });
+        await call('update_config', {
+          'operations': [
+            {
+              'op': 'set',
+              'path': '/prompt_schemes/0/param_config/steps',
+              'value': 11,
+            }
+          ],
+        });
+
+        expect(config.currentPromptScheme.name, 'b');
+        final first = config.promptSchemes[0].profile;
+        expect(first.rootPromptConfig.comment, 'edited-first');
+        expect(first.paramConfig.steps, 11);
+        final tree = await call('get_prompt_tree', {
+          'root': '/prompt_schemes/0/prompt_config',
+          'include_strings': false,
+        });
+        expect(jsonEncode(tree), contains('edited-first'));
+      });
+
+      test('update_config cannot desynchronize the scheme list', () async {
+        await call('create_prompt_scheme', {'name': 'b'});
+        final before = jsonEncode(config.toJson());
+        for (final patch in <Map<String, dynamic>>[
+          {'current_prompt_scheme': 0},
+          {'prompt_schemes': <dynamic>[]},
+        ]) {
+          await expectLater(
+            call('update_config', {'patch': patch}),
+            failsWith('use_scheme_tools'),
+          );
+        }
+        await expectLater(
+          call('update_config', {
+            'operations': [
+              {'op': 'set', 'path': '/prompt_schemes/0/name', 'value': 'x'},
+            ],
+          }),
+          failsWith('use_scheme_tools'),
+        );
+        await expectLater(
+          call('update_config', {
+            'operations': [
+              {
+                'op': 'set',
+                'path': '/prompt_schemes/1/prompt_config',
+                'value': {}
+              },
+            ],
+          }),
+          failsWith('use_scheme_tools'),
+        );
+        expect(jsonEncode(config.toJson()), before);
+      });
+
+      test('importing a legacy document yields one default scheme', () async {
+        await call('create_prompt_scheme', {'name': 'b'});
+        final exported = (await service.call('export_config', {})).data as Map;
+        final legacy = Map<String, dynamic>.from(
+          jsonDecode(jsonEncode(exported['config'] ?? exported)) as Map,
+        )
+          ..remove('prompt_schemes')
+          ..remove('current_prompt_scheme');
+
+        await service.call('import_config', {
+          'mode': 'replace_current',
+          'config': legacy,
+        });
+
+        expect(config.promptSchemes.map((s) => s.name), ['方案 1']);
+      });
+    });
   });
 
   group('AgentControlServer', () {

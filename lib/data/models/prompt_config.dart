@@ -4,6 +4,12 @@ sealed class NestedPrompt {
   String toPrompt();
   String toComment();
 
+  /// Like [toComment] but without the node's own title line, for roots whose
+  /// title is already implied by their section (Base Prompt / negative).
+  /// Children keep their titles and lose one indentation level. Display
+  /// text only — [toPrompt] is unaffected.
+  String toRootlessComment();
+
   /// DFS search that returns prompt with specified key.
   String? findPromptWithKey(String key);
 }
@@ -26,6 +32,9 @@ class NestedPromptString extends NestedPrompt {
   String toComment() {
     return '$title: $content';
   }
+
+  @override
+  String toRootlessComment() => content.isEmpty ? '<None>' : content;
 
   @override
   String? findPromptWithKey(String key) {
@@ -59,6 +68,15 @@ class NestedPromptList extends NestedPrompt {
       if (idx != children.length - 1) result += '\n';
     }
     return result;
+  }
+
+  @override
+  String toRootlessComment() {
+    if (children.isEmpty) return '<None>';
+    return children.map((child) {
+      final comment = child.toComment();
+      return comment.isNotEmpty ? comment : '<None>';
+    }).join('\n');
   }
 
   @override

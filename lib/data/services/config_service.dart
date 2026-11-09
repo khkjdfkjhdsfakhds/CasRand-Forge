@@ -432,10 +432,42 @@ class ConfigService {
     requireMap('i2i_request_size');
     requireList('character_config');
     requireList('saved_config');
+    requireList('prompt_schemes');
+    _validatePromptSchemes(jsonData);
     try {
       PayloadConfig.fromJson(jsonData);
     } catch (error) {
       throw ConfigValidationException(error.toString());
+    }
+  }
+
+  void _validatePromptSchemes(Map<String, dynamic> jsonData) {
+    final schemes = jsonData['prompt_schemes'];
+    if (schemes is! List<dynamic>) return;
+    if (schemes.isEmpty) {
+      throw const ConfigValidationException(
+        'prompt_schemes must not be empty.',
+      );
+    }
+    final currentIndex = jsonData['current_prompt_scheme'] ?? 0;
+    if (currentIndex is! int ||
+        currentIndex < 0 ||
+        currentIndex >= schemes.length) {
+      throw const ConfigValidationException(
+        'current_prompt_scheme must be an index into prompt_schemes.',
+      );
+    }
+    for (final (index, scheme) in schemes.indexed) {
+      if (scheme is! Map<String, dynamic>) {
+        throw ConfigValidationException(
+          'prompt_schemes/$index must be an object.',
+        );
+      }
+      if (index != currentIndex && scheme['prompt_config'] is! Map) {
+        throw ConfigValidationException(
+          'prompt_schemes/$index must contain prompt_config.',
+        );
+      }
     }
   }
 

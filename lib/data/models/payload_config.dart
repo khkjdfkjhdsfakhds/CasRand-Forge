@@ -60,8 +60,119 @@ const Map<int, double> doubleMapping = {
 };
 
 class PayloadConfig extends ChangeNotifier {
-  GenerationProfile randomProfile;
+  List<PromptScheme> _promptSchemes;
+  int _currentPromptSchemeIndex;
   GenerationProfile fixedProfile;
+
+  /// The random profile that generates: the current prompt scheme's.
+  GenerationProfile get randomProfile => currentPromptScheme.profile;
+  set randomProfile(GenerationProfile value) {
+    value.savedPromptConfigList = randomProfile.savedPromptConfigList;
+    currentPromptScheme.profile = value;
+  }
+
+  List<PromptScheme> get promptSchemes => List.unmodifiable(_promptSchemes);
+  int get currentPromptSchemeIndex => _currentPromptSchemeIndex;
+  PromptScheme get currentPromptScheme =>
+      _promptSchemes[_currentPromptSchemeIndex];
+
+  /// Saved configs are referenced by name from any scheme, so every scheme
+  /// holds this one list instance.
+  void _shareSavedConfigsAcrossSchemes(List<PromptConfig> savedConfigs) {
+    for (final scheme in _promptSchemes) {
+      scheme.profile.savedPromptConfigList = savedConfigs;
+    }
+  }
+
+  PromptSchemeNameError? validatePromptSchemeName(
+    String name, {
+    int? ignoreIndex,
+  }) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return PromptSchemeNameError.empty;
+    for (final (index, scheme) in _promptSchemes.indexed) {
+      if (index != ignoreIndex && scheme.name == trimmed) {
+        return PromptSchemeNameError.duplicate;
+      }
+    }
+    return null;
+  }
+
+  /// The first numbered name after the existing schemes that is still free.
+  String nextPromptSchemeName([
+    String Function(int number) format = defaultPromptSchemeName,
+  ]) {
+    var number = _promptSchemes.length + 1;
+    while (validatePromptSchemeName(format(number)) != null) {
+      number++;
+    }
+    return format(number);
+  }
+
+  void selectPromptScheme(int index) {
+    RangeError.checkValidIndex(index, _promptSchemes);
+    if (index == _currentPromptSchemeIndex) return;
+    _currentPromptSchemeIndex = index;
+    _syncSettingsWithActiveProfile();
+    notifyListeners();
+  }
+
+  /// Appends a copy of the current scheme. [activate] makes the copy current.
+  void createPromptSchemeFromCurrent(String name, {bool activate = true}) {
+    _requireValidPromptSchemeName(name);
+    final savedConfigs = randomProfile.savedPromptConfigList;
+    final copy = GenerationProfile.fromJson(
+      randomProfile.toJson(includeSaved: false),
+    )..savedPromptConfigList = savedConfigs;
+    _promptSchemes.add(PromptScheme(name: name.trim(), profile: copy));
+    if (activate) {
+      _currentPromptSchemeIndex = _promptSchemes.length - 1;
+      _syncSettingsWithActiveProfile();
+    }
+    notifyListeners();
+  }
+
+  /// Moves a scheme in the list. The current scheme stays current.
+  void movePromptScheme(int from, int to) {
+    RangeError.checkValidIndex(from, _promptSchemes);
+    RangeError.checkValidIndex(to, _promptSchemes);
+    if (from == to) return;
+    final current = currentPromptScheme;
+    final moved = _promptSchemes.removeAt(from);
+    _promptSchemes.insert(to, moved);
+    _currentPromptSchemeIndex = _promptSchemes.indexOf(current);
+    notifyListeners();
+  }
+
+  void renamePromptScheme(int index, String name) {
+    RangeError.checkValidIndex(index, _promptSchemes);
+    _requireValidPromptSchemeName(name, ignoreIndex: index);
+    _promptSchemes[index].name = name.trim();
+    notifyListeners();
+  }
+
+  /// The last remaining scheme cannot be deleted.
+  void deletePromptScheme(int index) {
+    RangeError.checkValidIndex(index, _promptSchemes);
+    if (_promptSchemes.length == 1) {
+      throw StateError('The last prompt scheme cannot be deleted.');
+    }
+    _promptSchemes.removeAt(index);
+    if (index < _currentPromptSchemeIndex ||
+        _currentPromptSchemeIndex == _promptSchemes.length) {
+      _currentPromptSchemeIndex--;
+    }
+    _syncSettingsWithActiveProfile();
+    notifyListeners();
+  }
+
+  void _requireValidPromptSchemeName(String name, {int? ignoreIndex}) {
+    final error = validatePromptSchemeName(name, ignoreIndex: ignoreIndex);
+    if (error != null) {
+      throw ArgumentError.value(name, 'name', error.name);
+    }
+  }
+
   PromptMode _promptMode = PromptMode.random;
 
   PromptMode get promptMode => _promptMode;
@@ -93,8 +204,14 @@ class PayloadConfig extends ChangeNotifier {
       activeProfile.characterConfigList = value;
   List<PromptConfig> get savedPromptConfigList =>
       activeProfile.savedPromptConfigList;
-  set savedPromptConfigList(List<PromptConfig> value) =>
-      activeProfile.savedPromptConfigList = value;
+  set savedPromptConfigList(List<PromptConfig> value) {
+    if (promptMode == PromptMode.fixed) {
+      fixedProfile.savedPromptConfigList = value;
+    } else {
+      _shareSavedConfigsAcrossSchemes(value);
+    }
+  }
+
   ParamConfig get paramConfig => activeProfile.paramConfig;
   set paramConfig(ParamConfig value) => activeProfile.paramConfig = value;
 
@@ -355,23 +472,32 @@ class PayloadConfig extends ChangeNotifier {
     required bool useOverridePrompt,
     required bool useCharacterPromptWithOverride,
     GenerationProfile? randomProfile,
+    List<PromptScheme>? promptSchemes,
+    int currentPromptSchemeIndex = 0,
     GenerationProfile? fixedProfile,
     PromptMode? promptMode,
     GenerationSize? i2iRequestSize,
     I2iSizeMode i2iSizeMode = I2iSizeMode.automatic,
     int i2iContextPx = defaultContextPx,
     bool i2iUseRandomSeed = false,
-  })  : randomProfile = randomProfile ??
-            GenerationProfile(
-              rootPromptConfig: rootPromptConfig,
-              negativePromptConfig: negativePromptConfig,
-              characterConfigList: characterConfigList,
-              savedPromptConfigList: savedPromptConfigList,
-              paramConfig: paramConfig,
-              generationCount: settings.generationCount,
-              generationIntervalSec: settings.generationIntervalSec,
-              lockToAllCombinations: settings.lockToAllCombinations,
-            ),
+  })  : _promptSchemes = promptSchemes ??
+            [
+              PromptScheme(
+                name: defaultPromptSchemeName(1),
+                profile: randomProfile ??
+                    GenerationProfile(
+                      rootPromptConfig: rootPromptConfig,
+                      negativePromptConfig: negativePromptConfig,
+                      characterConfigList: characterConfigList,
+                      savedPromptConfigList: savedPromptConfigList,
+                      paramConfig: paramConfig,
+                      generationCount: settings.generationCount,
+                      generationIntervalSec: settings.generationIntervalSec,
+                      lockToAllCombinations: settings.lockToAllCombinations,
+                    ),
+              ),
+            ],
+        _currentPromptSchemeIndex = currentPromptSchemeIndex,
         fixedProfile = fixedProfile ??
             GenerationProfile(
               rootPromptConfig: fixedPromptConfig(overridePrompt),
@@ -394,6 +520,7 @@ class PayloadConfig extends ChangeNotifier {
             ),
         _promptMode = promptMode ??
             (useOverridePrompt ? PromptMode.fixed : PromptMode.random) {
+    _shareSavedConfigsAcrossSchemes(this.randomProfile.savedPromptConfigList);
     _syncSettingsWithActiveProfile();
     i2iConfig = I2IConfig(
       requestSize: i2iRequestSize ??
@@ -421,7 +548,10 @@ class PayloadConfig extends ChangeNotifier {
   }
 
   void resetSequentialState() {
-    for (final profile in [randomProfile, fixedProfile]) {
+    for (final profile in [
+      for (final scheme in _promptSchemes) scheme.profile,
+      fixedProfile,
+    ]) {
       profile.rootPromptConfig.resetSequentialState();
       profile.negativePromptConfig.resetSequentialState();
       for (final config in profile.savedPromptConfigList) {
@@ -473,6 +603,11 @@ class PayloadConfig extends ChangeNotifier {
       'use_override_prompt': useOverridePrompt,
       'use_character_prompt_with_override': useCharacterPromptWithOverride,
       'prompt_mode': promptMode.name,
+      'prompt_schemes': [
+        for (final (index, scheme) in _promptSchemes.indexed)
+          scheme.toJson(current: index == _currentPromptSchemeIndex),
+      ],
+      'current_prompt_scheme': _currentPromptSchemeIndex,
       'fixed_profile': fixedProfile.toJson(),
       'generation_count': randomProfile.generationCount,
       'generation_interval': randomProfile.generationIntervalSec,
@@ -517,44 +652,89 @@ class PayloadConfig extends ChangeNotifier {
     settings.parallelApiEnabled = parallel;
   }
 
+  /// One random profile from the top level of a configuration or from a
+  /// `prompt_schemes` entry; both use the same field names.
+  static GenerationProfile _randomProfileFromJson(
+    Map<String, dynamic> json, {
+    required Settings settings,
+    required List<PromptConfig> savedConfigs,
+  }) {
+    final characters = json['character_config'] as List<dynamic>? ?? const [];
+    final paramConfig = ParamConfig.fromJson(json['param_config'] ?? {});
+    final negativeJson = json['negative_prompt_config'];
+    return GenerationProfile(
+      rootPromptConfig: PromptConfig.fromJson(json['prompt_config']),
+      negativePromptConfig: negativeJson is Map<String, dynamic>
+          ? _negativePromptConfigFromJson(negativeJson)
+          : _negativePromptConfigFromLegacy(paramConfig.negativePrompt),
+      characterConfigList:
+          characters.map((item) => CharacterConfig.fromJson(item)).toList(),
+      savedPromptConfigList: savedConfigs,
+      paramConfig: paramConfig,
+      generationCount:
+          json['generation_count'] as int? ?? settings.generationCount,
+      generationIntervalSec:
+          json['generation_interval'] as int? ?? settings.generationIntervalSec,
+      lockToAllCombinations: json['lock_to_all_combinations'] as bool? ??
+          settings.lockToAllCombinations,
+    );
+  }
+
+  /// A document without `prompt_schemes` predates schemes and becomes a single
+  /// default scheme holding its top-level content.
+  static (List<PromptScheme>, int) _promptSchemesFromJson(
+    Map<String, dynamic> json, {
+    required Settings settings,
+  }) {
+    final savedConfigs = (json['saved_config'] as List<dynamic>? ?? const [])
+        .map((item) => PromptConfig.fromJson(item))
+        .toList();
+    GenerationProfile profileFrom(Map<String, dynamic> source) =>
+        _randomProfileFromJson(
+          source,
+          settings: settings,
+          savedConfigs: savedConfigs,
+        );
+
+    final current = profileFrom(json);
+    final entries = json['prompt_schemes'];
+    if (entries is! List || entries.isEmpty) {
+      return (
+        [PromptScheme(name: defaultPromptSchemeName(1), profile: current)],
+        0,
+      );
+    }
+    final storedIndex = json['current_prompt_scheme'];
+    final currentIndex =
+        (storedIndex is int ? storedIndex : 0).clamp(0, entries.length - 1);
+    final schemes = <PromptScheme>[];
+    for (final (index, raw) in entries.indexed) {
+      final entry =
+          raw is Map<String, dynamic> ? raw : const <String, dynamic>{};
+      final storedName = entry['name'];
+      final name = storedName is String && storedName.trim().isNotEmpty
+          ? storedName.trim()
+          : defaultPromptSchemeName(index + 1);
+      schemes.add(PromptScheme(
+        name: name,
+        profile: index == currentIndex
+            ? current
+            : profileFrom(entry['prompt_config'] is Map ? entry : json),
+      ));
+    }
+    return (schemes, currentIndex);
+  }
+
   factory PayloadConfig.fromJson(Map<String, dynamic> jsonData) {
-    final jsonCharacterList = jsonData.containsKey('character_config')
-        ? jsonData['character_config'] as List<dynamic>
-        : [];
-    final jsonSavedPromptList = jsonData.containsKey('saved_config')
-        ? jsonData['saved_config'] as List<dynamic>
-        : [];
-    final characterList = jsonCharacterList
-        .map((configJson) => CharacterConfig.fromJson(configJson))
-        .toList();
-    final savedList = jsonSavedPromptList
-        .map((configJson) => PromptConfig.fromJson(configJson))
-        .toList();
-    final paramConfig = ParamConfig.fromJson(jsonData['param_config'] ?? {});
-    final negativePromptConfigJson = jsonData['negative_prompt_config'];
+    final loadedSettings = Settings.fromJson(jsonData['settings'] ?? {});
+    final (promptSchemes, currentSchemeIndex) =
+        _promptSchemesFromJson(jsonData, settings: loadedSettings);
+    final randomProfile = promptSchemes[currentSchemeIndex].profile;
+    final paramConfig = randomProfile.paramConfig;
+    final characterList = randomProfile.characterConfigList;
+    final savedList = randomProfile.savedPromptConfigList;
     final fixedJson = jsonData['fixed_profile'];
     final i2iSizeJson = jsonData['i2i_request_size'];
-    final loadedSettings = Settings.fromJson(jsonData['settings'] ?? {});
-    final randomGenerationCount =
-        jsonData['generation_count'] as int? ?? loadedSettings.generationCount;
-    final randomGenerationIntervalSec =
-        jsonData['generation_interval'] as int? ??
-            loadedSettings.generationIntervalSec;
-    final randomLockToAllCombinations =
-        jsonData['lock_to_all_combinations'] as bool? ??
-            loadedSettings.lockToAllCombinations;
-    final randomProfile = GenerationProfile(
-      rootPromptConfig: PromptConfig.fromJson(jsonData['prompt_config']),
-      negativePromptConfig: negativePromptConfigJson is Map<String, dynamic>
-          ? _negativePromptConfigFromJson(negativePromptConfigJson)
-          : _negativePromptConfigFromLegacy(paramConfig.negativePrompt),
-      characterConfigList: characterList,
-      savedPromptConfigList: savedList,
-      paramConfig: paramConfig,
-      generationCount: randomGenerationCount,
-      generationIntervalSec: randomGenerationIntervalSec,
-      lockToAllCombinations: randomLockToAllCombinations,
-    );
     return PayloadConfig(
       rootPromptConfig: randomProfile.rootPromptConfig,
       negativePromptConfig: randomProfile.negativePromptConfig,
@@ -566,7 +746,8 @@ class PayloadConfig extends ChangeNotifier {
       useOverridePrompt: jsonData['use_override_prompt'] ?? false,
       useCharacterPromptWithOverride:
           jsonData['use_character_prompt_with_override'] ?? false,
-      randomProfile: randomProfile,
+      promptSchemes: promptSchemes,
+      currentPromptSchemeIndex: currentSchemeIndex,
       fixedProfile: fixedJson is Map<String, dynamic>
           ? GenerationProfile.fromJson(fixedJson)
           : null,
@@ -586,43 +767,18 @@ class PayloadConfig extends ChangeNotifier {
     enhanceBatchTool = null;
     directorBatchTool = null;
     batchToolKind = null;
-    final jsonCharacterList = jsonData.containsKey('character_config')
-        ? jsonData['character_config'] as List<dynamic>
-        : [];
-    final jsonSavedPromptList = jsonData.containsKey('saved_config')
-        ? jsonData['saved_config'] as List<dynamic>
-        : [];
-    final characterList = jsonCharacterList.map((configJson) {
-      return CharacterConfig.fromJson(configJson);
-    }).toList();
-    final savedList = jsonSavedPromptList
-        .map((configJson) => PromptConfig.fromJson(configJson))
-        .toList();
-    final randomParamConfig = ParamConfig.fromJson(
-      jsonData['param_config'] ?? {},
-    );
-    final negativePromptConfigJson = jsonData['negative_prompt_config'];
     final loadedSettings = Settings.fromJson(jsonData['settings'] ?? {});
     final liveNavigation = settings.navigation;
     final loadedNavigation = loadedSettings.navigation;
     loadedSettings.navigation = liveNavigation;
     settings = loadedSettings;
     liveNavigation.replaceWith(loadedNavigation);
-    randomProfile = GenerationProfile(
-      rootPromptConfig: PromptConfig.fromJson(jsonData['prompt_config']),
-      characterConfigList: characterList,
-      savedPromptConfigList: savedList,
-      paramConfig: randomParamConfig,
-      negativePromptConfig: negativePromptConfigJson is Map<String, dynamic>
-          ? _negativePromptConfigFromJson(negativePromptConfigJson)
-          : _negativePromptConfigFromLegacy(randomParamConfig.negativePrompt),
-      generationCount: jsonData['generation_count'] as int? ??
-          loadedSettings.generationCount,
-      generationIntervalSec: jsonData['generation_interval'] as int? ??
-          loadedSettings.generationIntervalSec,
-      lockToAllCombinations: jsonData['lock_to_all_combinations'] as bool? ??
-          loadedSettings.lockToAllCombinations,
-    );
+    final (promptSchemes, currentSchemeIndex) =
+        _promptSchemesFromJson(jsonData, settings: loadedSettings);
+    _promptSchemes = promptSchemes;
+    _currentPromptSchemeIndex = currentSchemeIndex;
+    final randomParamConfig = randomProfile.paramConfig;
+    final characterList = randomProfile.characterConfigList;
     final fixedJson = jsonData['fixed_profile'];
     fixedProfile = fixedJson is Map<String, dynamic>
         ? GenerationProfile.fromJson(

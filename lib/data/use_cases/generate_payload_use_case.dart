@@ -132,7 +132,9 @@ class GeneratePayloadUseCase {
         savedConfigs: savedConfigList);
     final basePair = PromptCommentPair(
       prompt: basePromptResult.toPrompt(),
-      comment: basePromptResult.toComment(),
+      // The Base Prompt section stands for the root, so its title line
+      // (e.g. the root config's name) is omitted from the block view.
+      comment: basePromptResult.toRootlessComment(),
     );
     // Enhance imports may retain the source image's original prompt for
     // metadata and handoff purposes, but the request must use the prompt
@@ -229,7 +231,7 @@ class GeneratePayloadUseCase {
           )
         : PromptCommentPair(
             prompt: negativePromptResult.toPrompt(),
-            comment: negativePromptResult.toComment(),
+            comment: negativePromptResult.toRootlessComment(),
           );
     payloadComment += '\n\n${tr('uc')}:\n${negativePair.comment}';
     paramPayload['negative_prompt'] = negativePair.prompt;

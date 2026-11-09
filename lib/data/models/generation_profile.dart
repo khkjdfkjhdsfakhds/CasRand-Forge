@@ -29,14 +29,17 @@ class GenerationProfile {
 
   GenerationProfile copy() => GenerationProfile.fromJson(toJson());
 
-  Map<String, dynamic> toJson() {
+  /// [includeSaved] is false for prompt schemes: they all share one saved
+  /// config list, which is persisted once by [PayloadConfig].
+  Map<String, dynamic> toJson({bool includeSaved = true}) {
     return {
       'prompt_config': rootPromptConfig.toJson(),
       'negative_prompt_config': negativePromptConfig.toJson(),
       'character_config':
           characterConfigList.map((config) => config.toJson()).toList(),
-      'saved_config':
-          savedPromptConfigList.map((config) => config.toJson()).toList(),
+      if (includeSaved)
+        'saved_config':
+            savedPromptConfigList.map((config) => config.toJson()).toList(),
       'param_config': paramConfig.toJson(),
       'generation_count': generationCount,
       'generation_interval': generationIntervalSec,
@@ -75,8 +78,8 @@ class GenerationProfile {
           json['generation_count'] as int? ?? defaultGenerationCount,
       generationIntervalSec:
           json['generation_interval'] as int? ?? defaultGenerationIntervalSec,
-      lockToAllCombinations:
-          json['lock_to_all_combinations'] as bool? ?? defaultLockToAllCombinations,
+      lockToAllCombinations: json['lock_to_all_combinations'] as bool? ??
+          defaultLockToAllCombinations,
     );
   }
 
@@ -92,3 +95,24 @@ class GenerationProfile {
     ).toJson();
   }
 }
+
+/// A named random-prompt profile. A configuration owns one or more schemes and
+/// generates from exactly one of them at a time.
+class PromptScheme {
+  String name;
+  GenerationProfile profile;
+
+  PromptScheme({required this.name, required this.profile});
+
+  /// The current scheme is stored at the top level of the configuration
+  /// document, so its entry only carries the name. That keeps one authoritative
+  /// copy of it and lets older versions read the current scheme unchanged.
+  Map<String, dynamic> toJson({required bool current}) => {
+        'name': name,
+        if (!current) ...profile.toJson(includeSaved: false),
+      };
+}
+
+String defaultPromptSchemeName(int number) => '方案 $number';
+
+enum PromptSchemeNameError { empty, duplicate }

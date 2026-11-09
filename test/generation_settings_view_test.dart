@@ -23,6 +23,7 @@ import 'package:nai_casrand/ui/generation_page/widgets/generation_page_view.dart
 import 'package:nai_casrand/ui/generation_page/widgets/generation_settings_view.dart';
 import 'package:nai_casrand/ui/parameters_config/view_models/parameters_config_viewmodel.dart';
 import 'package:nai_casrand/ui/parameters_config/widgets/parameters_conifg_view.dart';
+import 'package:nai_casrand/ui/prompt_config/widgets/prompt_config_edit_view.dart';
 import 'package:nai_casrand/ui/prompt_tab/view_models/prompt_tab_viewmodel.dart';
 import 'package:nai_casrand/ui/prompt_tab/widgets/prompt_tab_view.dart';
 import 'package:nai_casrand/ui/settings_page/widgets/settings_page_view.dart';
@@ -595,7 +596,9 @@ void main() {
 
     expect(sectionColors.toSet(), hasLength(3));
     expect(find.text('Negative Prompt'), findsOneWidget);
-    expect(find.text('负面内容'), findsNWidgets(2));
+    // Only the character's negative block keeps a root row; the global
+    // negative section stands for its root, so its name is not drawn.
+    expect(find.text('负面内容'), findsOneWidget);
     expect(find.byIcon(Icons.edit_note), findsOneWidget);
     expect(find.byIcon(Icons.person_outline), findsOneWidget);
     expect(find.byIcon(Icons.block), findsOneWidget);
@@ -1141,4 +1144,119 @@ void main() {
       );
     },
   );
+  testWidgets('base and negative sections show root children directly', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final viewmodel = PromptTabViewmodel(
+      promptConfig: PromptConfig(
+        type: 'config',
+        shuffled: false,
+        comment: 'Root example',
+        strs: [],
+        prompts: [
+          PromptConfig(comment: 'For output', strs: ['1girl'], prompts: []),
+          PromptConfig(
+            comment: 'For testing',
+            strs: ['test'],
+            prompts: [],
+            enabled: false,
+          ),
+        ],
+      ),
+      negativePromptConfig: PromptConfig(
+        shuffled: false,
+        comment: 'Negative root',
+        strs: ['lowres'],
+        prompts: [],
+      ),
+      characterConfigList: [],
+      savedConfigList: [],
+      paramConfig: ParamConfig(),
+    );
+
+    await tester.pumpWidget(localizedApp(PromptTabView(viewmodel: viewmodel)));
+    await tester.pumpAndSettle();
+
+    final baseSection = find.byKey(const Key('base-prompt-section'));
+    final negativeSection = find.byKey(const Key('negative-prompt-section'));
+    // No extra root row: the root names are gone, the children remain.
+    expect(find.text('Root example'), findsNothing);
+    expect(find.text('Negative root'), findsNothing);
+    expect(
+      find.descendant(of: baseSection, matching: find.text('For output')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: baseSection, matching: find.text('For testing')),
+      findsOneWidget,
+    );
+    // Child enable switches and the root's button row stay available.
+    final switches = find.descendant(
+      of: baseSection,
+      matching: find.byType(Switch),
+    );
+    expect(switches, findsNWidgets(2));
+    await tester.tap(switches.last);
+    await tester.pump();
+    expect(viewmodel.promptConfig.prompts.last.enabled, isTrue);
+    expect(
+      find.descendant(of: baseSection, matching: find.byIcon(Icons.add)),
+      findsOneWidget,
+    );
+    // The negative string root shows its entries block directly.
+    expect(
+      find.descendant(
+        of: negativeSection,
+        matching: find.textContaining('String Values'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: negativeSection, matching: find.text('lowres')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+          of: negativeSection, matching: find.byType(ExpansionTile)),
+      findsNothing,
+    );
+
+    // The root settings moved to the header and follow view model changes.
+    final settings = find.byKey(const Key('base-prompt-root-settings'));
+    expect(
+      find.descendant(
+        of: find.descendant(
+          of: baseSection,
+          matching: find.byKey(const Key('prompt-section-header')),
+        ),
+        matching: settings,
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: settings, matching: find.textContaining('All')),
+      findsOneWidget,
+    );
+    await tester.tap(settings);
+    await tester.pumpAndSettle();
+    final editView =
+        tester.widget<PromptConfigEditView>(find.byType(PromptConfigEditView));
+    expect(editView.viewModel.config, same(viewmodel.promptConfig));
+    editView.viewModel.setSelectionMethod('single');
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+        of: settings,
+        matching: find.textContaining('Single - random'),
+      ),
+      findsOneWidget,
+    );
+    expect(viewmodel.promptConfig.selectionMethod, 'single');
+    expect(
+      find.byKey(const Key('negative-prompt-root-settings')),
+      findsOneWidget,
+    );
+  });
 }

@@ -2,6 +2,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
 import 'package:nai_casrand/core/constants/parameters.dart';
+import 'package:nai_casrand/data/models/generation_profile.dart';
 import 'package:nai_casrand/data/models/param_config.dart';
 import 'package:nai_casrand/data/models/image_import_capabilities.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
@@ -9,9 +10,13 @@ import 'package:nai_casrand/ui/core/widgets/prompt_mode_switch_button.dart';
 
 class ParametersConfigViewmodel extends ChangeNotifier {
   PayloadConfig get payloadConfig => GetIt.I();
-  ParamConfig get config => payloadConfig.paramConfig;
+  ParamConfig get config => profile?.paramConfig ?? payloadConfig.paramConfig;
 
-  ParametersConfigViewmodel();
+  /// When set, this view edits that prompt scheme whether or not it is the
+  /// one generating. Otherwise it follows the active profile.
+  final GenerationProfile? profile;
+
+  ParametersConfigViewmodel({this.profile});
 
   setSteps(double value) {
     config.steps = value.toInt();

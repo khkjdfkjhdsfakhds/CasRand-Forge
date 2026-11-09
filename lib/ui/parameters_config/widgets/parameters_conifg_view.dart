@@ -15,7 +15,14 @@ import 'package:nai_casrand/ui/core/widgets/medium_effort_notice.dart';
 class ParametersConfigView extends StatelessWidget {
   final ParametersConfigViewmodel viewmodel;
 
-  const ParametersConfigView({super.key, required this.viewmodel});
+  /// Renders only the parameter list, for hosting inside a prompt scheme card.
+  final bool embedded;
+
+  const ParametersConfigView({
+    super.key,
+    required this.viewmodel,
+    this.embedded = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -119,9 +126,11 @@ class ParametersConfigView extends StatelessWidget {
       ),
     );
 
+    if (embedded) return content;
+
     final fab = FloatingActionButton(
       tooltip: tr('import_metadata_from_image'),
-      onPressed: () => _showImportMetadataDialog(context),
+      onPressed: () => showImportMetadataDialog(context, viewmodel),
       child: const Icon(Icons.image_outlined),
     );
     return Scaffold(
@@ -170,112 +179,113 @@ class ParametersConfigView extends StatelessWidget {
       onChanged: (value) => viewmodel.setLegacyUc(value),
     );
   }
+}
 
-  Future _showImportMetadataDialog(BuildContext context) async {
-    try {
-      final picker = ImagePicker();
-      final result = await picker.pickImage(source: ImageSource.gallery);
-      if (result == null) return;
-      final bytes = await result.readAsBytes();
-      final metadataString =
-          await ImageService().extractMetadataFromBytes(bytes);
-      if (!context.mounted) return;
-      if (metadataString == null) {
-        showErrorBar(context, tr('metadata_not_found'));
-        return;
-      }
-      final jsonData = json.decode(metadataString) as Map<String, dynamic>;
-      final commentData =
-          json.decode(jsonData['Comment']) as Map<String, dynamic>;
-      final source = jsonData['Source'] ?? '';
-      final String? model = modelFromSource(source);
-      final String? prompt = jsonData['Description'];
-      final toolTip = Padding(
-        padding: const EdgeInsets.only(left: 8.0),
-        child: Text(tr('tap_to_paste_parameters')),
-      );
-      final promptTile = prompt != null
-          ? ListTile(
-              title: Text(tr('prompt')),
-              subtitle: Text(prompt),
-              onTap: () => viewmodel.setOverridePrompt(context, prompt),
-            )
-          : const SizedBox.shrink();
-      final modelTile = model != null
-          ? ListTile(
-              title: Text(tr('generation_model')),
-              subtitle: Text(model),
-              onTap: () => viewmodel.setModelFromMetadata(context, model),
-            )
-          : const SizedBox.shrink();
-      final sizeTile = ListTile(
-        title: Text(tr('image_size')),
+Future<void> showImportMetadataDialog(
+  BuildContext context,
+  ParametersConfigViewmodel viewmodel,
+) async {
+  try {
+    final picker = ImagePicker();
+    final result = await picker.pickImage(source: ImageSource.gallery);
+    if (result == null) return;
+    final bytes = await result.readAsBytes();
+    final metadataString = await ImageService().extractMetadataFromBytes(bytes);
+    if (!context.mounted) return;
+    if (metadataString == null) {
+      showErrorBar(context, tr('metadata_not_found'));
+      return;
+    }
+    final jsonData = json.decode(metadataString) as Map<String, dynamic>;
+    final commentData =
+        json.decode(jsonData['Comment']) as Map<String, dynamic>;
+    final source = jsonData['Source'] ?? '';
+    final String? model = modelFromSource(source);
+    final String? prompt = jsonData['Description'];
+    final toolTip = Padding(
+      padding: const EdgeInsets.only(left: 8.0),
+      child: Text(tr('tap_to_paste_parameters')),
+    );
+    final promptTile = prompt != null
+        ? ListTile(
+            title: Text(tr('prompt')),
+            subtitle: Text(prompt),
+            onTap: () => viewmodel.setOverridePrompt(context, prompt),
+          )
+        : const SizedBox.shrink();
+    final modelTile = model != null
+        ? ListTile(
+            title: Text(tr('generation_model')),
+            subtitle: Text(model),
+            onTap: () => viewmodel.setModelFromMetadata(context, model),
+          )
+        : const SizedBox.shrink();
+    final sizeTile = ListTile(
+      title: Text(tr('image_size')),
+      subtitle: Text(
+        '${commentData['width']} × ${commentData['height']}',
+      ),
+      dense: true,
+      onTap: () => viewmodel.loadSingleImageMetadata(
+        context,
+        {'width': commentData['width'], 'height': commentData['height']},
+        tr('image_size'),
+      ),
+    );
+    final tiles = commentKeys.map((key) {
+      final value = commentData[key];
+      if (value == null) return const SizedBox.shrink();
+      return ListTile(
+        title: Text(key),
         subtitle: Text(
-          '${commentData['width']} × ${commentData['height']}',
+          value.toString(),
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
         ),
         dense: true,
-        onTap: () => viewmodel.loadSingleImageMetadata(
-          context,
-          {'width': commentData['width'], 'height': commentData['height']},
-          tr('image_size'),
-        ),
+        onTap: () =>
+            viewmodel.loadSingleImageMetadata(context, {key: value}, key),
       );
-      final tiles = commentKeys.map((key) {
-        final value = commentData[key];
-        if (value == null) return const SizedBox.shrink();
-        return ListTile(
-          title: Text(key),
-          subtitle: Text(
-            value.toString(),
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
+    }).toList();
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(tr('metadata_found')),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              toolTip,
+              promptTile,
+              modelTile,
+              sizeTile,
+              ...tiles,
+            ],
           ),
-          dense: true,
-          onTap: () =>
-              viewmodel.loadSingleImageMetadata(context, {key: value}, key),
-        );
-      }).toList();
-      showDialog(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: Text(tr('metadata_found')),
-          content: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                toolTip,
-                promptTile,
-                modelTile,
-                sizeTile,
-                ...tiles,
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text(tr('cancel')),
-            ),
-            TextButton(
-                onPressed: () {
-                  viewmodel.loadAllMetadata(
-                    context,
-                    commentData,
-                    prompt,
-                    model,
-                  );
-                  Navigator.pop(context);
-                },
-                child: Text(tr('import_all_metadata_from_image')))
-          ],
         ),
-      );
-    } catch (e) {
-      if (!context.mounted) return;
-      showErrorBar(
-          context, '${tr('import_metadata_from_image')}${tr('failed')}');
-    }
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(tr('cancel')),
+          ),
+          TextButton(
+              onPressed: () {
+                viewmodel.loadAllMetadata(
+                  context,
+                  commentData,
+                  prompt,
+                  model,
+                );
+                Navigator.pop(context);
+              },
+              child: Text(tr('import_all_metadata_from_image')))
+        ],
+      ),
+    );
+  } catch (e) {
+    if (!context.mounted) return;
+    showErrorBar(context, '${tr('import_metadata_from_image')}${tr('failed')}');
   }
 }
 

@@ -6,6 +6,7 @@ import 'package:image/image.dart' as img;
 import 'package:nai_casrand/agent_control/agent_generation_port.dart';
 import 'package:nai_casrand/agent_control/json_edit.dart';
 import 'package:nai_casrand/data/models/displayed_image_size.dart';
+import 'package:nai_casrand/data/models/generation_profile.dart';
 import 'package:nai_casrand/data/models/payload_config.dart';
 import 'package:nai_casrand/data/models/precise_reference_config.dart';
 import 'package:nai_casrand/data/services/config_service.dart';
@@ -325,6 +326,192 @@ class AgentControlService {
     _onConfigReplaced?.call();
   }
 
+  Map<String, dynamic> _currentSchemeInfo() => {
+        'index': _config.currentPromptSchemeIndex,
+        'name': _config.currentPromptScheme.name,
+        'count': _config.promptSchemes.length,
+      };
+
+  /// The scheme list and selection must keep matching the top-level document,
+  /// which is always the current scheme, so a generic edit cannot change them.
+  void _requireSchemesUntouched(
+    Map<String, dynamic> before,
+    Map<String, dynamic> after,
+  ) {
+    List<Object?> names(Map<String, dynamic> json) {
+      final schemes = json['prompt_schemes'];
+      if (schemes is! List) return const [];
+      return [for (final item in schemes) item is Map ? item['name'] : null];
+    }
+
+    final currentIndex = before['current_prompt_scheme'] as int;
+    final schemes = after['prompt_schemes'];
+    final beforeNames = names(before);
+    final afterNames = names(after);
+    final currentEntry = schemes is List && currentIndex < schemes.length
+        ? schemes[currentIndex]
+        : null;
+    if (after['current_prompt_scheme'] != currentIndex ||
+        !listEquals(beforeNames, afterNames) ||
+        currentEntry is! Map ||
+        currentEntry.length != 1) {
+      throw const AgentControlException(
+        'use_scheme_tools',
+        'Use switch_prompt_scheme, create_prompt_scheme, rename_prompt_scheme '
+            'or delete_prompt_scheme to change schemes. The current scheme is '
+            'edited at the top level of the document; other schemes under '
+            '/prompt_schemes/<index>.',
+      );
+    }
+  }
+
+  int _schemeIndex(Map<String, dynamic> args) {
+    final schemes = _config.promptSchemes;
+    final index = _optionalInt(args, 'index');
+    if (index != null) {
+      if (index >= schemes.length) {
+        throw AgentControlException(
+          'not_found',
+          'There is no prompt scheme at index $index.',
+          status: 404,
+        );
+      }
+      return index;
+    }
+    final name = _string(args, 'name').trim();
+    final matches = [
+      for (final (i, scheme) in schemes.indexed)
+        if (scheme.name == name) i,
+    ];
+    if (matches.isEmpty) {
+      throw AgentControlException(
+        'not_found',
+        "No prompt scheme is named '$name'.",
+        status: 404,
+      );
+    }
+    if (matches.length > 1) {
+      throw AgentControlException(
+        'ambiguous',
+        "Several prompt schemes are named '$name'; pass index instead.",
+      );
+    }
+    return matches.single;
+  }
+
+  void _requireSchemeName(String name, {int? ignoreIndex}) {
+    final error = _config.validatePromptSchemeName(
+      name,
+      ignoreIndex: ignoreIndex,
+    );
+    if (error == null) return;
+    throw AgentControlException(
+      'invalid_argument',
+      error == PromptSchemeNameError.empty
+          ? 'The scheme name must not be empty.'
+          : "A prompt scheme named '${name.trim()}' already exists.",
+    );
+  }
+
+  Future<AgentToolResult> _commitSchemeChange() async {
+    await _store.saveConfig(_config.toJson());
+    _config.notifyExternalChange();
+    _onConfigReplaced?.call();
+    return AgentToolResult({'updated': true, ..._schemeList()});
+  }
+
+  Map<String, dynamic> _schemeList() {
+    final current = _config.currentPromptSchemeIndex;
+    return {
+      'prompt_mode': _config.promptMode.name,
+      'current_index': current,
+      'schemes': [
+        for (final (index, scheme) in _config.promptSchemes.indexed)
+          {
+            'index': index,
+            'name': scheme.name,
+            'current': index == current,
+            'pointer': index == current ? '' : '/prompt_schemes/$index',
+            'model': scheme.profile.paramConfig.model,
+            'character_count': scheme.profile.characterConfigList.length,
+          },
+      ],
+    };
+  }
+
+  Future<AgentToolResult> _listPromptSchemes(Map<String, dynamic> _) async =>
+      AgentToolResult(_schemeList());
+
+  Future<AgentToolResult> _switchPromptScheme(
+    Map<String, dynamic> args,
+  ) async {
+    _requireIdle();
+    _config.selectPromptScheme(_schemeIndex(args));
+    return _commitSchemeChange();
+  }
+
+  Future<AgentToolResult> _createPromptScheme(
+    Map<String, dynamic> args,
+  ) async {
+    _requireIdle();
+    final name = args['name'] == null
+        ? _config.nextPromptSchemeName()
+        : _string(args, 'name');
+    _requireSchemeName(name);
+    _config.createPromptSchemeFromCurrent(
+      name,
+      activate: args['activate'] != false,
+    );
+    return _commitSchemeChange();
+  }
+
+  Future<AgentToolResult> _renamePromptScheme(
+    Map<String, dynamic> args,
+  ) async {
+    _requireIdle();
+    final index = _schemeIndex(args);
+    final newName = _string(args, 'new_name');
+    _requireSchemeName(newName, ignoreIndex: index);
+    _config.renamePromptScheme(index, newName);
+    return _commitSchemeChange();
+  }
+
+  Future<AgentToolResult> _movePromptScheme(
+    Map<String, dynamic> args,
+  ) async {
+    _requireIdle();
+    final from = _schemeIndex(args);
+    final to = _optionalInt(
+      args,
+      'to',
+      max: _config.promptSchemes.length - 1,
+    );
+    if (to == null) {
+      throw const AgentControlException(
+        'invalid_argument',
+        'to must be the target zero-based index.',
+      );
+    }
+    _config.movePromptScheme(from, to);
+    return _commitSchemeChange();
+  }
+
+  Future<AgentToolResult> _deletePromptScheme(
+    Map<String, dynamic> args,
+  ) async {
+    _requireIdle();
+    final index = _schemeIndex(args);
+    if (_config.promptSchemes.length == 1) {
+      throw const AgentControlException(
+        'last_scheme',
+        'The last prompt scheme cannot be deleted.',
+        status: 409,
+      );
+    }
+    _config.deletePromptScheme(index);
+    return _commitSchemeChange();
+  }
+
   Map<String, dynamic> _currentConfigInfo() {
     final uuid = _store.currentUuid;
     return {
@@ -591,6 +778,7 @@ class AgentControlService {
       'lock_to_all_combinations': config.lockToAllCombinations,
       if (combinations != null) 'total_combinations': combinations,
       'prompt_mode': config.promptMode.name,
+      'prompt_scheme': _currentSchemeInfo(),
       'active_profile_pointer':
           config.promptMode == PromptMode.fixed ? '/fixed_profile' : '',
       'model': config.paramConfig.model,
@@ -641,6 +829,7 @@ class AgentControlService {
         'Pass "patch" (JSON Merge Patch) and/or "operations".',
       );
     }
+    final before = _shareableConfig();
     var edited = _shareableConfig();
     try {
       if (patch != null) {
@@ -660,6 +849,7 @@ class AgentControlService {
     } on JsonEditException catch (error) {
       throw AgentControlException('invalid_edit', error.message);
     }
+    _requireSchemesUntouched(before, edited);
     await _applyCandidate(_candidateFrom(edited));
     return AgentToolResult({
       'updated': true,
@@ -679,6 +869,7 @@ class AgentControlService {
     try {
       return AgentToolResult({
         'prompt_mode': _config.promptMode.name,
+        'prompt_scheme': _currentSchemeInfo(),
         'roots': [
           for (final entry in roots)
             {
@@ -1232,6 +1423,10 @@ class AgentControlService {
         'description': 'Saved configuration title (must be unique).',
       },
     };
+    const schemeSelector = {
+      'index': {'type': 'integer', 'description': 'Zero-based scheme index.'},
+      'name': {'type': 'string', 'description': 'Unique scheme name.'},
+    };
     const referenceKind = {
       'type': 'string',
       'enum': ['vibe', 'precise_reference', 'i2i_base'],
@@ -1249,8 +1444,9 @@ class AgentControlService {
         description: 'Return the whole current configuration as JSON (the '
             'same document the app exports, without credentials), or the '
             'part at "pointer" (RFC 6901, e.g. /param_config/steps). The '
-            'random profile lives at the top level; the fixed profile under '
-            '/fixed_profile. prompt_mode selects which one generates.',
+            'current random prompt scheme lives at the top level; other '
+            'schemes under /prompt_schemes/<index>; the fixed profile under '
+            '/fixed_profile. prompt_mode selects random or fixed.',
         inputSchema: schema({
           'pointer': {'type': 'string'},
         }),
@@ -1267,7 +1463,8 @@ class AgentControlService {
             '"value":28}], op is set or remove; "-" appends to a list). '
             'Changes are validated, saved and shown in the app immediately. '
             'Credentials, API base URL and proxy cannot be changed. '
-            'Refused while generating.',
+            'The scheme list and selection are changed with the '
+            '*_prompt_scheme tools. Refused while generating.',
         inputSchema: schema({
           'patch': {'type': 'object'},
           'operations': {
@@ -1292,11 +1489,12 @@ class AgentControlService {
       AgentTool(
         name: 'get_prompt_tree',
         description: 'List the cascading prompt nodes of every prompt root '
-            '(random and fixed profile, negative prompts, characters) with '
-            'their JSON pointer, comment path (e.g. "测试用/画师"), type, '
-            'selectionMethod, enabled and strings. Use "root" to limit the '
-            'listing to one pointer and include_strings=false to omit '
-            'strings.',
+            '(current random prompt scheme and fixed profile, negative '
+            'prompts, characters) with their JSON pointer, comment path '
+            '(e.g. "测试用/画师"), type, selectionMethod, enabled and strings. '
+            'Use "root" to limit the listing to one pointer (for another '
+            'scheme, /prompt_schemes/<index>/prompt_config) and '
+            'include_strings=false to omit strings.',
         inputSchema: schema({
           'root': {'type': 'string'},
           'include_strings': {'type': 'boolean'},
@@ -1322,6 +1520,72 @@ class AgentControlService {
         ]),
         mutates: true,
         handler: _setPromptNode,
+      ),
+      AgentTool(
+        name: 'list_prompt_schemes',
+        description: 'List the random prompt schemes of the current '
+            'configuration. A scheme owns its prompts, characters, negative '
+            'prompt and generation parameters; saved configs, Vibe and '
+            'reference images are shared. Each entry gives the JSON pointer '
+            'of its content ("" is the top level, for the current scheme).',
+        inputSchema: empty,
+        handler: _listPromptSchemes,
+      ),
+      AgentTool(
+        name: 'switch_prompt_scheme',
+        description: 'Make a prompt scheme current. Pass its "index" or '
+            '"name". Refused while generating.',
+        inputSchema: schema(schemeSelector),
+        handler: _switchPromptScheme,
+        mutates: true,
+      ),
+      AgentTool(
+        name: 'create_prompt_scheme',
+        description: 'Append a copy of the current prompt scheme to the list '
+            'and make the copy current (activate=false keeps the current '
+            'scheme). "name" is optional and must be unique. Refused while '
+            'generating.',
+        inputSchema: schema({
+          'name': {'type': 'string'},
+          'activate': {'type': 'boolean'},
+        }),
+        handler: _createPromptScheme,
+        mutates: true,
+      ),
+      AgentTool(
+        name: 'rename_prompt_scheme',
+        description: 'Rename the scheme chosen by "index" or "name" to '
+            '"new_name", which must be unique. Refused while generating.',
+        inputSchema: schema({
+          ...schemeSelector,
+          'new_name': {'type': 'string'},
+        }, required: const [
+          'new_name'
+        ]),
+        handler: _renamePromptScheme,
+        mutates: true,
+      ),
+      AgentTool(
+        name: 'move_prompt_scheme',
+        description: 'Move the scheme chosen by "index" or "name" to the '
+            'zero-based position "to". The current scheme stays current. '
+            'Refused while generating.',
+        inputSchema: schema({
+          ...schemeSelector,
+          'to': {'type': 'integer'},
+        }, required: const [
+          'to'
+        ]),
+        handler: _movePromptScheme,
+        mutates: true,
+      ),
+      AgentTool(
+        name: 'delete_prompt_scheme',
+        description: 'Delete the scheme chosen by "index" or "name". The '
+            'last scheme cannot be deleted. Refused while generating.',
+        inputSchema: schema(schemeSelector),
+        handler: _deletePromptScheme,
+        mutates: true,
       ),
       AgentTool(
         name: 'list_configs',

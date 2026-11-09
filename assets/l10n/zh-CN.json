@@ -702,5 +702,22 @@
     "generation_response_disconnected": "连接已中断，未收到完整图片",
     "generation_response_disconnected_detail": "已无法继续接收原图。重新生成会使用原提示词和参数，可能再次消费。",
     "generation_regenerate_original": "重新生成原任务",
-    "generation_error_details": "错误详情"
+    "generation_error_details": "错误详情",
+    "prompt_scheme_delete": "删除方案",
+    "prompt_scheme_default_name": "方案 {number}",
+    "prompt_scheme_name_empty": "名称不能为空",
+    "prompt_scheme_name_duplicate": "已有同名方案",
+    "prompt_scheme_delete_confirm": "删除方案“{name}”？它的提示词、角色、负面和参数都会删除，无法撤销。",
+    "prompt_scheme_new": "新建方案",
+    "prompt_scheme_new_hint": "复制当前生效的方案",
+    "prompt_scheme_move_up": "上移方案",
+    "prompt_scheme_move_down": "下移方案",
+    "prompt_scheme_expand": "展开方案",
+    "prompt_scheme_collapse": "收起方案",
+    "prompt_scheme_active_badge": "生效中",
+    "prompt_scheme_active_hint": "当前生成使用这个方案。打开其他方案即可切换",
+    "prompt_scheme_activate": "设为生效方案",
+    "prompt_scheme_more": "更多操作",
+    "prompt_scheme_delete_active_note": "这是当前生效的方案，删除后相邻的方案将生效。",
+    "prompt_scheme_locked_generating": "生成进行中，不能修改方案"
 }

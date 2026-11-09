@@ -145,18 +145,31 @@ void main() {
 
   testWidgets('prompt groups survive parameter tab and parent collapse',
       (tester) async {
+    // The Base Prompt section no longer draws its root as a collapsible row,
+    // so the collapsing parent is a nested group.
+    payload.rootPromptConfig.prompts = [
+      PromptConfig(
+        comment: 'Parent group',
+        type: 'config',
+        strs: [],
+        prompts: [leaf('First group'), leaf('Second group')],
+      ),
+    ];
     await mount(tester);
+    expect(find.text('Base root'), findsNothing);
+    await toggle(tester, 'Parent group');
     await toggle(tester, 'First group');
     await tester.tap(find.text(words['generation_parameters']));
     await tester.pumpAndSettle();
     await tester.tap(find.text(words['generation_prompt_config']));
     await tester.pumpAndSettle();
     expect(expanded(tester, 'First group'), isTrue);
-    await toggle(tester, 'Base root');
-    await toggle(tester, 'Base root');
+    await toggle(tester, 'Parent group');
+    await toggle(tester, 'Parent group');
     expect(expanded(tester, 'First group'), isTrue);
     await toggle(tester, 'First group');
     await leaveAndReturn(tester);
+    expect(expanded(tester, 'Parent group'), isTrue);
     expect(expanded(tester, 'First group'), isFalse);
   });
 

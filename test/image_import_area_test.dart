@@ -115,35 +115,42 @@ void main() {
   }
 
   testWidgets(
-    'ConfigPageView wraps both PromptTabView (with ignoreWhenTextEditing: true) and ParametersConfigView in ImageImportArea',
+    'ConfigPageView keeps prompts and parameters inside an ImageImportArea that ignores text editing in both prompt modes',
     (tester) async {
       await pumpHost(
         tester,
         ConfigPageView(viewmodel: ConfigPageViewmodel()),
       );
 
-      // PromptTabView (Tab 0) is wrapped in ImageImportArea with ignoreWhenTextEditing: true
-      expect(find.byType(PromptTabView), findsOneWidget);
-      final promptImportFinder = find.ancestor(
-        of: find.byType(PromptTabView),
-        matching: find.byType(ImageImportArea),
-      );
-      expect(promptImportFinder, findsOneWidget);
-      final promptImport = tester.widget<ImageImportArea>(promptImportFinder);
-      expect(promptImport.ignoreWhenTextEditing, isTrue);
+      ImageImportArea importAreaAround(Type type) {
+        expect(find.byType(type), findsOneWidget);
+        final finder = find.ancestor(
+          of: find.byType(type),
+          matching: find.byType(ImageImportArea),
+        );
+        expect(finder, findsOneWidget);
+        return tester.widget<ImageImportArea>(finder);
+      }
 
-      // Switch to Parameters tab
+      // Random mode: every scheme card sits in one page-level import area.
+      expect(importAreaAround(PromptTabContent).ignoreWhenTextEditing, isTrue);
       await tester.tap(find.text('Generation Parameters'));
       await tester.pumpAndSettle();
-
-      expect(find.byType(ParametersConfigView), findsOneWidget);
-      final paramImportFinder = find.ancestor(
-        of: find.byType(ParametersConfigView),
-        matching: find.byType(ImageImportArea),
+      expect(
+        importAreaAround(ParametersConfigView).ignoreWhenTextEditing,
+        isTrue,
       );
-      expect(paramImportFinder, findsOneWidget);
-      final paramImport = tester.widget<ImageImportArea>(paramImportFinder);
-      expect(paramImport.ignoreWhenTextEditing, isTrue);
+
+      // Fixed mode keeps the two page tabs, each with its own import area.
+      GetIt.I<PayloadConfig>().switchPromptMode();
+      await tester.pumpAndSettle();
+      expect(importAreaAround(PromptTabView).ignoreWhenTextEditing, isTrue);
+      await tester.tap(find.text('Generation Parameters'));
+      await tester.pumpAndSettle();
+      expect(
+        importAreaAround(ParametersConfigView).ignoreWhenTextEditing,
+        isTrue,
+      );
     },
   );
 

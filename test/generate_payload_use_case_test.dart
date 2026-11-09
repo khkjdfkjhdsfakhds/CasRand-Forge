@@ -985,4 +985,67 @@ void main() {
     );
     expect(parameters['tag_hint_transparent_background'], isTrue);
   });
+  test('prompt blocks omit the base and negative root title lines', () {
+    final config = PayloadConfig(
+      rootPromptConfig: PromptConfig(
+        type: 'config',
+        shuffled: false,
+        comment: 'Root example',
+        strs: [],
+        prompts: [
+          PromptConfig(
+            type: 'config',
+            comment: 'For output',
+            strs: [],
+            prompts: [
+              PromptConfig(comment: 'Subject', strs: ['1girl'], prompts: []),
+            ],
+          ),
+          PromptConfig(comment: 'Scene', strs: ['sunset'], prompts: []),
+        ],
+      ),
+      negativePromptConfig: PromptConfig(
+        shuffled: false,
+        comment: 'Negative root',
+        strs: ['lowres'],
+        prompts: [],
+      ),
+      characterConfigList: [],
+      savedPromptConfigList: [],
+      paramConfig: ParamConfig(),
+      settings: Settings.fromJson({}),
+      overridePrompt: '',
+      useOverridePrompt: false,
+      useCharacterPromptWithOverride: false,
+    );
+
+    final result = GeneratePayloadUseCase(payloadConfig: config)();
+
+    // The request is unchanged.
+    expect(result.payload['input'], '1girl, sunset');
+    expect(result.payload['parameters']['negative_prompt'], 'lowres');
+    // The block view starts at the root's children, one level shallower.
+    expect(result.comment, isNot(contains('Root example')));
+    expect(result.comment, isNot(contains('Negative root')));
+    expect(
+      result.comment,
+      startsWith('For output:\n  Subject: 1girl\nScene: sunset\n\n'),
+    );
+    expect(result.comment, endsWith(':\nlowres'));
+  });
+
+  test('rootless comment keeps child titles and marks empty roots', () {
+    final list = NestedPromptList(title: 'Root', children: [
+      NestedPromptString(title: 'A', content: 'a'),
+      NestedPromptList(title: 'B', children: []),
+    ]);
+    expect(list.toRootlessComment(), 'A: a\nB: <None>');
+    expect(list.toComment(), 'Root:\n  A: a\n  B: <None>');
+    expect(NestedPromptList(title: 'Root', children: []).toRootlessComment(),
+        '<None>');
+    expect(NestedPromptString(title: 'Neg', content: 'x').toRootlessComment(),
+        'x');
+    expect(NestedPromptString(title: 'Neg', content: '').toRootlessComment(),
+        '<None>');
+  });
 }

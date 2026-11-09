@@ -66,6 +66,7 @@ class PromptSearchReplaceBar extends StatefulWidget {
     this.initialReplaceMode = false,
     this.searchFieldKey,
     this.replaceFieldKey,
+    this.allowReplace = true,
   });
 
   final TextEditingController controller;
@@ -76,6 +77,10 @@ class PromptSearchReplaceBar extends StatefulWidget {
   final bool initialReplaceMode;
   final Key? searchFieldKey;
   final Key? replaceFieldKey;
+
+  /// False for read-only targets: the bar only finds, and the replace toggle
+  /// and replace row are never shown.
+  final bool allowReplace;
 
   @override
   State<PromptSearchReplaceBar> createState() => PromptSearchReplaceBarState();
@@ -99,7 +104,7 @@ class PromptSearchReplaceBarState extends State<PromptSearchReplaceBar> {
   @override
   void initState() {
     super.initState();
-    _replaceMode = widget.initialReplaceMode;
+    _replaceMode = widget.allowReplace && widget.initialReplaceMode;
     searchController = TextEditingController();
     replaceController = TextEditingController();
     searchFocusNode = FocusNode(
@@ -308,6 +313,15 @@ class PromptSearchReplaceBarState extends State<PromptSearchReplaceBar> {
     );
   }
 
+  /// Recomputes matches for a target whose text was swapped wholesale (for
+  /// example another document), starting again from the first match instead
+  /// of the one nearest the previous position.
+  void restartSearch() {
+    if (!widget.visible) return;
+    _lastTargetText = widget.controller.text;
+    _updateMatches(preferredOffset: 0);
+  }
+
   void findNext() {
     if (_matches.isEmpty) return;
     setState(() {
@@ -328,6 +342,7 @@ class PromptSearchReplaceBarState extends State<PromptSearchReplaceBar> {
   }
 
   void toggleReplaceMode() {
+    if (!widget.allowReplace) return;
     setState(() {
       _replaceMode = !_replaceMode;
     });
@@ -528,20 +543,22 @@ class PromptSearchReplaceBarState extends State<PromptSearchReplaceBar> {
                 tooltip: _tr(context, 'next_match', fallback: 'Next match'),
                 onPressed: _matches.isEmpty ? null : findNext,
               ),
-              IconButton(
-                key: const Key('prompt-search-toggle-replace'),
-                icon: Icon(
-                  Icons.find_replace,
-                  size: 18,
-                  color: _replaceMode ? colorScheme.primary : null,
+              if (widget.allowReplace)
+                IconButton(
+                  key: const Key('prompt-search-toggle-replace'),
+                  icon: Icon(
+                    Icons.find_replace,
+                    size: 18,
+                    color: _replaceMode ? colorScheme.primary : null,
+                  ),
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints(minWidth: 28, minHeight: 28),
+                  splashRadius: 14,
+                  tooltip: _tr(context, 'toggle_replace',
+                      fallback: 'Toggle replace'),
+                  onPressed: toggleReplaceMode,
                 ),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-                splashRadius: 14,
-                tooltip:
-                    _tr(context, 'toggle_replace', fallback: 'Toggle replace'),
-                onPressed: toggleReplaceMode,
-              ),
               IconButton(
                 key: const Key('prompt-search-close'),
                 icon: const Icon(Icons.close, size: 18),
@@ -553,7 +570,7 @@ class PromptSearchReplaceBarState extends State<PromptSearchReplaceBar> {
               ),
             ],
           ),
-          if (_replaceMode) ...[
+          if (_replaceMode && widget.allowReplace) ...[
             const SizedBox(height: 4),
             Row(
               children: [

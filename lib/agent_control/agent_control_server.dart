@@ -19,6 +19,8 @@ CasRand Forge is a NovelAI image generator built around cascading random
 prompts. Typical flow: get_status → get_prompt_tree / get_config → edit with
 set_prompt_node or update_config → start_generation (wait=true) →
 get_result_image. Edits are refused while a run is active; stop it first.
+A configuration can hold several random prompt schemes (list_prompt_schemes);
+get_config and get_prompt_tree show the current one at the top level.
 Every generation spends the user's NovelAI Anlas, so generate only what the
 user asked for. Credentials are never exposed.''';
 

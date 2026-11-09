@@ -16,12 +16,24 @@ class PromptConfigView extends StatelessWidget {
   final bool autocompleteEnabled;
   final bool swapEnterAndShiftEnter;
 
+  /// Renders the root node's contents (children and buttons, or its string
+  /// entries) directly, without the root's own expandable title row. Used
+  /// where the surrounding section header already stands for the root, with
+  /// the root's settings reachable through [PromptConfigSettingsButton].
+  final bool flattenRoot;
+
+  /// Whether a non-root node is indented under its parent. Direct children
+  /// of a flattened root sit flush with the section instead.
+  final bool indented;
+
   const PromptConfigView({
     super.key,
     required this.viewModel,
     this.promptAssistance,
     this.autocompleteEnabled = true,
     this.swapEnterAndShiftEnter = false,
+    this.flattenRoot = false,
+    this.indented = true,
   });
 
   @override
@@ -30,12 +42,19 @@ class PromptConfigView extends StatelessWidget {
       value: viewModel,
       child: Consumer<PromptConfigViewModel>(
         builder: (context, viewModel, child) {
+          if (flattenRoot) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: _buildChildrenList(viewModel, context),
+            );
+          }
           final backgroundColor = viewModel.isEnabled
               ? null
               : Theme.of(context).disabledColor.withAlpha(30);
 
           return Padding(
-            padding: EdgeInsets.only(left: viewModel.isRoot ? 0 : 20),
+            padding:
+                EdgeInsets.only(left: viewModel.isRoot || !indented ? 0 : 20),
             child: ExpansionTile(
               // Navigation and collapsed ancestors unmount these tiles. Keep
               // expansion in the route's PageStorage, keyed by the config
@@ -91,6 +110,7 @@ class PromptConfigView extends StatelessWidget {
             promptAssistance: promptAssistance,
             autocompleteEnabled: autocompleteEnabled,
             swapEnterAndShiftEnter: swapEnterAndShiftEnter,
+            indented: !flattenRoot,
           ),
         );
       }
@@ -99,7 +119,7 @@ class PromptConfigView extends StatelessWidget {
     } else {
       return [
         Padding(
-          padding: const EdgeInsets.only(left: 20),
+          padding: EdgeInsets.only(left: flattenRoot ? 0 : 20),
           child: ListTile(
             title: Text(
                 '${context.tr('cascaded_strings')}${context.tr('colon')}${viewModel.config.usableEntryCount}${context.tr('items')}'),
@@ -220,6 +240,49 @@ class PromptConfigView extends StatelessWidget {
               child: Text(context.tr('confirm')),
             ),
           ],
+        );
+      },
+    );
+  }
+}
+
+/// The root node's settings entry (selection method summary) for sections
+/// that show the root flattened via [PromptConfigView.flattenRoot]. Tapping
+/// opens the same editor dialog as the root's former title row.
+class PromptConfigSettingsButton extends StatelessWidget {
+  const PromptConfigSettingsButton({
+    super.key,
+    required this.viewModel,
+    this.foregroundColor,
+  });
+
+  final PromptConfigViewModel viewModel;
+  final Color? foregroundColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: viewModel,
+      builder: (context, _) {
+        final description = viewModel.getConfigDescrption(context);
+        return Tooltip(
+          message: description,
+          child: TextButton(
+            style: TextButton.styleFrom(
+              foregroundColor: foregroundColor,
+              visualDensity: VisualDensity.compact,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            onPressed: () => showDialog(
+              context: context,
+              builder: (context) => PromptConfigEditView(viewModel: viewModel),
+            ),
+            child: Text(
+              description,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
         );
       },
     );
