@@ -30,7 +30,7 @@ jobs:
     needs: test-supported-desktop
     runs-on: ubuntu-latest
     env:
-      ASSET_NAME: NAI-CasRand-Forge-v1.05-Android.apk
+      ASSET_NAME: NAI-CasRand-Forge-v1.06-Android.apk
 
     steps:
       - name: Check out source

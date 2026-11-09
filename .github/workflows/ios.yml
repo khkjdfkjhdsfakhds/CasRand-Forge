@@ -10,7 +10,7 @@ jobs:
   build-ios:
     runs-on: macos-15
     env:
-      ASSET_NAME: NAI-CasRand-Forge-v1.05-iOS-unsigned.ipa
+      ASSET_NAME: NAI-CasRand-Forge-v1.06-iOS-unsigned.ipa
       APP_PATH: build/ios/iphoneos/Runner.app
 
     steps:

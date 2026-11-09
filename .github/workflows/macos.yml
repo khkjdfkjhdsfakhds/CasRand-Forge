@@ -10,7 +10,7 @@ jobs:
   build-macos:
     runs-on: macos-15
     env:
-      ASSET_NAME: NAI-CasRand-Forge-v1.05-macOS-universal.dmg
+      ASSET_NAME: NAI-CasRand-Forge-v1.06-macOS-universal.dmg
       APP_PATH: build/macos/Build/Products/Release/NAI CasRand Forge.app
 
     steps:
